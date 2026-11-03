@@ -52,6 +52,13 @@ pub fn save(data: &ReportData) -> io::Result<PathBuf> {
     )
 }
 
+/// The same for a demo, which leaves the system's devices alone, even just listing them.
+pub fn save_demo(data: &ReportData) -> io::Result<PathBuf> {
+    let dir = crate::sys::data_dir().ok_or(io::ErrorKind::NotFound)?;
+    let collections = Err(Error::Hid("not listed in a demo".to_string()));
+    save_in(&dir, &text(data, false, &collections))
+}
+
 /// Writes the report into `dir`, making it if needed, and returns the file's path.
 pub fn save_in(dir: &Path, text: &str) -> io::Result<PathBuf> {
     std::fs::create_dir_all(dir)?;

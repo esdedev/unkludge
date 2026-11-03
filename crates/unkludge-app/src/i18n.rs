@@ -6,6 +6,8 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use unkludge_protocol::Error;
+use unkludge_protocol::config::SleepTime;
+use unkludge_protocol::model::Effect;
 
 use crate::worker::Problem;
 
@@ -39,6 +41,86 @@ pub struct Tr {
     pub image_failed: &'static str,
     /// [`crate::worker::Event::ClockSynced`].
     pub clock_synced: &'static str,
+
+    /// Under the app's name when no model is showing.
+    pub tagline: &'static str,
+    pub looking: &'static str,
+    pub connected: &'static str,
+    pub disconnected: &'static str,
+    pub not_responding: &'static str,
+    /// [`Self::cannot_open`], in the little room of the status at the top.
+    pub cannot_open_short: &'static str,
+    pub experimental: &'static str,
+    pub send_report: &'static str,
+    /// The report was saved and its folder opened.
+    pub report_saved: &'static str,
+    /// Before why a report couldn't be saved.
+    pub report_failed: &'static str,
+    /// Under [`Self::connect_keyboard`].
+    pub connect_hint: &'static str,
+    /// In the window's title and its label.
+    pub demo: &'static str,
+    /// What the demo label stands for, for screen readers.
+    pub demo_name: &'static str,
+
+    pub screen: &'static str,
+    pub drop_hint: &'static str,
+    pub drop_hint_more: &'static str,
+    pub choose_file: &'static str,
+    pub no_file: &'static str,
+    /// The file dialog's title.
+    pub choose_title: &'static str,
+    /// The kind of file the dialog's filter lets through.
+    pub image_files: &'static str,
+    pub reading_file: &'static str,
+    pub still_image: &'static str,
+    pub fit_cover: &'static str,
+    pub fit_contain: &'static str,
+    pub fit_stretch: &'static str,
+    pub frame_time: &'static str,
+    pub slower: &'static str,
+    pub faster: &'static str,
+    pub upload: &'static str,
+    pub uploading: &'static str,
+    pub cancel: &'static str,
+
+    pub lights: &'static str,
+    pub off: &'static str,
+    pub brightness: &'static str,
+    pub speed: &'static str,
+    pub color: &'static str,
+    pub rainbow: &'static str,
+    pub custom_color: &'static str,
+    pub own_colors: &'static str,
+    pub lights_off_note: &'static str,
+    pub custom_mode_note: &'static str,
+    pub unknown_effect_note: &'static str,
+    pub sleep: &'static str,
+    pub no_sleep: &'static str,
+    /// The colour dialog comes after this, once per model.
+    pub first_custom_title: &'static str,
+    pub first_custom_warning: &'static str,
+
+    pub clock: &'static str,
+    pub sync_clock: &'static str,
+    pub auto_clock: &'static str,
+    pub auto_clock_more: &'static str,
+
+    pub start_with_system: &'static str,
+    pub tray_open: &'static str,
+    pub tray_sync_clock: &'static str,
+    pub tray_quit: &'static str,
+    /// What a screen reader calls the preview.
+    pub preview: &'static str,
+
+    /// By effect number, from 1. The model data's own names are the English ones.
+    effects: [&'static str; 17],
+    frames_info: &'static str,
+    screen_info: &'static str,
+    sleep_other: &'static str,
+    about: &'static str,
+    /// How a screen reader names each colour.
+    color_slot: &'static str,
 
     frames_cut: &'static str,
     frames_thinned: &'static str,
@@ -80,6 +162,91 @@ const EN: Tr = Tr {
                      keyboard's draw time is {draw} ms",
     time_left: "About {time} left",
 
+    tagline: "Royal Kludge keyboards, without the bloat",
+    looking: "Looking for a keyboard…",
+    connected: "Connected",
+    disconnected: "No keyboard",
+    not_responding: "Not responding",
+    cannot_open_short: "Can't open it",
+    experimental: "EXPERIMENTAL",
+    send_report: "Send report",
+    report_saved: "Report saved: send the file in the folder that just opened",
+    report_failed: "The report couldn't be saved",
+    connect_hint: "It shows up here by itself as soon as it's plugged in",
+    demo: "DEMO",
+    demo_name: "Demo: no real keyboard is used",
+
+    screen: "Screen",
+    drop_hint: "Drop an image or GIF here",
+    drop_hint_more: "or click to choose one",
+    choose_file: "Choose file…",
+    no_file: "No file chosen",
+    choose_title: "Choose an image or GIF",
+    image_files: "Images and GIFs",
+    reading_file: "Reading the file…",
+    still_image: "Still image",
+    fit_cover: "Crop",
+    fit_contain: "Fit",
+    fit_stretch: "Stretch",
+    frame_time: "Time per frame",
+    slower: "Slower",
+    faster: "Faster",
+    upload: "Upload to keyboard",
+    uploading: "Uploading",
+    cancel: "Cancel",
+
+    lights: "Lights",
+    off: "Off",
+    brightness: "Brightness",
+    speed: "Speed",
+    color: "Colour",
+    rainbow: "Rainbow",
+    custom_color: "Custom colour…",
+    own_colors: "This effect has colours of its own",
+    lights_off_note: "The lights are off: choose an effect to turn them on",
+    custom_mode_note: "The keyboard is in its custom mode, set with another tool: choosing an effect leaves it",
+    unknown_effect_note: "The keyboard is showing an effect Unkludge doesn't know: choosing one replaces it",
+    sleep: "Sleep",
+    no_sleep: "No sleep",
+    first_custom_title: "First custom colour",
+    first_custom_warning: "The keyboard can't say what colours it holds, and a custom colour is written together with the colours of every effect. So this first time, any colours you set on other effects with another app go back to Unkludge's defaults. Unkludge remembers them from then on.",
+
+    clock: "Clock",
+    sync_clock: "Sync clock now",
+    auto_clock: "Set it automatically",
+    auto_clock_more: "On start, on connecting and after sleep",
+
+    start_with_system: "Start with the system",
+    tray_open: "Open",
+    tray_sync_clock: "Sync clock",
+    tray_quit: "Quit",
+    preview: "Preview of the screen",
+
+    effects: [
+        "Solid",
+        "Breathing",
+        "Rainbow",
+        "Flash",
+        "Raindrops",
+        "Colour wheel",
+        "Ripples",
+        "Starlight",
+        "Fade",
+        "Snake",
+        "Neon",
+        "Reactive",
+        "Sine wave",
+        "Scanner",
+        "Windmill",
+        "Waterfall",
+        "Blossom",
+    ],
+    frames_info: "{frames} frames, {ms} ms each",
+    screen_info: "{width} × {height}, up to {frames} frames",
+    sleep_other: "now {raw}",
+    about: "About {time}",
+    color_slot: "Colour {slot}",
+
     err_not_found: "No supported keyboard found",
     err_unsupported: "Keyboard {pid} isn't supported",
     err_usb: "USB error: {detail}",
@@ -116,6 +283,91 @@ const ES: Tr = Tr {
                      el tiempo de dibujo de este teclado es de {draw} ms",
     time_left: "Quedan unos {time}",
 
+    tagline: "Teclados Royal Kludge, sin lo que sobra",
+    looking: "Buscando un teclado…",
+    connected: "Conectado",
+    disconnected: "Sin teclado",
+    not_responding: "No responde",
+    cannot_open_short: "No se puede abrir",
+    experimental: "EXPERIMENTAL",
+    send_report: "Enviar informe",
+    report_saved: "Informe guardado: envía el archivo de la carpeta que se acaba de abrir",
+    report_failed: "No se ha podido guardar el informe",
+    connect_hint: "Aparecerá aquí en cuanto lo enchufes",
+    demo: "DEMO",
+    demo_name: "Demostración: no se usa ningún teclado real",
+
+    screen: "Pantalla",
+    drop_hint: "Arrastra aquí una imagen o un GIF",
+    drop_hint_more: "o haz clic para elegirlo",
+    choose_file: "Elegir archivo…",
+    no_file: "Ningún archivo elegido",
+    choose_title: "Elige una imagen o un GIF",
+    image_files: "Imágenes y GIF",
+    reading_file: "Leyendo el archivo…",
+    still_image: "Imagen fija",
+    fit_cover: "Recortar",
+    fit_contain: "Encajar",
+    fit_stretch: "Estirar",
+    frame_time: "Tiempo por fotograma",
+    slower: "Más lento",
+    faster: "Más rápido",
+    upload: "Subir al teclado",
+    uploading: "Subiendo",
+    cancel: "Cancelar",
+
+    lights: "Luces",
+    off: "Apagadas",
+    brightness: "Brillo",
+    speed: "Velocidad",
+    color: "Color",
+    rainbow: "Arcoíris",
+    custom_color: "Color propio…",
+    own_colors: "Este efecto tiene sus propios colores",
+    lights_off_note: "Las luces están apagadas: elige un efecto para encenderlas",
+    custom_mode_note: "El teclado está en su modo personalizado, puesto con otra herramienta: al elegir un efecto se sale de él",
+    unknown_effect_note: "El teclado muestra un efecto que Unkludge no conoce: al elegir uno se sustituye",
+    sleep: "Suspensión",
+    no_sleep: "Sin suspensión",
+    first_custom_title: "Primer color propio",
+    first_custom_warning: "El teclado no puede decir qué colores tiene, y un color propio se escribe junto con los de todos los efectos. Así que esta primera vez, los colores que hayas puesto a otros efectos con otro programa vuelven a los predeterminados de Unkludge. A partir de entonces, Unkludge los recuerda.",
+
+    clock: "Reloj",
+    sync_clock: "Sincronizar hora ahora",
+    auto_clock: "Ajustarla automáticamente",
+    auto_clock_more: "Al arrancar, al conectar y al volver de la suspensión",
+
+    start_with_system: "Arrancar con el sistema",
+    tray_open: "Abrir",
+    tray_sync_clock: "Sincronizar hora",
+    tray_quit: "Salir",
+    preview: "Vista previa de la pantalla",
+
+    effects: [
+        "Fijo",
+        "Respiración",
+        "Arcoíris",
+        "Destello",
+        "Gotas de lluvia",
+        "Rueda de color",
+        "Ondas",
+        "Luz de estrellas",
+        "Fundido",
+        "Serpiente",
+        "Neón",
+        "Reactivo",
+        "Onda senoidal",
+        "Escáner",
+        "Molino",
+        "Cascada",
+        "Flor",
+    ],
+    frames_info: "{frames} fotogramas, {ms} ms cada uno",
+    screen_info: "{width} × {height}, hasta {frames} fotogramas",
+    sleep_other: "ahora {raw}",
+    about: "Unos {time}",
+    color_slot: "Color {slot}",
+
     err_not_found: "No se ha encontrado ningún teclado compatible",
     err_unsupported: "El teclado {pid} no es compatible",
     err_usb: "Error de USB: {detail}",
@@ -131,10 +383,16 @@ const ES: Tr = Tr {
     err_custom_mode: "El teclado está en el modo personalizado: elige antes un efecto",
 };
 
-/// The table for the system's language.
+static TABLE: OnceLock<&'static Tr> = OnceLock::new();
+
+/// The table for the system's language, unless [`choose`] said otherwise.
 pub fn t() -> &'static Tr {
-    static TABLE: OnceLock<&'static Tr> = OnceLock::new();
     TABLE.get_or_init(|| for_language(crate::sys::is_spanish()))
+}
+
+/// Uses a language whatever the system's. Must come before the first [`t`].
+pub fn choose(spanish: bool) {
+    let _ = TABLE.set(for_language(spanish));
 }
 
 /// Spanish if the language is Spanish, and English otherwise.
@@ -195,6 +453,56 @@ impl Tr {
 
     pub fn time_left(&self, time: Duration) -> String {
         self.time_left.replace("{time}", &self.duration(time))
+    }
+
+    /// How long an upload may take, before it starts.
+    pub fn about(&self, time: Duration) -> String {
+        self.about.replace("{time}", &self.duration(time))
+    }
+
+    /// What a file holds: a still image, or how many frames of how long.
+    pub fn frames_info(&self, frames: usize, delay_ms: u16) -> String {
+        if frames < 2 {
+            return self.still_image.to_string();
+        }
+        self.frames_info
+            .replace("{frames}", &frames.to_string())
+            .replace("{ms}", &delay_ms.to_string())
+    }
+
+    /// What a model's screen is like.
+    pub fn screen_info(&self, width: u16, height: u16, frames: u16) -> String {
+        self.screen_info
+            .replace("{width}", &width.to_string())
+            .replace("{height}", &height.to_string())
+            .replace("{frames}", &frames.to_string())
+    }
+
+    /// An effect's name in this language. A number with no translation keeps the model's name.
+    pub fn effect_name(&self, effect: &Effect) -> &'static str {
+        usize::from(effect.id)
+            .checked_sub(1)
+            .and_then(|at| self.effects.get(at))
+            .copied()
+            .unwrap_or(effect.name)
+    }
+
+    pub fn sleep_label(&self, sleep: SleepTime) -> &'static str {
+        match sleep {
+            SleepTime::NoSleep => self.no_sleep,
+            other => other.label(),
+        }
+    }
+
+    /// A sleep value the keyboard has that isn't one of the options.
+    pub fn sleep_other(&self, raw: u8) -> String {
+        self.sleep_other.replace("{raw}", &format!("0x{raw:02X}"))
+    }
+
+    /// One of an effect's colours, counted from 1.
+    pub fn color_slot(&self, slot: u8) -> String {
+        self.color_slot
+            .replace("{slot}", &(u16::from(slot) + 1).to_string())
     }
 
     /// A time, rounded up to its smallest unit, seconds under a minute and minutes above that:
@@ -395,6 +703,66 @@ mod tests {
     fn the_time_left_reads_in_both_languages() {
         assert_eq!(EN.time_left(Duration::from_secs(90)), "About 2 min left");
         assert_eq!(ES.time_left(Duration::from_secs(90)), "Quedan unos 2 min");
+    }
+
+    #[test]
+    fn a_file_is_described_by_its_frames() {
+        assert_eq!(EN.frames_info(1, 100), "Still image");
+        assert_eq!(ES.frames_info(1, 100), "Imagen fija");
+        assert_eq!(EN.frames_info(24, 100), "24 frames, 100 ms each");
+        assert_eq!(ES.frames_info(24, 100), "24 fotogramas, 100 ms cada uno");
+    }
+
+    #[test]
+    fn a_screen_is_described_by_its_size_and_frames() {
+        assert_eq!(EN.screen_info(320, 172, 60), "320 × 172, up to 60 frames");
+        assert_eq!(
+            ES.screen_info(240, 135, 100),
+            "240 × 135, hasta 100 fotogramas"
+        );
+    }
+
+    #[test]
+    fn every_effect_of_every_model_has_a_name_in_both_languages() {
+        for model in unkludge_protocol::model::supported() {
+            for effect in model.lighting.effects {
+                // The English table is the model data's names, in the same order.
+                assert_eq!(EN.effect_name(effect), effect.name);
+                assert!(!ES.effect_name(effect).is_empty());
+            }
+        }
+        let other = Effect {
+            id: 30,
+            name: "Later",
+            color: false,
+            speed: false,
+            brightness: false,
+            rainbow: false,
+        };
+        assert_eq!(ES.effect_name(&other), "Later");
+        assert_eq!(ES.effect_name(&Effect { id: 0, ..other }), "Later");
+    }
+
+    #[test]
+    fn sleep_options_read_in_both_languages() {
+        assert_eq!(EN.sleep_label(SleepTime::Min5), "5 min");
+        assert_eq!(ES.sleep_label(SleepTime::Min5), "5 min");
+        assert_eq!(EN.sleep_label(SleepTime::NoSleep), "No sleep");
+        assert_eq!(ES.sleep_label(SleepTime::NoSleep), "Sin suspensión");
+        assert_eq!(EN.sleep_other(0x1E), "now 0x1E");
+        assert_eq!(ES.sleep_other(0x1E), "ahora 0x1E");
+    }
+
+    #[test]
+    fn colours_are_counted_from_one_for_people() {
+        assert_eq!(EN.color_slot(0), "Colour 1");
+        assert_eq!(ES.color_slot(6), "Color 7");
+    }
+
+    #[test]
+    fn a_rough_time_reads_in_both_languages() {
+        assert_eq!(EN.about(Duration::from_secs(40)), "About 40 s");
+        assert_eq!(ES.about(Duration::from_secs(40)), "Unos 40 s");
     }
 
     #[test]
