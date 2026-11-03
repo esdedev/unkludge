@@ -45,6 +45,8 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         if quitting {
             let worker = {
                 let mut app = cell.borrow_mut();
+                // Destroying the window sends more messages through here, and it only quits once.
+                app.quit = false;
                 app.save_settings();
                 app.remove_tray();
                 app.worker.take()
