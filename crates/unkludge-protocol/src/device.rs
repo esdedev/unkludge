@@ -10,7 +10,9 @@ use crate::Error;
 use crate::model::Model;
 use crate::packet::cmd::Cmd;
 use crate::packet::{self, Ack, AckExpect, HEADER_LEN, REPORT_ID, REPORT_LEN, Report};
-use crate::transport::Transport;
+use crate::transport::{HidTransport, Transport};
+
+mod open;
 
 /// Wait before each generic chunk and each read request.
 const CHUNK_DELAY: Duration = Duration::from_millis(25);
@@ -76,7 +78,7 @@ pub(crate) enum AckOutcome {
 ///
 /// The transports stay private: the only ways to reach the keyboard are this crate's named
 /// operations, so nothing outside the allow-list can be sent.
-pub struct Device<T: Transport> {
+pub struct Device<T: Transport = HidTransport> {
     main: T,
     screen: Option<T>,
     pub model: &'static Model,
@@ -821,8 +823,9 @@ mod tests {
 
     #[test]
     fn a_device_can_move_to_a_worker_thread() {
-        fn assert_send<T: Send>(_: &T) {}
-        assert_send(&device(&FakeTransport::new()));
+        fn assert_send<T: Send>() {}
+        assert_send::<Device<FakeTransport>>();
+        assert_send::<Device>();
     }
 
     #[test]

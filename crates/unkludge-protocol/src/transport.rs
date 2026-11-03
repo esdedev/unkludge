@@ -1,6 +1,9 @@
 //! The link to the keyboard, behind a trait so the protocol can run without hardware.
 
+use std::ffi::CStr;
 use std::time::Duration;
+
+use hidapi::{HidApi, HidDevice, HidError};
 
 use crate::Error;
 
@@ -24,5 +27,36 @@ pub trait Transport {
     /// hardware behind it can skip the wait.
     fn sleep(&self, duration: Duration) {
         std::thread::sleep(duration);
+    }
+}
+
+/// A collection of a real keyboard. Only `Device::open` can make one, and the device keeps it to
+/// itself.
+pub struct HidTransport {
+    device: HidDevice,
+}
+
+impl HidTransport {
+    pub(crate) fn open(api: &HidApi, path: &CStr) -> Result<Self, Error> {
+        let device = api.open_path(path).map_err(hid_error)?;
+        Ok(HidTransport { device })
+    }
+}
+
+pub(crate) fn hid_error(error: HidError) -> Error {
+    Error::Hid(error.to_string())
+}
+
+impl Transport for HidTransport {
+    fn send_feature(&self, report: &[u8]) -> Result<(), Error> {
+        self.device.send_feature_report(report).map_err(hid_error)
+    }
+
+    fn get_feature(&self, buf: &mut [u8]) -> Result<usize, Error> {
+        self.device.get_feature_report(buf).map_err(hid_error)
+    }
+
+    fn read_timeout(&self, buf: &mut [u8], ms: i32) -> Result<usize, Error> {
+        self.device.read_timeout(buf, ms).map_err(hid_error)
     }
 }
