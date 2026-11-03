@@ -11,7 +11,7 @@ use super::gfx::{
     WELL, alpha,
 };
 use super::header::{fitted_text, tone_color};
-use super::{App, Hit, Role};
+use super::{App, Hit, Role, TextItem};
 use crate::i18n::t;
 use crate::layout::{self, centered, split_row};
 use crate::state::{Upload, preview_frame};
@@ -208,6 +208,7 @@ impl App {
         let text = R::new(row.x0, row.y0, button.x0 - 10.0, row.y1);
         match self.state.file_name() {
             Some(name) => {
+                self.text_item(text, TextItem::File, &name, Some(self.state.file_detail()));
                 let name = fitted_text(d, &name, &self.fonts.body, text.w());
                 d.text(
                     &name,
@@ -308,6 +309,7 @@ impl App {
             .collect::<Vec<_>>()
             .join("\n");
         d.text(&text, &self.fonts.note, row, tone_color(first.tone));
+        self.text_item(row, TextItem::Notes, &text, None);
     }
 
     fn paint_action_row(&self, d: &Draw, row: R) {
@@ -372,7 +374,14 @@ impl App {
 
         let area = R::new(row.x0, row.y0, cancel.x0 - 12.0, row.y1);
         let share = self.state.upload.share();
-        let left = format!("{}  ·  {:.0} %", t().uploading, share * 100.0);
+        let percent = format!("{:.0} %", share * 100.0);
+        self.text_item(
+            area,
+            TextItem::Progress,
+            t().uploading,
+            Some(percent.clone()),
+        );
+        let left = format!("{}  ·  {percent}", t().uploading);
         let right = match self.state.upload {
             Upload::Running { remaining, .. } => t().time_left(remaining),
             _ => String::new(),

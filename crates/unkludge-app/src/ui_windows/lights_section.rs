@@ -5,7 +5,7 @@ use unkludge_protocol::lighting::{ColorSetting, LightMode, ModeChoice, Rgb, Slee
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 use windows::Win32::Graphics::Direct2D::ID2D1GradientStopCollection;
 
-use super::gfx::{BORDER, DIM, Draw, MUTED, R, SILVER, TEXT, TRACK, alpha};
+use super::gfx::{BORDER, DIM, Draw, MUTED, R, SILVER, TEXT, TRACK_DISABLED, alpha};
 use super::{App, Hit, Role};
 use crate::i18n::t;
 use crate::layout::{self, effect_chips, split_row};
@@ -204,10 +204,10 @@ impl App {
             let on = controls.color == Some(ColorSetting::Rainbow);
             let drawn = d.rainbow_circle(rainbow, x, y, radius);
             if drawn.is_err() {
-                d.circle(x, y, radius, TRACK);
+                d.circle(x, y, radius, TRACK_DISABLED);
             }
             if !enabled {
-                d.circle(x, y, radius, alpha(TRACK, 0.8));
+                d.circle(x, y, radius, alpha(TRACK_DISABLED, 0.8));
             }
             self.swatch_ring(d, x, y, radius, Hit::Rainbow, on, enabled);
             self.item(
@@ -266,7 +266,7 @@ impl App {
         enabled: bool,
     ) {
         if on {
-            let color = if enabled { TEXT } else { DIM };
+            let color = if enabled { TEXT } else { SILVER };
             d.circle_stroke(x, y, radius + 2.5, color, 1.5);
         } else if enabled && self.hover == Some(hit) {
             d.circle_stroke(x, y, radius + 2.0, MUTED, 1.0);

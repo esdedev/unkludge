@@ -20,6 +20,7 @@ const PROGRESS_PAINT_GAP: Duration = Duration::from_millis(250);
 impl App {
     pub(super) fn drain_events(&mut self) {
         self.woken.store(false, Ordering::SeqCst);
+        let was_uploading = !self.state.upload.is_idle();
         let message_before = self.state.message.clone();
         let mut image_changed = false;
         let mut only_progress = true;
@@ -37,6 +38,9 @@ impl App {
                 Event::ImageLoaded(_) | Event::Disconnected | Event::ImageFailed(_)
             );
             self.take_event(event);
+        }
+        if was_uploading && self.state.upload.is_idle() {
+            self.upload_ended();
         }
         self.refresh_frame();
         if image_changed {
@@ -163,7 +167,7 @@ impl App {
         let mut saved = self.save_shot(&path);
         if tabs > 0 {
             for _ in 0..tabs {
-                self.key_down(VK_TAB.0);
+                self.key_down(VK_TAB.0, false);
             }
             saved = self.save_shot(&path);
         }

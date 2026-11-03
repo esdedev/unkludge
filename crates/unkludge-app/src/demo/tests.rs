@@ -45,6 +45,16 @@ fn with_no_keyboard_there_is_nothing_to_open() {
 }
 
 #[test]
+fn a_keyboard_this_version_cant_use_says_so() {
+    let keyboard = keyboard(DemoState::Unsupported);
+    assert_eq!(
+        keyboard.open().err(),
+        Some(Error::Unsupported(UNSUPPORTED_PID))
+    );
+    assert!(!model::find(UNSUPPORTED_PID).unwrap().is_supported());
+}
+
+#[test]
 fn a_keyboard_that_cant_be_opened_says_so() {
     let keyboard = keyboard(DemoState::CannotOpen);
     assert!(matches!(keyboard.open(), Err(Error::Hid(_))));

@@ -50,12 +50,19 @@ pub const SURFACE: D2D1_COLOR_F = rgb(0x1F1F27, 1.0);
 pub const SURFACE_HI: D2D1_COLOR_F = rgb(0x2A2A35, 1.0);
 pub const BORDER: D2D1_COLOR_F = rgb(0x282831, 1.0);
 pub const BORDER_HI: D2D1_COLOR_F = rgb(0x44444F, 1.0);
-pub const TRACK: D2D1_COLOR_F = rgb(0x2E2E38, 1.0);
+/// What a slider or toggle runs along: has to be seen against a card.
+pub const TRACK: D2D1_COLOR_F = rgb(0x6A6A78, 1.0);
+pub const TRACK_DISABLED: D2D1_COLOR_F = rgb(0x2E2E38, 1.0);
+/// The choice that's chosen while nothing can be changed, which still has to stand out.
+pub const SELECTED_DISABLED: D2D1_COLOR_F = rgb(0x4C4C58, 1.0);
+/// The keys of the picture of a keyboard, which is only a picture.
+pub const KEY_ART: D2D1_COLOR_F = rgb(0x2E2E38, 1.0);
 pub const TEXT: D2D1_COLOR_F = rgb(0xF4F4F5, 1.0);
 pub const SILVER: D2D1_COLOR_F = rgb(0xC9CDD6, 1.0);
 pub const MUTED: D2D1_COLOR_F = rgb(0x9696A3, 1.0);
 pub const DIM: D2D1_COLOR_F = rgb(0x5E5E6A, 1.0);
-pub const ACCENT: D2D1_COLOR_F = rgb(0x6E56F8, 1.0);
+/// Dark enough for white text on it. The icon's keycap is this colour too.
+pub const ACCENT: D2D1_COLOR_F = rgb(0x6448F0, 1.0);
 pub const ACCENT_DEEP: D2D1_COLOR_F = rgb(0x3D2BB8, 1.0);
 pub const ACCENT_HI: D2D1_COLOR_F = rgb(0xA796FF, 1.0);
 pub const SCREEN_DARK: D2D1_COLOR_F = rgb(0x121022, 1.0);
@@ -573,7 +580,8 @@ impl Draw<'_> {
         if look.selected && look.enabled {
             self.round(r, radius, ACCENT);
         } else if look.selected {
-            self.round(r, radius, TRACK);
+            self.round(r, radius, SELECTED_DISABLED);
+            self.round_stroke(r, radius, MUTED, 1.0);
         } else if look.enabled && look.hovered {
             self.round(r, radius, SURFACE_HI);
             self.round_stroke(r, radius, BORDER_HI, 1.0);
@@ -581,12 +589,12 @@ impl Draw<'_> {
             self.round(r, radius, SURFACE);
             self.round_stroke(r, radius, BORDER, 1.0);
         }
-        let color = if !look.enabled {
-            DIM
-        } else if look.selected {
+        let color = if look.selected {
             TEXT
-        } else {
+        } else if look.enabled {
             SILVER
+        } else {
+            DIM
         };
         self.text(label, font, r, color);
     }
@@ -634,7 +642,8 @@ impl Draw<'_> {
     /// A slider with a mark at each of its steps. `step` is where it is now.
     pub fn slider(&self, x0: f32, x1: f32, y: f32, step: usize, steps: usize, enabled: bool) {
         let at = crate::layout::step_x(step, x0, x1, steps);
-        self.round(R::new(x0, y - 3.0, x1, y + 3.0), 3.0, TRACK);
+        let track = if enabled { TRACK } else { TRACK_DISABLED };
+        self.round(R::new(x0, y - 3.0, x1, y + 3.0), 3.0, track);
         if at > x0 {
             let fill = if enabled { ACCENT_HI } else { DIM };
             self.round(R::new(x0, y - 3.0, at, y + 3.0), 3.0, fill);
@@ -647,7 +656,7 @@ impl Draw<'_> {
             self.glow_circle(at, y, 14.0, ACCENT);
         }
         self.circle(at, y, 8.0, if enabled { TEXT } else { DIM });
-        self.circle(at, y, 3.0, if enabled { ACCENT } else { TRACK });
+        self.circle(at, y, 3.0, if enabled { ACCENT } else { TRACK_DISABLED });
     }
 
     /// The preview's picture. At 100 % every pixel lands on one of the screen's, and stays sharp.
@@ -744,13 +753,62 @@ mod tests {
     fn colours_mix_from_one_to_the_other() {
         let mid = lerp(alpha(BG, 0.0), alpha(BG, 1.0), 0.5);
         assert_eq!(mid.a, 0.5);
-        assert_eq!(lerp(ACCENT, GREEN, 0.0).r, ACCENT.r);
-        assert_eq!(lerp(ACCENT, GREEN, 1.0).g, GREEN.g);
+        assert!((lerp(ACCENT, GREEN, 0.0).r - ACCENT.r).abs() < 0.001);
+        assert!((lerp(ACCENT, GREEN, 1.0).g - GREEN.g).abs() < 0.001);
+    }
+
+    /// How a colour stands out against another, as the accessibility guidelines measure it.
+    fn contrast(a: D2D1_COLOR_F, b: D2D1_COLOR_F) -> f32 {
+        let channel = |c: f32| {
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let light =
+            |c: D2D1_COLOR_F| 0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b);
+        let (a, b) = (light(a), light(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[test]
+    fn contrast_is_measured_as_the_guidelines_do() {
+        let (white, black) = (rgb(0xFFFFFF, 1.0), rgb(0x000000, 1.0));
+        assert!((contrast(white, black) - 21.0).abs() < 0.01);
+        assert!((contrast(white, white) - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn text_on_the_accent_colour_can_be_read() {
+        assert!(contrast(TEXT, ACCENT) >= 4.5, "{}", contrast(TEXT, ACCENT));
+    }
+
+    #[test]
+    fn text_on_cards_can_be_read() {
+        for color in [TEXT, SILVER, MUTED, GREEN, AMBER, RED, ACCENT_HI, CYAN] {
+            assert!(contrast(color, CARD) >= 4.5, "{}", contrast(color, CARD));
+        }
+    }
+
+    #[test]
+    fn sliders_and_toggles_can_be_seen_against_a_card() {
+        assert!(contrast(TRACK, CARD) >= 3.0, "{}", contrast(TRACK, CARD));
+        assert!(contrast(ACCENT, CARD) >= 3.0, "{}", contrast(ACCENT, CARD));
+    }
+
+    #[test]
+    fn a_chosen_chip_stands_out_while_disabled() {
+        assert!(contrast(SELECTED_DISABLED, SURFACE) >= 1.5);
+        assert!(contrast(TEXT, SELECTED_DISABLED) >= 4.5);
+        assert!(contrast(TEXT, SELECTED_DISABLED) > contrast(DIM, SURFACE));
     }
 
     #[test]
     fn the_logo_uses_the_icons_colours() {
-        assert_eq!(rgb(0x6E56F8, 1.0).g, 86.0 / 255.0);
-        assert_eq!(ACCENT.b, 248.0 / 255.0);
+        let [r, g, b] = crate::icon::TOP;
+        assert_eq!(ACCENT.r, r / 255.0);
+        assert_eq!(ACCENT.g, g / 255.0);
+        assert_eq!(ACCENT.b, b / 255.0);
     }
 }

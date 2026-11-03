@@ -32,6 +32,8 @@ const CONFIG_READ_HEADER: [u8; HEADER_LEN] =
 /// The longest any pause of the protocol takes here.
 const LONGEST_PAUSE: Duration = Duration::from_millis(2);
 const STALL_SETTLES: Duration = Duration::from_millis(250);
+/// An older model, which is known and not supported.
+const UNSUPPORTED_PID: u16 = 0x002A;
 
 /// Byte offsets of the config block, as in the protocol's docs.
 const EFFECT: usize = 0x0A;
@@ -46,6 +48,8 @@ pub enum DemoState {
     NoKeyboard,
     NoKeyboardRk,
     CannotOpen,
+    /// A device of the same vendor that this version can't use.
+    Unsupported,
     Connected,
     RkApp,
     Hung,
@@ -69,10 +73,11 @@ pub enum DemoState {
     Report,
 }
 
-const STATES: [(&str, DemoState); 22] = [
+const STATES: [(&str, DemoState); 23] = [
     ("no-keyboard", DemoState::NoKeyboard),
     ("no-keyboard-rk", DemoState::NoKeyboardRk),
     ("cannot-open", DemoState::CannotOpen),
+    ("unsupported", DemoState::Unsupported),
     ("connected", DemoState::Connected),
     ("rk-app", DemoState::RkApp),
     ("hung", DemoState::Hung),
@@ -142,6 +147,7 @@ pub struct DemoKeyboard {
     model: &'static Model,
     present: AtomicBool,
     open_error: AtomicBool,
+    unsupported: AtomicBool,
     rk_app: AtomicBool,
     /// How long each chunk's ack takes.
     chunk_ms: AtomicU32,
@@ -161,6 +167,7 @@ impl DemoKeyboard {
             model,
             present: AtomicBool::new(!absent),
             open_error: AtomicBool::new(state == DemoState::CannotOpen),
+            unsupported: AtomicBool::new(state == DemoState::Unsupported),
             rk_app: AtomicBool::new(matches!(state, DemoState::RkApp | DemoState::NoKeyboardRk)),
             chunk_ms: AtomicU32::new(1),
             stalled: AtomicBool::new(false),
@@ -178,6 +185,9 @@ impl DemoKeyboard {
     pub fn open(self: &Arc<DemoKeyboard>) -> Result<Device<DemoTransport>, Error> {
         if self.open_error.load(Ordering::SeqCst) {
             return Err(Error::Hid("demo: the system refused access".to_string()));
+        }
+        if self.unsupported.load(Ordering::SeqCst) {
+            return Err(Error::Unsupported(UNSUPPORTED_PID));
         }
         if !self.present.load(Ordering::SeqCst) {
             return Err(Error::NotFound);
@@ -371,7 +381,11 @@ impl Script {
             {
                 self.reached = true;
             }
-            Event::CannotOpen(_) if self.state == DemoState::CannotOpen => self.reached = true,
+            Event::CannotOpen(_)
+                if matches!(self.state, DemoState::CannotOpen | DemoState::Unsupported) =>
+            {
+                self.reached = true;
+            }
             Event::Lighting(_) => {
                 if let Some(step) = self.after_lights() {
                     steps.push(step);

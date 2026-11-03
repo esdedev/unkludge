@@ -25,7 +25,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{Interface, PCWSTR, Result, w};
 
 use super::gfx::{BG, Draw, Fonts, Gfx, R};
-use super::{Anim, App, Deferred, Shared, a11y, dialogs, tray};
+use super::{Anim, App, Deferred, Item, Shared, a11y, dialogs, tray};
 use crate::i18n::t;
 use crate::layout::{
     Frame, PixelRect, WIDTH, centered_in_work_area, effective_dpi, keep_in_work_area, pixels,
@@ -50,6 +50,8 @@ pub const TIMER_PREVIEW: usize = 2;
 pub const TIMER_SHOT: usize = 4;
 
 const TIMER_ANIM: usize = 1;
+/// In a key's message: it was already down, so this is it repeating.
+const KEY_REPEAT: isize = 1 << 30;
 pub(super) const TIMER_EXIT: usize = 5;
 pub(super) const TIMER_SHOT_GIVE_UP: usize = 6;
 
@@ -95,6 +97,8 @@ impl App {
                 scale: 1.0,
             })),
             accessible: None,
+            last_items: Vec::new(),
+            announced_focus: None,
             show_focus: false,
             hover: None,
             tracking_mouse: false,
@@ -340,6 +344,8 @@ impl App {
         }
         self.update_preview();
         self.render();
+        self.announce_changes();
+        self.announce_focus();
     }
 
     /// Draws on another target for once, for a picture.
@@ -541,7 +547,9 @@ impl App {
                 }
                 Some(0)
             }
-            WM_KEYDOWN => self.key_down(wp.0 as u16).then_some(0),
+            WM_KEYDOWN => self
+                .key_down(wp.0 as u16, lp.0 & KEY_REPEAT != 0)
+                .then_some(0),
             WM_SETCURSOR => self.set_cursor(lp).then_some(1),
             WM_SIZE => {
                 // Minimising and coming back stop and start the preview.
@@ -601,9 +609,10 @@ impl App {
             WM_GETOBJECT => self.accessible_object(wp, lp),
             WM_INVOKE_ITEM => {
                 let item = self.shared.borrow().items.get(wp.0).cloned();
-                if let Some(item) = item.filter(|item| item.enabled) {
+                if let Some(item) = item.filter(Item::is_usable) {
                     self.set_focus(Some(item.hit));
                     self.activate(item.hit);
+                    self.follow_upload(item.hit);
                 }
                 Some(0)
             }

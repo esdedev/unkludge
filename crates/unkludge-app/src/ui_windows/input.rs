@@ -5,32 +5,67 @@ use windows::Win32::Foundation::{LPARAM, POINT};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::UI::Accessibility::NotifyWinEvent;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, ReleaseCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_DOWN, VK_LEFT,
-    VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
+    GetKeyState, ReleaseCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VIRTUAL_KEY, VK_DOWN,
+    VK_LEFT, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EVENT_OBJECT_FOCUS, GetCursorPos, HTCLIENT, IDC_HAND, LoadCursorW, OBJID_CLIENT, SetCursor,
 };
 
 use super::gfx::{ACCENT_HI, Draw, R, alpha};
-use super::{App, Deferred, Hit};
+use super::{App, Deferred, Hit, Role};
 use crate::layout;
 use crate::state::Slider;
 use crate::worker::Cmd;
 
-/// What Tab does: the next or previous of the enabled items, around the end of the list.
-fn next_focus(hits: &[Hit], focus: Option<Hit>, backwards: bool) -> Option<Hit> {
-    if hits.is_empty() {
-        return None;
+/// What Tab does: the next or previous of what can be used, around the end of the list, starting
+/// from where the focus is even if that has stopped being usable. Each item goes with whether it can
+/// be used now.
+fn next_focus(items: &[(Hit, bool)], focus: Option<Hit>, backwards: bool) -> Option<Hit> {
+    let count = items.len();
+    let at = focus.and_then(|focus| items.iter().position(|(hit, _)| *hit == focus));
+    (1..=count)
+        .map(|step| match (at, backwards) {
+            (Some(at), false) => (at + step) % count,
+            (Some(at), true) => (at + count - step) % count,
+            (None, false) => step - 1,
+            (None, true) => count - step,
+        })
+        .map(|index| items[index])
+        .find(|(_, usable)| *usable)
+        .map(|(hit, _)| hit)
+}
+
+/// Whether a key's message should do anything. Holding Space or Enter would otherwise do the same
+/// thing over and over, each time something written to the keyboard. Arrows are meant to repeat.
+fn key_acts(key: VIRTUAL_KEY, repeat: bool) -> bool {
+    !(repeat && (key == VK_RETURN || key == VK_SPACE))
+}
+
+/// What an arrow key means: how far along a slider, and whether it's forwards among other things.
+fn arrow_move(key: VIRTUAL_KEY) -> Option<(i32, bool)> {
+    match key {
+        VK_RIGHT => Some((1, true)),
+        VK_UP => Some((1, false)),
+        VK_DOWN => Some((-1, true)),
+        VK_LEFT => Some((-1, false)),
+        _ => None,
     }
-    let count = hits.len();
-    let index = match focus.and_then(|focus| hits.iter().position(|hit| *hit == focus)) {
-        Some(at) if backwards => (at + count - 1) % count,
-        Some(at) => (at + 1) % count,
-        None if backwards => count - 1,
-        None => 0,
-    };
-    Some(hits[index])
+}
+
+/// Where the focus goes on clicking something. Not on Upload, as it stays out of sight after a click,
+/// and a later Space would start another upload nobody can see was asked for.
+fn focus_after_click(hit: Option<Hit>) -> Option<Hit> {
+    hit.filter(|hit| *hit != Hit::Upload)
+}
+
+/// Where the focus goes when an upload ends. It went to Cancel by keyboard, so it comes back to
+/// Upload, in sight. If it got there any other way nobody's looking for it, so it goes away.
+fn focus_after_upload(focus: Option<Hit>, by_keyboard: bool) -> Option<Hit> {
+    match focus {
+        Some(Hit::Cancel) => by_keyboard.then_some(Hit::Upload),
+        other => other,
+    }
 }
 
 impl App {
@@ -40,31 +75,58 @@ impl App {
             .items
             .iter()
             .rev()
-            .find(|item| item.enabled && item.rect.contains(x, y))
+            .find(|item| item.is_usable() && item.rect.contains(x, y))
             .map(|item| item.hit)
     }
 
     /// Moves the focus, and tells a screen reader that's listening.
     pub fn set_focus(&mut self, focus: Option<Hit>) {
-        let child = {
-            let mut shared = self.shared.borrow_mut();
-            if shared.focus == focus {
-                return;
-            }
-            shared.focus = focus;
-            focus.and_then(|focus| shared.items.iter().position(|item| item.hit == focus))
+        self.shared.borrow_mut().focus = focus;
+        self.announce_focus();
+    }
+
+    /// Tells a screen reader where the focus is, once what has it has been painted.
+    pub fn announce_focus(&mut self) {
+        let (focus, child) = {
+            let shared = self.shared.borrow();
+            let child = shared
+                .focus
+                .and_then(|focus| shared.items.iter().position(|item| item.hit == focus));
+            (shared.focus, child)
         };
-        if let Some(child) = child {
-            // SAFETY: the handle is this window's own. Children count from 1.
-            unsafe {
-                NotifyWinEvent(
-                    EVENT_OBJECT_FOCUS,
-                    self.hwnd,
-                    OBJID_CLIENT.0,
-                    child as i32 + 1,
-                );
-            }
+        if focus == self.announced_focus {
+            return;
         }
+        match child {
+            Some(child) => {
+                // SAFETY: the handle is this window's own. Children count from 1.
+                unsafe {
+                    NotifyWinEvent(
+                        EVENT_OBJECT_FOCUS,
+                        self.hwnd,
+                        OBJID_CLIENT.0,
+                        child as i32 + 1,
+                    );
+                }
+                self.announced_focus = focus;
+            }
+            None if focus.is_none() => self.announced_focus = None,
+            // Not painted yet: the next paint comes back here.
+            None => {}
+        }
+    }
+
+    /// An upload just started from the keyboard or a screen reader: Cancel is what's next.
+    pub fn follow_upload(&mut self, hit: Hit) {
+        if hit == Hit::Upload && !self.state.upload.is_idle() {
+            self.set_focus(Some(Hit::Cancel));
+        }
+    }
+
+    /// An upload just ended.
+    pub fn upload_ended(&mut self) {
+        let focus = self.shared.borrow().focus;
+        self.set_focus(focus_after_upload(focus, self.show_focus));
     }
 
     pub fn mouse_move(&mut self, x: f32, y: f32) {
@@ -102,7 +164,7 @@ impl App {
     pub fn mouse_down(&mut self, x: f32, y: f32) {
         self.show_focus = false;
         let hit = self.hit_at(x, y);
-        self.set_focus(hit);
+        self.set_focus(focus_after_click(hit));
         match hit {
             Some(Hit::Brightness) => self.begin_drag(Slider::Brightness, x),
             Some(Hit::Speed) => self.begin_drag(Slider::Speed, x),
@@ -191,50 +253,49 @@ impl App {
                 let on = !self.autostart;
                 self.set_autostart(on);
             }
+            Hit::Text(_) => {}
         }
         self.invalidate();
     }
 
     /// Says whether the key meant something here.
-    pub fn key_down(&mut self, key: u16) -> bool {
-        let enabled: Vec<Hit> = self
+    pub fn key_down(&mut self, key: u16, repeat: bool) -> bool {
+        let key = VIRTUAL_KEY(key);
+        if !key_acts(key, repeat) {
+            return true;
+        }
+        let items: Vec<(Hit, bool)> = self
             .shared
             .borrow()
             .items
             .iter()
-            .filter(|item| item.enabled)
-            .map(|item| item.hit)
+            .filter(|item| item.role != Role::Text)
+            .map(|item| (item.hit, item.is_usable()))
             .collect();
         let focus = self.shared.borrow().focus;
-        let key = windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY(key);
+        if let Some((by, forward)) = arrow_move(key) {
+            if focus.is_some_and(|hit| self.nudge(hit, by)) {
+                self.show_focus = true;
+                self.invalidate();
+            } else {
+                // Among chips and the like, the arrows move as Tab does.
+                self.move_focus(next_focus(&items, focus, !forward));
+            }
+            return true;
+        }
         match key {
             VK_TAB => {
                 // SAFETY: no pointers involved.
                 let shift = unsafe { GetKeyState(i32::from(VK_SHIFT.0)) } < 0;
-                self.move_focus(next_focus(&enabled, focus, shift));
+                self.move_focus(next_focus(&items, focus, shift));
                 true
             }
             VK_RETURN | VK_SPACE => {
-                if let Some(hit) = focus.filter(|hit| enabled.contains(hit)) {
+                let usable = focus.filter(|hit| items.contains(&(*hit, true)));
+                if let Some(hit) = usable {
                     self.show_focus = true;
                     self.activate(hit);
-                }
-                true
-            }
-            VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN => {
-                let forward = key == VK_RIGHT || key == VK_DOWN;
-                let by = if key == VK_RIGHT || key == VK_UP {
-                    1
-                } else {
-                    -1
-                };
-                let on_slider = focus.is_some_and(|hit| self.nudge(hit, by));
-                if on_slider {
-                    self.show_focus = true;
-                    self.invalidate();
-                } else {
-                    // Among chips and the like, the arrows move as Tab does.
-                    self.move_focus(next_focus(&enabled, focus, !forward));
+                    self.follow_upload(hit);
                 }
                 true
             }
@@ -294,10 +355,15 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use unkludge_protocol::screen::Fit;
+
+    fn usable(hits: &[Hit]) -> Vec<(Hit, bool)> {
+        hits.iter().map(|hit| (*hit, true)).collect()
+    }
 
     #[test]
     fn tab_goes_through_the_items_and_around() {
-        let hits = [Hit::Report, Hit::Preview, Hit::Upload];
+        let hits = usable(&[Hit::Report, Hit::Preview, Hit::Upload]);
         assert_eq!(next_focus(&hits, None, false), Some(Hit::Report));
         assert_eq!(
             next_focus(&hits, Some(Hit::Report), false),
@@ -311,7 +377,7 @@ mod tests {
 
     #[test]
     fn shift_tab_goes_the_other_way() {
-        let hits = [Hit::Report, Hit::Preview, Hit::Upload];
+        let hits = usable(&[Hit::Report, Hit::Preview, Hit::Upload]);
         assert_eq!(next_focus(&hits, None, true), Some(Hit::Upload));
         assert_eq!(
             next_focus(&hits, Some(Hit::Report), true),
@@ -325,11 +391,112 @@ mod tests {
 
     #[test]
     fn a_focus_that_has_gone_away_starts_over() {
-        let hits = [Hit::Report, Hit::Preview];
+        let hits = usable(&[Hit::Report, Hit::Preview]);
         assert_eq!(
             next_focus(&hits, Some(Hit::Cancel), false),
             Some(Hit::Report)
         );
         assert_eq!(next_focus(&[], Some(Hit::Cancel), false), None);
+    }
+
+    #[test]
+    fn tab_skips_what_cant_be_used() {
+        let hits = [
+            (Hit::Report, true),
+            (Hit::Upload, false),
+            (Hit::SyncClock, true),
+        ];
+        assert_eq!(
+            next_focus(&hits, Some(Hit::Report), false),
+            Some(Hit::SyncClock)
+        );
+        assert_eq!(
+            next_focus(&hits, Some(Hit::SyncClock), true),
+            Some(Hit::Report)
+        );
+    }
+
+    #[test]
+    fn tab_leaves_a_button_that_was_disabled_under_the_focus_to_its_neighbour() {
+        // Cancel while cancelling.
+        let hits = [
+            (Hit::Fit(Fit::Stretch), true),
+            (Hit::Cancel, false),
+            (Hit::SyncClock, true),
+        ];
+        assert_eq!(
+            next_focus(&hits, Some(Hit::Cancel), false),
+            Some(Hit::SyncClock)
+        );
+        assert_eq!(
+            next_focus(&hits, Some(Hit::Cancel), true),
+            Some(Hit::Fit(Fit::Stretch))
+        );
+    }
+
+    #[test]
+    fn with_nothing_usable_there_is_nowhere_to_go() {
+        assert_eq!(next_focus(&[(Hit::Upload, false)], None, false), None);
+    }
+
+    #[test]
+    fn holding_space_or_enter_does_it_once() {
+        for key in [VK_SPACE, VK_RETURN] {
+            assert!(key_acts(key, false));
+            assert!(!key_acts(key, true));
+        }
+    }
+
+    #[test]
+    fn holding_an_arrow_or_tab_keeps_going() {
+        for key in [VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_TAB] {
+            assert!(key_acts(key, true));
+            assert!(key_acts(key, false));
+        }
+    }
+
+    #[test]
+    fn right_and_up_raise_a_slider_left_and_down_lower_it() {
+        assert_eq!(arrow_move(VK_RIGHT).map(|(by, _)| by), Some(1));
+        assert_eq!(arrow_move(VK_UP).map(|(by, _)| by), Some(1));
+        assert_eq!(arrow_move(VK_LEFT).map(|(by, _)| by), Some(-1));
+        assert_eq!(arrow_move(VK_DOWN).map(|(by, _)| by), Some(-1));
+        assert_eq!(arrow_move(VK_TAB), None);
+    }
+
+    #[test]
+    fn right_and_down_go_forwards_among_chips() {
+        assert_eq!(arrow_move(VK_RIGHT).map(|(_, forward)| forward), Some(true));
+        assert_eq!(arrow_move(VK_DOWN).map(|(_, forward)| forward), Some(true));
+        assert_eq!(arrow_move(VK_LEFT).map(|(_, forward)| forward), Some(false));
+        assert_eq!(arrow_move(VK_UP).map(|(_, forward)| forward), Some(false));
+    }
+
+    #[test]
+    fn clicking_upload_leaves_no_focus_behind_for_space_to_find() {
+        assert_eq!(focus_after_click(Some(Hit::Upload)), None);
+        assert_eq!(
+            focus_after_click(Some(Hit::SyncClock)),
+            Some(Hit::SyncClock)
+        );
+        assert_eq!(focus_after_click(None), None);
+    }
+
+    #[test]
+    fn the_focus_comes_back_to_upload_only_if_the_keyboard_took_it_away() {
+        assert_eq!(
+            focus_after_upload(Some(Hit::Cancel), true),
+            Some(Hit::Upload)
+        );
+        assert_eq!(focus_after_upload(Some(Hit::Cancel), false), None);
+    }
+
+    #[test]
+    fn an_upload_ending_leaves_a_focus_elsewhere_alone() {
+        assert_eq!(
+            focus_after_upload(Some(Hit::SyncClock), true),
+            Some(Hit::SyncClock)
+        );
+        assert_eq!(focus_after_upload(None, true), None);
     }
 }

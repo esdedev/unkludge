@@ -4,10 +4,10 @@
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 
 use super::gfx::{
-    ACCENT, ACCENT_HI, AMBER, BORDER, CARD, CYAN, Draw, GREEN, LUME, Look, MUTED, R, RED,
-    SCREEN_DARK, SILVER, SURFACE, TEXT, TRACK, alpha,
+    ACCENT, ACCENT_HI, AMBER, BORDER, CARD, CYAN, Draw, GREEN, KEY_ART, LUME, Look, MUTED, R, RED,
+    SCREEN_DARK, SILVER, SURFACE, TEXT, alpha,
 };
-use super::{App, Hit, Item, Role};
+use super::{App, Hit, Item, Role, TextItem};
 use crate::i18n::t;
 use crate::layout::WIDTH;
 use crate::state::Tone;
@@ -77,6 +77,19 @@ impl App {
             role: Role::Slider,
             on: false,
             enabled,
+        });
+    }
+
+    /// Adds text that says how things stand, for a screen reader to find.
+    pub fn text_item(&self, rect: R, which: TextItem, name: &str, value: Option<String>) {
+        self.shared.borrow_mut().items.push(Item {
+            rect,
+            hit: Hit::Text(which),
+            name: name.to_string(),
+            value,
+            role: Role::Text,
+            on: false,
+            enabled: true,
         });
     }
 
@@ -166,6 +179,7 @@ impl App {
             R::new(pill.x0 + 30.0, pill.y0, pill.x1 - 12.0, pill.y1),
             TEXT,
         );
+        self.text_item(pill, TextItem::Status, &status.text, None);
 
         if self.is_demo() {
             let width = d.text_width(t().demo, &self.fonts.badge) + 24.0;
@@ -186,8 +200,9 @@ impl App {
 
     pub fn paint_banners(&self, d: &Draw) {
         let banners = self.state.banners();
-        for (banner, rect) in banners.iter().zip(&self.frame.banners) {
+        for (index, (banner, rect)) in banners.iter().zip(&self.frame.banners).enumerate() {
             let r = R::from(*rect);
+            self.text_item(r, TextItem::Banner(index), &banner.text, None);
             let color = tone_color(banner.tone);
             d.round(r, 10.0, alpha(color, 0.10));
             d.round_stroke(r, 10.0, alpha(color, 0.45), 1.0);
@@ -235,10 +250,12 @@ impl App {
             Some(message) => {
                 d.circle(f.x0 + 18.0, mid, 3.5, tone_color(message.tone));
                 d.text(&message.text, &self.fonts.message, text_area, SILVER);
+                self.text_item(text_area, TextItem::Footer, &message.text, None);
             }
             None if self.is_demo() => {
                 d.circle(f.x0 + 18.0, mid, 3.5, CYAN);
                 d.text(t().demo_name, &self.fonts.message, text_area, MUTED);
+                self.text_item(text_area, TextItem::Footer, t().demo_name, None);
             }
             None => {}
         }
@@ -276,6 +293,12 @@ impl App {
             Tone::Neutral | Tone::Good => MUTED,
             tone => tone_color(tone),
         };
+        self.text_item(
+            c,
+            TextItem::Empty,
+            &view.headline,
+            Some(view.detail.clone()),
+        );
         let detail = fitted_text(d, &view.detail, &self.fonts.body_c, c.w() - 60.0);
         d.text(
             &detail,
@@ -304,7 +327,7 @@ fn keyboard_art(d: &Draw, r: R) {
             }
             let x = r.x0 + pad + column as f32 * (key + gap);
             let y = r.y0 + pad + row as f32 * (row_h + gap);
-            d.round(R::new(x, y, x + key, y + row_h), 4.0, TRACK);
+            d.round(R::new(x, y, x + key, y + row_h), 4.0, KEY_ART);
         }
     }
     let x = r.x0 + pad + (columns - 3) as f32 * (key + gap);

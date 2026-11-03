@@ -8,7 +8,7 @@ type Color = [f32; 3];
 /// The keycap's sides.
 const CAP: Color = [61.0, 43.0, 184.0];
 /// The keycap's top, in the app's accent colour.
-const TOP: Color = [110.0, 86.0, 248.0];
+pub const TOP: Color = [100.0, 72.0, 240.0];
 const SCREEN: Color = [18.0, 16.0, 34.0];
 /// The screen's light.
 const LUME: Color = [233.0, 228.0, 255.0];

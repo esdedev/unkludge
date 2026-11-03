@@ -68,6 +68,20 @@ pub enum Hit {
     CustomColor,
     Sleep(SleepTime),
     Autostart,
+    /// Text for a screen reader to find. It can't be clicked or focused.
+    Text(TextItem),
+}
+
+/// Text that says how things stand.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextItem {
+    Status,
+    Banner(usize),
+    Empty,
+    File,
+    Notes,
+    Progress,
+    Footer,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,6 +92,7 @@ pub enum Role {
     Choice,
     Slider,
     Link,
+    Text,
 }
 
 /// One interactive thing as painted last. The tab order, the hit test and what a screen reader sees
@@ -93,6 +108,13 @@ pub struct Item {
     /// A toggle that's on, or the choice that's chosen.
     pub on: bool,
     pub enabled: bool,
+}
+
+impl Item {
+    /// Whether it can be clicked or focused right now.
+    pub fn is_usable(&self) -> bool {
+        self.enabled && self.role != Role::Text
+    }
 }
 
 /// What the window and its screen reader object share.
@@ -172,6 +194,9 @@ pub struct App {
     to_open: Vec<PathBuf>,
     shared: Rc<RefCell<Shared>>,
     accessible: Option<IAccessible>,
+    /// What the last paint told a screen reader about, to tell it only what changes.
+    last_items: Vec<Item>,
+    announced_focus: Option<Hit>,
     /// The ring around what has the focus shows after using the keyboard, not the mouse.
     show_focus: bool,
     hover: Option<Hit>,
