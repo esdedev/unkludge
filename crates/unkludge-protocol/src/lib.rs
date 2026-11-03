@@ -1,6 +1,14 @@
 //! Protocol library for Royal Kludge keyboards.
 
-#[expect(dead_code, reason = "the feature modules will call the send paths")]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "lighting changes will use the setters")
+)]
+pub mod config;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the feature modules will call the send paths")
+)]
 pub mod device;
 mod error;
 pub mod model;
