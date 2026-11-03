@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/unkludge-protocol", "crates/unkludge-cli", "crates/unkludge-app", "tools/kbini2toml"]
+members = ["crates/unkludge-protocol", "crates/unkludge-shared", "crates/unkludge-cli", "crates/unkludge-app", "tools/kbini2toml"]
 
 [workspace.package]
 version = "0.1.0"

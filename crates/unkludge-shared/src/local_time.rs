@@ -1,8 +1,13 @@
-//! The computer's local time, as the keyboard's clock takes it. The app compiles this same file.
+//! The computer's local time, as the keyboard's clock takes it.
 
 use chrono::{Datelike, Timelike};
 use unkludge_protocol::Error;
 use unkludge_protocol::clock::DateTime;
+
+/// The time now.
+pub fn device_now() -> Result<DateTime, Error> {
+    device_time(&chrono::Local::now())
+}
 
 /// A local time, as the keyboard's clock takes it.
 pub fn device_time<T: Datelike + Timelike>(time: &T) -> Result<DateTime, Error> {

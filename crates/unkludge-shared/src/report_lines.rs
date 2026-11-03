@@ -1,5 +1,5 @@
-//! The text of a report, the same from this tool and from the app, which compiles this same file.
-//! Reports are for whoever looks into a model, so they're always in English.
+//! The text of a report, the same from the tool and from the app. Reports are for whoever looks into
+//! a model, so they're always in English.
 
 use unkludge_protocol::Error;
 use unkludge_protocol::device::HidCollection;
@@ -43,22 +43,26 @@ pub fn host_lines(
     lines
 }
 
-/// The part of a report that comes from the keyboard. A read that failed is just what a report is
-/// for, so it's told like anything else.
-pub fn keyboard_lines(model: &Model, config: Result<&[u8], String>) -> Vec<String> {
-    let mut lines = vec![
+/// What a report says about the model, which needs no answer from the keyboard.
+pub fn keyboard_header(model: &Model) -> Vec<String> {
+    vec![
         format!("Model: {}", model.name),
         format!("PID: {:04X}", model.pid),
         format!("Status: {}", status_label(model.status)),
-    ];
+    ]
+}
+
+/// What a report says about the config block. A read that failed is just what a report is for, so
+/// it's told like anything else.
+pub fn config_report(config: Result<&[u8], String>) -> Vec<String> {
     match config {
         Ok(block) => {
-            lines.push("Config block:".to_string());
+            let mut lines = vec!["Config block:".to_string()];
             lines.extend(config_lines(block));
+            lines
         }
-        Err(error) => lines.push(format!("Config block: couldn't read it: {error}")),
+        Err(error) => vec![format!("Config block: couldn't read it: {error}")],
     }
-    lines
 }
 
 pub fn status_label(status: Status) -> &'static str {
@@ -128,22 +132,28 @@ mod tests {
     }
 
     #[test]
-    fn keyboard_lines_show_the_block_or_why_it_is_missing() {
-        let s85 = model::find(0x0265).unwrap();
-        let lines = keyboard_lines(s85, Ok(&[0x5A, 0xA5]));
+    fn the_header_has_the_model_and_its_id_in_capitals() {
         assert_eq!(
-            lines,
-            [
-                "Model: RK S85 ES",
-                "PID: 0265",
-                "Status: experimental",
-                "Config block:",
-                "  00: 5A A5",
-            ]
+            keyboard_header(model::find(0x01A2).unwrap())[1],
+            "PID: 01A2"
         );
-        let lines = keyboard_lines(s85, Err("gone".to_string()));
-        assert_eq!(lines[3], "Config block: couldn't read it: gone");
-        assert_eq!(lines.len(), 4);
+        let s85 = keyboard_header(model::find(0x0265).unwrap());
+        assert_eq!(
+            s85,
+            ["Model: RK S85 ES", "PID: 0265", "Status: experimental"]
+        );
+    }
+
+    #[test]
+    fn the_config_report_shows_the_block_or_why_it_is_missing() {
+        assert_eq!(
+            config_report(Ok(&[0x5A, 0xA5])),
+            ["Config block:", "  00: 5A A5"]
+        );
+        assert_eq!(
+            config_report(Err("gone".to_string())),
+            ["Config block: couldn't read it: gone"]
+        );
     }
 
     #[test]

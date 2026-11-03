@@ -311,9 +311,9 @@ version = "0.1.0"
 name = "unkludge-app"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "image",
  "unkludge-protocol",
+ "unkludge-shared",
  "libc",
  "windows-sys",
 ]
@@ -326,6 +326,7 @@ dependencies = [
  "clap",
  "image",
  "unkludge-protocol",
+ "unkludge-shared",
  "libc",
  "windows-sys",
 ]
@@ -339,6 +340,15 @@ dependencies = [
  "serde",
  "thiserror",
  "toml",
+]
+
+[[package]]
+name = "unkludge-shared"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "unkludge-protocol",
+ "windows-sys",
 ]
 
 [[package]]

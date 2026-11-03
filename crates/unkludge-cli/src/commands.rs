@@ -12,11 +12,11 @@ use unkludge_protocol::model::{self, Model};
 use unkludge_protocol::screen::Animation;
 use unkludge_protocol::transport::Transport;
 use unkludge_protocol::{Device, Error};
+use unkludge_shared::local_time::device_time;
+use unkludge_shared::report_lines::{config_lines, config_report, keyboard_header, report_header};
 
 use crate::args::{KeyboardCommand, LightArgs, ScreenArgs};
-use crate::local_time::device_time;
 use crate::output::{self, Console};
-use crate::report_lines::{config_lines, keyboard_lines, report_header};
 
 pub type Failure = Box<dyn StdError>;
 
@@ -47,12 +47,14 @@ pub fn run<T: Transport>(
         KeyboardCommand::Report => {
             console.lines(report_header());
             console.lines(options.host);
+            // First, as on Windows a read can wait forever.
+            console.lines(keyboard_header(device.model()));
             let config = Config::read(device);
             let block = config
                 .as_ref()
                 .map(|config| config.as_bytes().as_slice())
                 .map_err(ToString::to_string);
-            console.lines(keyboard_lines(device.model(), block));
+            console.lines(config_report(block));
             Ok(())
         }
     }
@@ -440,6 +442,73 @@ mod tests {
         );
         assert_eq!(lines[2], "RK app running: no");
         assert_eq!(lines[3], "Model: RK S85 ES");
+    }
+
+    /// Keeps what a report has printed by the time the keyboard is asked for its config.
+    #[derive(Clone, Default)]
+    struct PrintedSoFar {
+        out: Arc<Mutex<Vec<u8>>>,
+        at_first_read: Arc<Mutex<Option<String>>>,
+    }
+
+    impl std::io::Write for PrintedSoFar {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.out.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Transport for PrintedSoFar {
+        fn send_feature(&self, _report: &[u8]) -> Result<(), Error> {
+            Ok(())
+        }
+
+        fn get_feature(&self, _buf: &mut [u8]) -> Result<usize, Error> {
+            let printed = String::from_utf8(self.out.lock().unwrap().clone()).unwrap();
+            self.at_first_read.lock().unwrap().get_or_insert(printed);
+            Err(Error::Hid("no answer".to_string()))
+        }
+
+        fn read_timeout(&self, _buf: &mut [u8], _ms: i32) -> Result<usize, Error> {
+            Ok(0)
+        }
+
+        fn sleep(&self, _duration: std::time::Duration) {}
+    }
+
+    #[test]
+    fn a_report_prints_the_model_before_it_reads_the_keyboard() {
+        // On Windows a read can wait forever, and then this is all a report can show.
+        let printed = PrintedSoFar::default();
+        let s85 = model::find(0x0265).unwrap();
+        let mut device = Device::new(printed.clone(), None, s85).unwrap();
+        let (mut out, mut err) = (printed.clone(), Vec::new());
+        let mut console = Console {
+            out: &mut out,
+            err: &mut err,
+        };
+        run(
+            &mut device,
+            &command(&["report"]),
+            &dry_options(),
+            &mut console,
+        )
+        .unwrap();
+
+        let at_first_read = printed.at_first_read.lock().unwrap().clone().unwrap();
+        for line in ["Model: RK S85 ES", "PID: 0265", "Status: experimental"] {
+            assert!(at_first_read.contains(line), "{at_first_read}");
+        }
+        assert!(!at_first_read.contains("Config block"), "{at_first_read}");
+        let whole = String::from_utf8(printed.out.lock().unwrap().clone()).unwrap();
+        assert!(
+            whole.ends_with("Config block: couldn't read it: USB error: no answer\n"),
+            "{whole}"
+        );
     }
 
     #[test]

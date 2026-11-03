@@ -10,6 +10,7 @@ use clap::Parser;
 use unkludge_protocol::device::list_collections;
 use unkludge_protocol::transport::Transport;
 use unkludge_protocol::{Device, Error, model};
+use unkludge_shared::{report_lines, rk_app};
 
 use crate::args::{Cli, Command, KeyboardCommand};
 use crate::commands::{Failure, Options};
@@ -20,11 +21,8 @@ mod args;
 mod commands;
 mod dry_run;
 mod interrupt;
-mod local_time;
 mod output;
 mod packets;
-mod report_lines;
-mod rk_app;
 
 fn main() -> ExitCode {
     let cli = match Cli::try_parse() {

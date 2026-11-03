@@ -4,14 +4,8 @@ mod crash;
 // The interface, which comes later, is what uses these.
 #[allow(dead_code)]
 mod i18n;
-#[path = "../../unkludge-cli/src/local_time.rs"]
-mod local_time;
 #[allow(dead_code)]
 mod report;
-#[path = "../../unkludge-cli/src/report_lines.rs"]
-mod report_lines;
-#[path = "../../unkludge-cli/src/rk_app.rs"]
-mod rk_app;
 #[allow(dead_code)]
 mod settings;
 #[allow(dead_code)]

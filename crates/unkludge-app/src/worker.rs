@@ -36,8 +36,7 @@ use unkludge_protocol::model::Model;
 use unkludge_protocol::screen::{Animation, Fit, LoadOptions, Progress, UploadOutcome, UploadPlan};
 use unkludge_protocol::transport::Transport;
 use unkludge_protocol::{Device, Error};
-
-use crate::local_time::device_time;
+use unkludge_shared::local_time::device_now;
 
 #[cfg(test)]
 mod tests;
@@ -659,7 +658,7 @@ impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F
             self.problem(Problem::NoKeyboard);
             return;
         };
-        let set = device_time(&chrono::Local::now()).and_then(|time| set_clock(device, &time));
+        let set = device_now().and_then(|time| set_clock(device, &time));
         match set {
             Ok(()) => self.emit(Event::ClockSynced),
             Err(error) => self.command_failed(error, now),

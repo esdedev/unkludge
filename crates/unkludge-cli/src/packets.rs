@@ -4,9 +4,9 @@ use std::fmt::{self, Display, Formatter};
 use std::time::{Duration, Instant};
 
 use unkludge_protocol::device::{Collection, PacketEvent};
+use unkludge_shared::report_lines::hex;
 
 use crate::output::Console;
-use crate::report_lines::hex;
 
 /// The command byte of screen data chunks.
 pub const SCREEN_DATA: u8 = 0x0C;

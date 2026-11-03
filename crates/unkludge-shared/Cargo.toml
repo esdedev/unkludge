@@ -1,0 +1,15 @@
+[package]
+name = "unkludge-shared"
+description = "What Unkludge's command-line tool and app have in common"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+unkludge-protocol = { path = "../unkludge-protocol" }
+chrono.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Diagnostics_ToolHelp"] }

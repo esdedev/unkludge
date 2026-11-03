@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 
 use unkludge_protocol::Error;
 use unkludge_protocol::device::{HidCollection, list_collections};
+use unkludge_shared::report_lines::{config_report, host_lines, keyboard_header, report_header};
 
-use crate::report_lines::{host_lines, keyboard_lines, report_header};
 use crate::worker::ReportData;
 
 /// The form a report gets attached to. It doesn't exist yet, as the project isn't public: until it
@@ -25,7 +25,10 @@ pub fn text(
     lines.extend(host_lines(rk_app_running, collections));
     let block = data.config.as_deref().map_err(Clone::clone);
     match (data.model, block) {
-        (Some(model), block) => lines.extend(keyboard_lines(model, block)),
+        (Some(model), block) => {
+            lines.extend(keyboard_header(model));
+            lines.extend(config_report(block));
+        }
         (None, Ok(_)) => lines.push("Keyboard: unknown".to_string()),
         (None, Err(why)) => lines.push(format!("Keyboard: {why}")),
     }

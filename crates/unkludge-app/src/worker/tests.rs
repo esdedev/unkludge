@@ -263,10 +263,7 @@ fn the_clock_is_the_local_time() {
     let sent = fake.sent();
     let clock = sent.iter().find(|report| report[1] == CLOCK).unwrap();
     let year = u16::from_le_bytes([clock[HEADER + 3], clock[HEADER + 4]]);
-    assert_eq!(
-        i32::from(year),
-        chrono::Datelike::year(&chrono::Local::now())
-    );
+    assert_eq!(year, device_now().unwrap().year);
 }
 
 #[test]

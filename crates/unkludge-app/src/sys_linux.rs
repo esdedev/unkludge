@@ -79,7 +79,7 @@ pub fn is_spanish() -> bool {
 
 /// RK's app doesn't exist for Linux.
 pub fn rk_app_running() -> bool {
-    crate::rk_app::running()
+    unkludge_shared::rk_app::running()
 }
 
 /// Opens a URL, a file or a folder with its default program.

@@ -46,7 +46,7 @@ pub fn is_spanish() -> bool {
 
 /// By the program's name, so a warning is all this is good for.
 pub fn rk_app_running() -> bool {
-    crate::rk_app::running()
+    unkludge_shared::rk_app::running()
 }
 
 /// Opens a URL, a file or a folder with its default program.

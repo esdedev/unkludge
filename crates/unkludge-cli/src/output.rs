@@ -6,8 +6,7 @@ use std::io::Write;
 use unkludge_protocol::config::SleepTime;
 use unkludge_protocol::lighting::{ColorSetting, CurrentLighting, LightMode, SleepSetting};
 use unkludge_protocol::model::{Effect, Lighting, Model};
-
-use crate::report_lines::status_label;
+use unkludge_shared::report_lines::status_label;
 
 /// Where a command's output goes. Output that can't be written, as when a pipe has closed, is no
 /// reason to stop talking to a keyboard halfway through.
