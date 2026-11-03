@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use crate::config::{Config, SleepTime};
+use crate::config::{Config, RAINBOW, SleepTime};
 use crate::model::Lighting;
 use crate::packet::cmd;
 use crate::transport::Transport;
@@ -16,8 +16,11 @@ pub const PALETTE_SLOTS: u8 = 7;
 const ENTRIES: usize = 20;
 const ENTRY_LEN: usize = PALETTE_SLOTS as usize * 3;
 
-/// The slot a custom colour goes into.
+/// The slot a custom colour goes into. That the keyboard shows it from there is unconfirmed until
+/// tested on hardware.
 const CUSTOM_COLOR_SLOT: u8 = 0;
+/// Wait before reading the config and before writing it, as the official app does.
+const CONFIG_DELAY: Duration = Duration::from_millis(30);
 /// Wait between writing the config and the palettes, as the official app does.
 const PALETTES_DELAY: Duration = Duration::from_millis(100);
 
@@ -37,8 +40,9 @@ impl Rgb {
 
 /// The colours of the effects.
 ///
-/// The keyboard stores these but can't report them, and they can only be written all together. So
-/// the caller keeps the copy, and whatever is in it replaces what's on the keyboard.
+/// The official app has no command to read these back, and whether the firmware could is unknown.
+/// They're written all together. So the caller keeps the copy, and whatever is in it replaces
+/// what's on the keyboard.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Palettes {
     bytes: [u8; PALETTES_LEN],
@@ -65,7 +69,7 @@ impl Default for Palettes {
 }
 
 impl Palettes {
-    /// Checks the length, and that entry 0 is all zero as the keyboard expects.
+    /// Checks the length, and that entry 0 is all zero, as the official app sends it.
     pub fn from_bytes(bytes: &[u8]) -> Result<Palettes, Error> {
         let bytes = <[u8; PALETTES_LEN]>::try_from(bytes).map_err(|_| {
             Error::Invalid(format!(
@@ -185,7 +189,7 @@ impl CurrentLighting {
 
 fn color_setting(value: u8) -> ColorSetting {
     match value {
-        7 => ColorSetting::Rainbow,
+        RAINBOW => ColorSetting::Rainbow,
         slot if slot < PALETTE_SLOTS => ColorSetting::Slot(slot),
         other => ColorSetting::Unknown(other),
     }
@@ -205,7 +209,8 @@ pub enum ColorChoice {
     Rainbow,
     /// A slot of the effect's palette, 0 to 6.
     Slot(u8),
-    /// A colour of your own. It goes into slot 0 of the effect's palette, and the effect uses it.
+    /// A colour of your own. It goes into slot 0 of the effect's palette, and the effect is set to
+    /// that slot. That this shows the colour is unconfirmed until tested on hardware.
     Custom(Rgb),
 }
 
@@ -236,18 +241,20 @@ pub fn read<T: Transport>(device: &mut Device<T>) -> Result<CurrentLighting, Err
 /// fails or the model doesn't allow the change ([`Error::Invalid`]). If nothing would change in it,
 /// the config isn't written.
 ///
-/// A [`ColorChoice::Custom`] also writes `palettes`, always, as the keyboard can't report what it
-/// holds. `palettes` is updated once that write has worked.
+/// A [`ColorChoice::Custom`] also writes `palettes`, always, as there is no way here to read what
+/// the keyboard holds. `palettes` is updated once that write has worked.
 pub fn apply<T: Transport>(
     device: &mut Device<T>,
     change: &LightingChange,
     palettes: &mut Palettes,
 ) -> Result<CurrentLighting, Error> {
     let lighting = &device.model().lighting;
+    device.sleep(CONFIG_DELAY);
     let before = Config::read(device)?;
     let (after, new_palettes) = edit(&before, lighting, change, palettes)?;
 
     if after != before {
+        device.sleep(CONFIG_DELAY);
         after.write(device)?;
     }
     if let Some(new_palettes) = new_palettes {
@@ -322,7 +329,7 @@ fn adjustable_effect(config: &Config) -> Result<u8, Error> {
 mod tests {
     use super::*;
     use crate::config::{CONFIG_LEN, config_reply};
-    use crate::model::{self, Model};
+    use crate::model::{self, Effect, Model};
     use crate::transport::fake::FakeTransport;
     use std::time::Duration;
 
@@ -504,6 +511,27 @@ mod tests {
     }
 
     #[test]
+    fn an_effect_without_brightness_reads_as_none() {
+        // No real model has one of these today.
+        static EFFECTS: [Effect; 1] = [Effect {
+            id: 5,
+            name: "Test",
+            color: true,
+            speed: true,
+            brightness: false,
+            rainbow: true,
+        }];
+        let lighting = Lighting {
+            effects: &EFFECTS,
+            ..s85().lighting
+        };
+        let config = Config::from_bytes(&block()).unwrap();
+        let read = CurrentLighting::from_config(&config, &lighting);
+        assert_eq!(read.mode, LightMode::Effect(5));
+        assert_eq!(read.brightness, None);
+    }
+
+    #[test]
     fn effect_byte_0_reads_as_off_with_no_settings() {
         let mut bytes = block();
         bytes[0x0A] = 0;
@@ -594,6 +622,23 @@ mod tests {
                 sleep: SleepSetting::Known(SleepTime::NoSleep),
             })
         );
+    }
+
+    #[test]
+    fn a_change_waits_30_ms_before_the_read_and_before_the_write() {
+        let change = LightingChange {
+            brightness: Some(16),
+            ..LightingChange::default()
+        };
+        let (fake, _) = apply_to(&block(), &change);
+        assert_eq!(
+            fake.sleeps(),
+            [30, 25, 25, 30, 25].map(Duration::from_millis)
+        );
+
+        // With nothing to write, only the first.
+        let (fake, _) = apply_to(&block(), &LightingChange::default());
+        assert_eq!(fake.sleeps(), [30, 25, 25].map(Duration::from_millis));
     }
 
     #[test]
@@ -699,7 +744,7 @@ mod tests {
         let (fake, _) = apply_to(&block(), &change);
         assert_eq!(
             fake.sleeps(),
-            [25, 25, 25, 100, 25].map(Duration::from_millis)
+            [30, 25, 25, 30, 25, 100, 25].map(Duration::from_millis)
         );
     }
 
@@ -719,7 +764,7 @@ mod tests {
 
     #[test]
     fn the_same_custom_colour_is_still_written() {
-        // The keyboard can't report palettes, so it may not hold what the caller's copy says.
+        // There's no way here to read palettes, so it may not hold what the caller's copy says.
         let mut bytes = block();
         bytes[0x39 + 10] = 0x20;
         let mut palettes = Palettes::default();

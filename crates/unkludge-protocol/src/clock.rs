@@ -90,7 +90,7 @@ mod tests {
     use crate::transport::fake::{FakeEvent, FakeTransport};
     use std::time::Duration;
 
-    /// 2026-10-29 01:24:04, a Thursday.
+    /// 2026-10-29 01:24:07, a Thursday. Every field has a value of its own.
     fn thursday() -> DateTime {
         DateTime {
             year: 2026,
@@ -98,7 +98,7 @@ mod tests {
             day: 29,
             hour: 1,
             minute: 24,
-            second: 4,
+            second: 7,
             weekday: 4,
         }
     }
@@ -119,7 +119,7 @@ mod tests {
     fn payload_has_the_time_and_zero_elsewhere() {
         assert_eq!(
             payload(&thursday()),
-            [0, 0, 0, 0xEA, 0x07, 10, 29, 1, 24, 4, 4, 0, 0, 0]
+            [0, 0, 0, 0xEA, 0x07, 10, 29, 1, 24, 7, 4, 0, 0, 0]
         );
     }
 

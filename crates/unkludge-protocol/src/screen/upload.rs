@@ -1,5 +1,5 @@
 //! Sending an animation to the keyboard: a start report, the chunks of each frame, then a finish
-//! report. All of them get an ack, and each waits for the one before, so the keyboard sets the pace.
+//! report. Each of them waits for an ack, so the keyboard sets the pace.
 //!
 //! On models with a second collection, chunks go only to that one, and the start and finish go to
 //! the main collection and then to the second.
@@ -19,7 +19,8 @@ const MAX_ON_THE_WIRE: usize = 256;
 /// Below this many frames, an animation is never thinned out.
 const DECIMATION_MIN_FRAMES: usize = 7;
 
-const START_TRIES: u32 = 3;
+/// One send and three retries.
+const START_TRIES: u32 = 4;
 const START_RETRY_GAP: Duration = Duration::from_millis(200);
 const BEFORE_START: Duration = Duration::from_millis(100);
 const AFTER_START: Duration = Duration::from_millis(120);
@@ -32,6 +33,14 @@ const AFTER_END: Duration = Duration::from_millis(500);
 pub struct Progress {
     pub done: usize,
     pub total: usize,
+}
+
+/// How a finished upload ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UploadOutcome {
+    /// Whether the keyboard acknowledged the finish report. Every frame has been acknowledged
+    /// either way, but without this the keyboard may not show the new animation.
+    pub finish_confirmed: bool,
 }
 
 /// What an upload of an animation to a given model would send.
@@ -112,12 +121,16 @@ impl Animation {
     /// Nothing is sent if [`Animation::plan`] refuses, or if `cancel` is already set. If the
     /// keyboard doesn't take the start report, no chunks are sent. Once it has, any failure or a
     /// cancel makes the keyboard abort, as far as it still answers, and the first error is returned.
+    ///
+    /// A cancel isn't noticed during an ack wait, which goes on until the ack or its timeout, and
+    /// then the abort has an ack wait of its own. On a stalled keyboard that's up to 16 s, so a UI
+    /// should show that it's cancelling.
     pub fn upload<T: Transport>(
         &self,
         device: &mut Device<T>,
         cancel: &AtomicBool,
         mut progress: impl FnMut(Progress),
-    ) -> Result<(), Error> {
+    ) -> Result<UploadOutcome, Error> {
         let plan = self.plan(device.model())?;
         check_cancel(cancel)?;
 
@@ -130,7 +143,10 @@ impl Animation {
         };
 
         device.sleep(BEFORE_START);
-        start(device, frames, plan.start_delay_ms, cancel)?;
+        if let Err(error) = start(device, frames, plan.start_delay_ms, cancel) {
+            device.sleep(AFTER_END);
+            return Err(error);
+        }
         step();
         device.sleep(AFTER_START);
 
@@ -146,13 +162,17 @@ impl Animation {
         }
 
         // The official app ignores how this ends, and every frame has been acknowledged by now, so
-        // neither a timeout nor a refusal fails the upload, though the keyboard may not show the
-        // new animation in that case. Not being able to send it at all is still an error.
+        // neither a timeout nor a refusal fails the upload: the outcome reports them. Not being able
+        // to send it at all is still an error.
         let finish = screen_control(ScreenState::Finish, frames, plan.finish_delay_ms);
-        device.send_screen_control(&finish)?;
-        step();
+        let finished = device.send_screen_control(&finish);
+        if finished.is_ok() {
+            step();
+        }
         device.sleep(AFTER_END);
-        Ok(())
+        Ok(UploadOutcome {
+            finish_confirmed: finished? == AckOutcome::Confirmed,
+        })
     }
 
     fn send_frames<T: Transport>(
@@ -185,7 +205,8 @@ fn check_cancel(cancel: &AtomicBool) -> Result<(), Error> {
 }
 
 /// Sends the start report. No ack in time tries again, and a refusal ends it there. No abort
-/// follows a failure here, as the keyboard hasn't confirmed anything to abort.
+/// follows a failure here, as in the official app, although with two collections the main one may
+/// have confirmed the start and so stays started.
 fn start<T: Transport>(
     device: &mut Device<T>,
     frames: u16,
@@ -216,9 +237,11 @@ fn start<T: Transport>(
     })
 }
 
-/// Which frames to send. The keyboard needs `draw_frame_time` per frame, so an animation faster
-/// than that loses frames: as many as fit in its running time, evenly spaced, keeping the first and
-/// last. Down to one frame, only the first stays. Short animations are left alone.
+/// Which frames to send, worked out as the official app does: an animation faster than
+/// `draw_frame_time` loses frames, keeping as many as that time fits into its running time, evenly
+/// spaced and rounded to the nearest, with the first and last among them. Down to one frame, only
+/// the first stays. Short animations are left alone. Why the firmware would want this is
+/// unconfirmed.
 fn decimate(frames: usize, delay_ms: u16, draw_frame_time: u16) -> Vec<usize> {
     let draw_time = usize::from(draw_frame_time);
     let running_time = usize::from(delay_ms) * frames;
@@ -233,7 +256,10 @@ fn decimate(frames: usize, delay_ms: u16, draw_frame_time: u16) -> Vec<usize> {
     match keep {
         1 => vec![0],
         _ if keep == frames => (0..frames).collect(),
-        _ => (0..keep).map(|i| i * (frames - 1) / (keep - 1)).collect(),
+        // `i * step + 0.5`, rounded down, with `step = (frames - 1) / (keep - 1)`.
+        _ => (0..keep)
+            .map(|i| (2 * i * (frames - 1) + keep - 1) / (2 * (keep - 1)))
+            .collect(),
     }
 }
 
@@ -300,7 +326,7 @@ mod tests {
         animation(s85(), &[RED, BLUE], 200)
     }
 
-    fn upload(fake: &FakeTransport, anim: &Animation) -> Result<(), Error> {
+    fn upload(fake: &FakeTransport, anim: &Animation) -> Result<UploadOutcome, Error> {
         anim.upload(&mut device(fake), &AtomicBool::new(false), |_| {})
     }
 
@@ -309,7 +335,7 @@ mod tests {
         fake: &FakeTransport,
         anim: &Animation,
         at: usize,
-    ) -> Result<(), Error> {
+    ) -> Result<UploadOutcome, Error> {
         let cancel = AtomicBool::new(false);
         anim.upload(&mut device(fake), &cancel, |progress| {
             if progress.done == at {
@@ -412,7 +438,7 @@ mod tests {
         upload(&fake, &red_blue()).unwrap();
         assert_eq!(
             fake.sleeps(),
-            [100, 120, 50, 500].map(Duration::from_millis)
+            [100, 25, 120, 50, 25, 500].map(Duration::from_millis)
         );
     }
 
@@ -470,7 +496,7 @@ mod tests {
         assert_eq!(&sent[6][..13], &fixture_abort());
         assert_eq!(
             fake.sleeps(),
-            [100, 120, 50, 500].map(Duration::from_millis)
+            [100, 25, 120, 50, 25, 500].map(Duration::from_millis)
         );
     }
 
@@ -479,6 +505,16 @@ mod tests {
         [
             0x09, 0x0D, 0x00, 0x00, 0x01, 0x00, 0x05, 0x00, 0x80, 2, 0, 200, 0,
         ]
+    }
+
+    #[test]
+    fn an_abort_carries_the_frame_count_after_decimation() {
+        let colors = vec![RED; 7];
+        // 7 frames at 60 ms leave 2.
+        let fake = FakeTransport::with_auto_ack();
+        let result = upload_cancelling_at(&fake, &animation(s85(), &colors, 60), 1);
+        assert_eq!(result, Err(Error::Cancelled));
+        assert_eq!(&fake.sent()[1][8..13], &[0x80, 2, 0, 60, 0]);
     }
 
     #[test]
@@ -533,7 +569,7 @@ mod tests {
         assert_eq!(&sent[11][..13], &fixture_abort());
         assert_eq!(
             fake.sleeps(),
-            [100, 120, 50, 500].map(Duration::from_millis)
+            [100, 25, 120, 50, 25, 500].map(Duration::from_millis)
         );
     }
 
@@ -578,6 +614,10 @@ mod tests {
         let result = red_blue().upload(&mut device, &cancel, |_| {});
         assert_eq!(result, Err(Error::Cancelled));
         assert_eq!(fake.sent().len(), 1);
+        assert_eq!(
+            fake.sleeps(),
+            [100, 25, 200, 500].map(Duration::from_millis)
+        );
     }
 
     #[test]
@@ -604,26 +644,30 @@ mod tests {
         let result = upload(&fake, &red_blue());
         assert_eq!(result, Err(Error::Rejected { cmd: 0x0D, idx: 0 }));
         assert_eq!(fake.sent().len(), 1);
+        assert_eq!(fake.sleeps(), [100, 25, 500].map(Duration::from_millis));
     }
 
     #[test]
-    fn a_start_with_no_ack_is_tried_3_times_200_ms_apart() {
+    fn a_start_with_no_ack_is_sent_4_times_200_ms_apart() {
         let fake = FakeTransport::with_auto_ack();
-        (0..3).for_each(|n| fake.ack_fault(n, AckFault::Drop));
+        (0..4).for_each(|n| fake.ack_fault(n, AckFault::Drop));
         let result = upload(&fake, &red_blue());
         assert_eq!(result, Err(Error::NoAck { cmd: 0x0D, idx: 0 }));
         let sent = fake.sent();
-        assert_eq!(sent.len(), 3);
+        assert_eq!(sent.len(), 4);
         assert!(sent.iter().all(|r| is_control(r, 0x40)));
-        assert_eq!(fake.sleeps(), [100, 200, 200].map(Duration::from_millis));
+        assert_eq!(
+            fake.sleeps(),
+            [100, 25, 200, 25, 200, 25, 200, 25, 500].map(Duration::from_millis)
+        );
     }
 
     #[test]
     fn a_start_confirmed_on_a_later_try_carries_on() {
         let fake = FakeTransport::with_auto_ack();
-        (0..2).for_each(|n| fake.ack_fault(n, AckFault::Drop));
+        (0..3).for_each(|n| fake.ack_fault(n, AckFault::Drop));
         upload(&fake, &red_blue()).unwrap();
-        assert_eq!(fake.sent().len(), 434);
+        assert_eq!(fake.sent().len(), 435);
     }
 
     #[test]
@@ -632,23 +676,33 @@ mod tests {
         fake.disconnect();
         let result = upload(&fake, &red_blue());
         assert!(matches!(result, Err(Error::Hid(_))));
+        assert_eq!(fake.sleeps(), [100, 25, 500].map(Duration::from_millis));
     }
 
     // Trouble with the finish.
 
     #[test]
-    fn a_finish_with_no_ack_still_counts_as_done() {
+    fn a_confirmed_finish_says_so() {
+        let fake = FakeTransport::with_auto_ack();
+        let outcome = upload(&fake, &red_blue()).unwrap();
+        assert!(outcome.finish_confirmed);
+    }
+
+    #[test]
+    fn a_finish_with_no_ack_still_counts_as_done_but_says_so() {
         let fake = FakeTransport::with_auto_ack();
         fake.ack_fault(431, AckFault::Drop);
-        upload(&fake, &red_blue()).unwrap();
+        let outcome = upload(&fake, &red_blue()).unwrap();
+        assert!(!outcome.finish_confirmed);
         assert_eq!(fake.sent().len(), 432);
     }
 
     #[test]
-    fn a_refused_finish_still_counts_as_done() {
+    fn a_refused_finish_still_counts_as_done_but_says_so() {
         let fake = FakeTransport::with_auto_ack();
         fake.ack_fault(431, AckFault::Reject);
-        upload(&fake, &red_blue()).unwrap();
+        let outcome = upload(&fake, &red_blue()).unwrap();
+        assert!(!outcome.finish_confirmed);
         assert_eq!(fake.sent().len(), 432);
     }
 
@@ -658,6 +712,10 @@ mod tests {
         (431..434).for_each(|n| fake.fail_send(n));
         let result = upload(&fake, &red_blue());
         assert!(matches!(result, Err(Error::Hid(_))));
+        assert_eq!(
+            fake.sleeps(),
+            [100, 25, 120, 50, 25, 50, 50, 500].map(Duration::from_millis)
+        );
     }
 
     // Frame decimation.
@@ -665,7 +723,8 @@ mod tests {
     #[test]
     fn frames_are_dropped_evenly_keeping_the_first_and_last() {
         // 60 frames at 20 ms is 1200 ms, which is time for 6 frames of 180 ms.
-        assert_eq!(decimate(60, 20, 180), [0, 11, 23, 35, 47, 59]);
+        // Rounded to the nearest index, as the official app does.
+        assert_eq!(decimate(60, 20, 180), [0, 12, 24, 35, 47, 59]);
         // 2 frames fit: only the ends.
         assert_eq!(decimate(7, 60, 180), [0, 6]);
     }
@@ -679,8 +738,9 @@ mod tests {
     #[test]
     fn frames_stay_when_decimation_doesnt_apply() {
         let all = |count: usize| (0..count).collect::<Vec<_>>();
-        // 6 frames or fewer.
+        // 6 frames or fewer, even with time for fewer than that.
         assert_eq!(decimate(6, 20, 180), all(6));
+        assert_eq!(decimate(6, 179, 180), all(6));
         // The delay is no shorter than the draw time.
         assert_eq!(decimate(60, 180, 180), all(60));
         assert_eq!(decimate(60, 500, 180), all(60));
@@ -897,6 +957,30 @@ mod tests {
         assert_eq!(screen.sent().len(), 2 + 450);
         assert_eq!(main.sent()[0], screen.sent()[0]);
         assert_eq!(main.sent()[1], screen.sent()[451]);
+    }
+
+    #[test]
+    fn a_finish_needs_both_collections_to_count_as_confirmed() {
+        let (_main, screen, mut device) = pair();
+        // The start's ack, one per chunk, and then the finish's.
+        screen.ack_fault(226, AckFault::Drop);
+        let outcome = animation(n99(), &[RED], 40)
+            .upload(&mut device, &AtomicBool::new(false), |_| {})
+            .unwrap();
+        assert!(!outcome.finish_confirmed);
+    }
+
+    #[test]
+    fn two_collections_pause_before_each_copy_of_a_control_report() {
+        let (main, screen, mut device) = pair();
+        animation(n99(), &[RED], 40)
+            .upload(&mut device, &AtomicBool::new(false), |_| {})
+            .unwrap();
+        assert_eq!(
+            main.sleeps(),
+            [100, 25, 120, 50, 25, 500].map(Duration::from_millis)
+        );
+        assert_eq!(screen.sleeps(), [25, 25].map(Duration::from_millis));
     }
 
     #[test]

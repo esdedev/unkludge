@@ -31,7 +31,8 @@ pub struct ScreenSpec {
     pub kind: u8,
     /// Chunks carry a checksum, which the keyboard's ack repeats.
     pub crc: bool,
-    /// Milliseconds the keyboard needs per frame. Changes the frame count and start delay sent.
+    /// A time per frame in milliseconds, from the model data. Changes the frame count and start
+    /// delay sent. What it means to the firmware is unconfirmed.
     pub draw_frame_time: u16,
 }
 

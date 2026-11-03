@@ -1,8 +1,9 @@
 //! A connected keyboard: how reports get sent, paced, retried and acknowledged.
 //!
-//! There are two send paths. Generic commands (config, palettes, clock) get no ack: each chunk
-//! waits 25 ms first, and only the send itself is retried. Screen reports get an ack each, with
-//! no pause between them, so the keyboard's answer sets the pace.
+//! There are three send paths. Generic commands (config, palettes, clock) get no ack: each chunk
+//! waits 25 ms first, and only the send itself is retried. Screen control reports are paced the
+//! same way and then wait for an ack. Screen data chunks wait for an ack with no pause between
+//! them, so the keyboard's answer sets the pace.
 
 use std::time::Duration;
 
@@ -15,13 +16,13 @@ use crate::transport::{HidTransport, Transport};
 mod descriptor;
 mod open;
 
-/// Wait before each generic chunk and each read request.
+/// Wait before each generic chunk, each read request and each screen control report.
 const CHUNK_DELAY: Duration = Duration::from_millis(25);
 /// How many times one report is handed to the transport before giving up on it.
 const SEND_TRIES: u32 = 3;
-/// Gap between those tries on the generic path.
+/// Gap between those tries, except for screen data.
 const SEND_RETRY_GAP: Duration = Duration::from_millis(50);
-/// Gap between those tries on the acked path.
+/// Gap between those tries for screen data.
 const ACKED_SEND_RETRY_GAP: Duration = Duration::from_millis(100);
 /// Wait between a read request and fetching the reply.
 const READ_WAIT: Duration = Duration::from_millis(25);
@@ -180,7 +181,7 @@ impl<T: Transport> Device<T> {
         let expect = AckExpect::chunk(report, crc);
         let (cmd, idx) = (report[1], report[4]);
         for _ in 0..=self.retries {
-            match self.send_and_wait(to, report, expect)? {
+            match self.send_and_wait(to, report, expect, ACKED_SEND_RETRY_GAP)? {
                 AckOutcome::Confirmed => return Ok(()),
                 AckOutcome::Rejected => {}
                 AckOutcome::TimedOut => return Err(Error::NoAck { cmd, idx }),
@@ -193,12 +194,18 @@ impl<T: Transport> Device<T> {
     /// second one if the model has it. Stops at the first collection that doesn't confirm, and
     /// leaves what to do about that to the caller.
     pub(crate) fn send_screen_control(&mut self, report: &Report) -> Result<AckOutcome, Error> {
-        let expect = AckExpect::control();
-        let outcome = self.send_and_wait(Collection::Main, report, expect)?;
+        let outcome = self.send_control_to(Collection::Main, report)?;
         if outcome != AckOutcome::Confirmed || self.screen.is_none() {
             return Ok(outcome);
         }
-        self.send_and_wait(Collection::Screen, report, expect)
+        self.send_control_to(Collection::Screen, report)
+    }
+
+    /// Paced like a generic chunk. Input is only discarded after the pause, so that nothing that
+    /// arrives during it can pass for the ack, as any ack confirms a control report.
+    fn send_control_to(&mut self, to: Collection, report: &Report) -> Result<AckOutcome, Error> {
+        self.transport(to).sleep(CHUNK_DELAY);
+        self.send_and_wait(to, report, AckExpect::control(), SEND_RETRY_GAP)
     }
 
     fn screen_collection(&self) -> Collection {
@@ -225,9 +232,10 @@ impl<T: Transport> Device<T> {
         to: Collection,
         report: &Report,
         expect: AckExpect,
+        retry_gap: Duration,
     ) -> Result<AckOutcome, Error> {
         self.drain()?;
-        let sent = try_send(self.transport(to), report, ACKED_SEND_RETRY_GAP);
+        let sent = try_send(self.transport(to), report, retry_gap);
         if sent.is_ok() {
             self.notify_sent(to, report);
         }
@@ -784,7 +792,36 @@ mod tests {
         assert_eq!(fake.sent().len(), 1);
     }
 
+    #[test]
+    fn a_control_report_waits_25_ms_then_drains_and_sends() {
+        let fake = FakeTransport::with_auto_ack();
+        device(&fake).send_screen_control(&control()).unwrap();
+        let events = fake.events();
+        assert_eq!(events[0], FakeEvent::Sleep(MS(25)));
+        assert_eq!(events[1], FakeEvent::Read { ms: 0 });
+        assert!(matches!(events[2], FakeEvent::Sent(_)));
+        assert_eq!(fake.sleeps(), [MS(25)]);
+    }
+
+    #[test]
+    fn a_failed_control_send_retries_50_ms_later() {
+        let fake = FakeTransport::with_auto_ack();
+        fake.fail_send(0);
+        let outcome = device(&fake).send_screen_control(&control()).unwrap();
+        assert_eq!(outcome, AckOutcome::Confirmed);
+        assert_eq!(fake.sent().len(), 1);
+        assert_eq!(fake.sleeps(), [MS(25), MS(50)]);
+    }
+
     // Models with a second collection.
+
+    #[test]
+    fn each_collection_gets_its_own_wait_for_a_control_report() {
+        let (main, screen, mut device) = pair();
+        device.send_screen_control(&control()).unwrap();
+        assert_eq!(main.sleeps(), [MS(25)]);
+        assert_eq!(screen.sleeps(), [MS(25)]);
+    }
 
     #[test]
     fn control_goes_to_main_then_to_the_screen_collection() {

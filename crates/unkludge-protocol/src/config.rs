@@ -32,7 +32,7 @@ const END_MARKER_BYTES: [u8; 2] = [0x5A, 0xA5];
 /// The effect number of the custom mode, which this version doesn't offer but must recognize.
 const CUSTOM_EFFECT: u8 = 18;
 /// The colour value that means rainbow. Smaller values are palette slots.
-const RAINBOW: u8 = 7;
+pub(crate) const RAINBOW: u8 = 7;
 
 /// How many times a read is tried before giving up on it.
 const READ_TRIES: u32 = 5;
@@ -480,6 +480,16 @@ mod tests {
     }
 
     #[test]
+    fn only_the_value_1_in_the_flag_byte_means_custom() {
+        let mut bytes = block();
+        bytes[0x0A] = 5;
+        for flag in [2, 0x80, 0xFF] {
+            bytes[0x09] = flag;
+            assert!(!Config::from_bytes(&bytes).unwrap().is_custom(), "{flag}");
+        }
+    }
+
+    #[test]
     fn set_effect_changes_the_effect_and_clears_custom_only() {
         let before = config();
         let mut after = before.clone();
@@ -528,6 +538,34 @@ mod tests {
                 Err(Error::Invalid(_))
             ));
         }
+        assert_eq!(after, before);
+    }
+
+    #[test]
+    fn set_brightness_refuses_an_effect_without_that_control() {
+        // No real model has one of these today.
+        static EFFECTS: [Effect; 1] = [Effect {
+            id: 2,
+            name: "Test",
+            color: true,
+            speed: true,
+            brightness: false,
+            rainbow: true,
+        }];
+        let lighting = Lighting {
+            brightness: &[0, 4],
+            speed_min: 0,
+            speed_max: 5,
+            speed_default: 1,
+            effects: &EFFECTS,
+            sleep: true,
+        };
+        let before = config();
+        let mut after = before.clone();
+        assert!(matches!(
+            after.set_brightness(&lighting, 2, 4),
+            Err(Error::Invalid(_))
+        ));
         assert_eq!(after, before);
     }
 

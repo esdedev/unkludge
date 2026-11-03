@@ -4,8 +4,8 @@
 //! from the top left, with no header or padding. Every screen size works the same way.
 //!
 //! The files may come from anywhere, so decoding is limited: image size, memory, file size and, for
-//! GIFs, the frame count and the total number of pixels. Past a limit it stops with an error rather
-//! than carrying on.
+//! GIFs, the frame count and the total number of canvas pixels. Past a limit it stops with an error
+//! rather than carrying on.
 
 use std::fs::File;
 use std::io::{Cursor, Read};
@@ -14,7 +14,8 @@ use std::path::Path;
 use image::codecs::gif::GifDecoder;
 use image::imageops::{self, FilterType};
 use image::{
-    AnimationDecoder, ImageDecoder, ImageError, ImageFormat, ImageReader, Limits, Rgba, RgbaImage,
+    AnimationDecoder, DynamicImage, ImageDecoder, ImageError, ImageFormat, ImageReader, Limits,
+    Rgba, RgbaImage,
 };
 
 use crate::Error;
@@ -23,7 +24,7 @@ use crate::packet::MAX_DATA;
 
 mod upload;
 
-pub use upload::{Progress, UploadPlan};
+pub use upload::{Progress, UploadOutcome, UploadPlan};
 
 /// The delay of animations whose file says 0, and of still images, in milliseconds. Browsers also
 /// show GIFs with no delay at this speed.
@@ -33,26 +34,30 @@ pub const DEFAULT_DELAY_MS: u16 = 100;
 const MAX_FILE_BYTES: u64 = 256 << 20;
 /// The largest still image: enough for a 100-megapixel photo, but not to fill memory.
 const MAX_IMAGE_SIDE: u32 = 16384;
+/// The most memory a still image's decoded buffer may take, and also its RGBA copy. Both exist for
+/// a moment, so the peak stays below twice this.
 const MAX_IMAGE_ALLOC: u64 = 512 << 20;
 
 const GIF_LIMITS: GifLimits = GifLimits {
     max_side: 4096,
     // The decoder holds up to three images of the canvas size at once.
     max_alloc: 192 << 20,
-    // Measured at about 4 s per 256 megapixels of noise. A long GIF of 800x800 needs 128.
+    // Measured at about 4 s per 256 megapixels of hard-to-compress frames. A long GIF of 800x800
+    // needs 128.
     max_pixels: 1 << 29,
 };
 
 const RESIZE_FILTER: FilterType = FilterType::Triangle;
 
-/// What a GIF is allowed to cost to decode. Frame count times canvas size is the work done, and a
-/// tiny file can ask for a lot of it.
+/// What a GIF is allowed to cost to decode. A tiny file can ask for a lot of work.
 struct GifLimits {
     /// Largest width and height of the canvas.
     max_side: u32,
     /// Most memory the decoder may use for a frame, which may be larger than the canvas.
     max_alloc: u64,
-    /// Most canvas pixels decoded over all frames.
+    /// Most canvas pixels over all frames. A frame larger than the canvas still counts as one
+    /// canvas, so this isn't all the work done. Those frames are bounded by `max_side`, `max_alloc`,
+    /// the frame limit and the file size.
     max_pixels: u64,
 }
 
@@ -145,13 +150,6 @@ impl Animation {
     pub fn truncated(&self) -> bool {
         self.truncated
     }
-
-    /// Keeps the first `max` frames, and always at least one.
-    pub fn truncate_to(&mut self, max: usize) {
-        let max = max.max(1);
-        self.truncated |= self.frames.len() > max;
-        self.frames.truncate(max);
-    }
 }
 
 /// How many reports one frame takes on a screen of this size. The last may be partly filled.
@@ -188,7 +186,17 @@ fn decode_still(
     limits.max_image_height = Some(MAX_IMAGE_SIDE);
     limits.max_alloc = Some(MAX_IMAGE_ALLOC);
     reader.limits(limits);
-    let image = reader.decode().map_err(image_error)?.into_rgba8();
+    let decoder = reader.into_decoder().map_err(image_error)?;
+    let (width, height) = decoder.dimensions();
+    if !fits_memory(width, height, decoder.total_bytes()) {
+        return Err(Error::Image(format!(
+            "the image would take more than {} MiB of memory",
+            MAX_IMAGE_ALLOC >> 20
+        )));
+    }
+    let image = DynamicImage::from_decoder(decoder)
+        .map_err(image_error)?
+        .into_rgba8();
 
     Ok(Animation {
         frames: vec![prepare_frame(&image, screen, options.fit)?],
@@ -197,6 +205,15 @@ fn decode_still(
         height: screen.height,
         truncated: false,
     })
+}
+
+/// Whether a still image's buffers stay within the limit: the decoder's own, whatever its format,
+/// and the RGBA copy. A small grey file can need far more for the second than for the first.
+fn fits_memory(width: u32, height: u32, decoded_bytes: u64) -> bool {
+    let rgba_bytes = u64::from(width)
+        .saturating_mul(u64::from(height))
+        .saturating_mul(4);
+    rgba_bytes.max(decoded_bytes) <= MAX_IMAGE_ALLOC
 }
 
 fn decode_gif(
@@ -254,7 +271,8 @@ fn decode_gif(
     })
 }
 
-/// A GIF's delay in the 16 bits of milliseconds there are for it.
+/// A GIF's delay in the 16 bits of milliseconds there are for it. The official app would send a 0
+/// as it is, so the default here is our own choice.
 fn gif_delay(milliseconds: u32) -> u16 {
     match milliseconds {
         0 => DEFAULT_DELAY_MS,
@@ -527,6 +545,24 @@ mod tests {
     }
 
     #[test]
+    fn cover_crops_equally_on_both_sides_in_both_directions() {
+        // Red strips at both ends of the long side, both of which fall outside the crop.
+        let wide = RgbaImage::from_fn(400, 300, |x, _| {
+            Rgba(if !(40..360).contains(&x) { RED } else { GREEN })
+        });
+        let out = fit(&wide, 240, 240, Fit::Cover);
+        assert_eq!(out.get_pixel(0, 120).0, GREEN);
+        assert_eq!(out.get_pixel(239, 120).0, GREEN);
+
+        let tall = RgbaImage::from_fn(300, 400, |_, y| {
+            Rgba(if !(40..360).contains(&y) { RED } else { GREEN })
+        });
+        let out = fit(&tall, 240, 240, Fit::Cover);
+        assert_eq!(out.get_pixel(120, 0).0, GREEN);
+        assert_eq!(out.get_pixel(120, 239).0, GREEN);
+    }
+
+    #[test]
     fn cover_of_an_extreme_shape_uses_no_big_intermediate_image() {
         // Scaling this up to cover the screen first would need gigabytes.
         let out = fit(&solid(16000, 1, RED), 320, 172, Fit::Cover);
@@ -556,6 +592,21 @@ mod tests {
         assert!(!anim.truncated());
         assert_eq!(anim.frames()[0], [0xF8, 0x00].repeat(8));
         assert_eq!(anim.frames()[1], [0x00, 0x1F].repeat(8));
+    }
+
+    #[test]
+    fn a_gif_uses_the_delay_of_its_first_frame() {
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = GifEncoder::new(&mut bytes);
+            for delay_ms in [200, 500] {
+                let delay = Delay::from_numer_denom_ms(delay_ms, 1);
+                let frame = Frame::from_parts(solid(2, 2, RED), 0, 0, delay);
+                encoder.encode_frame(frame).unwrap();
+            }
+        }
+        let anim = Animation::from_bytes(&bytes, &spec(2, 2, 60), LoadOptions::default()).unwrap();
+        assert_eq!(anim.delay_ms(), 200);
     }
 
     #[test]
@@ -650,22 +701,6 @@ mod tests {
         assert!(!anim.truncated());
     }
 
-    #[test]
-    fn truncate_to_keeps_the_first_frames_and_at_least_one() {
-        let bytes = gif(2, 2, &[RED, GREEN, BLUE], 100);
-        let load = LoadOptions::default();
-        let mut anim = Animation::from_bytes(&bytes, &spec(2, 2, 60), load).unwrap();
-        anim.truncate_to(5);
-        assert_eq!(anim.frames().len(), 3);
-        assert!(!anim.truncated());
-        anim.truncate_to(2);
-        assert_eq!(anim.frames().len(), 2);
-        assert_eq!(anim.frames()[1], [0x07, 0xE0].repeat(4));
-        assert!(anim.truncated());
-        anim.truncate_to(0);
-        assert_eq!(anim.frames().len(), 1);
-    }
-
     // Hostile files.
 
     /// Cuts the last frame of a GIF in half, so that decoding it fails.
@@ -744,6 +779,25 @@ mod tests {
     }
 
     #[test]
+    fn the_gif_size_limit_is_applied() {
+        let bytes = gif(8, 8, &[RED], 100);
+        let screen = spec(2, 2, 60);
+        let load = LoadOptions::default();
+        let limits = GifLimits {
+            max_side: 7,
+            ..GIF_LIMITS
+        };
+        let result = decode_gif(&bytes, &screen, load, &limits);
+        assert!(matches!(result, Err(Error::Image(_))), "{result:?}");
+
+        let limits = GifLimits {
+            max_side: 8,
+            ..GIF_LIMITS
+        };
+        assert!(decode_gif(&bytes, &screen, load, &limits).is_ok());
+    }
+
+    #[test]
     fn the_total_decoding_work_is_limited() {
         let bytes = gif(2, 2, &colors_of(3), 100);
         let limits = GifLimits {
@@ -776,6 +830,88 @@ mod tests {
         bytes.extend([0; 24]);
         let result = Animation::from_bytes(&bytes, &spec(2, 2, 60), LoadOptions::default());
         assert!(matches!(result, Err(Error::Image(_))), "{result:?}");
+    }
+
+    /// A real grey PNG with a larger size written in its header. Nothing more is needed to find
+    /// out what decoding it would take.
+    fn png_claiming(width: u32, height: u32) -> Vec<u8> {
+        fn crc32(bytes: &[u8]) -> u32 {
+            let mut crc = !0u32;
+            for &byte in bytes {
+                crc ^= u32::from(byte);
+                for _ in 0..8 {
+                    crc = (crc >> 1) ^ (0xEDB8_8320 & (crc & 1).wrapping_neg());
+                }
+            }
+            !crc
+        }
+        let mut bytes = Vec::new();
+        image::GrayImage::new(4, 4)
+            .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
+            .unwrap();
+        bytes[16..20].copy_from_slice(&width.to_be_bytes());
+        bytes[20..24].copy_from_slice(&height.to_be_bytes());
+        let crc = crc32(&bytes[12..29]);
+        bytes[29..33].copy_from_slice(&crc.to_be_bytes());
+        bytes
+    }
+
+    /// The same for a grey JPEG.
+    fn jpeg_claiming(width: u16, height: u16) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        image::GrayImage::new(8, 8)
+            .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Jpeg)
+            .unwrap();
+        let frame = bytes
+            .windows(2)
+            .position(|pair| pair == [0xFF, 0xC0])
+            .unwrap();
+        bytes[frame + 5..frame + 7].copy_from_slice(&height.to_be_bytes());
+        bytes[frame + 7..frame + 9].copy_from_slice(&width.to_be_bytes());
+        bytes
+    }
+
+    #[track_caller]
+    fn assert_refused_for_memory(bytes: &[u8]) {
+        let result = Animation::from_bytes(bytes, &spec(2, 2, 60), LoadOptions::default());
+        assert!(
+            matches!(&result, Err(Error::Image(message)) if message.contains("memory")),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn a_small_grey_file_that_would_take_too_much_memory_as_rgba_is_refused() {
+        // The grey buffer is 256 MiB and within the limit. The RGBA one would be 1 GiB.
+        assert_refused_for_memory(&png_claiming(16384, 16384));
+        assert_refused_for_memory(&jpeg_claiming(16384, 16384));
+    }
+
+    #[test]
+    fn the_memory_limit_counts_whichever_buffer_is_larger() {
+        let limit = MAX_IMAGE_ALLOC;
+        let side = 11585; // The largest square whose RGBA buffer fits in 512 MiB.
+        assert!(fits_memory(
+            side,
+            side,
+            3 * u64::from(side) * u64::from(side)
+        ));
+        assert!(!fits_memory(side + 1, side + 1, 0));
+        // A format with more bytes per pixel than the RGBA result.
+        assert!(fits_memory(10, 10, limit));
+        assert!(!fits_memory(10, 10, limit + 1));
+    }
+
+    #[test]
+    fn the_size_limit_of_still_images_is_applied() {
+        // Long and thin takes little memory, so only the limit on each side refuses these.
+        for (width, height) in [(16385, 1), (1, 16385)] {
+            let bytes = encode(&solid(width, height, RED), ImageFormat::Png);
+            let result = Animation::from_bytes(&bytes, &spec(2, 2, 60), LoadOptions::default());
+            assert!(matches!(result, Err(Error::Image(_))), "{result:?}");
+        }
+        let bytes = encode(&solid(16384, 1, RED), ImageFormat::Png);
+        assert!(Animation::from_bytes(&bytes, &spec(2, 2, 60), LoadOptions::default()).is_ok());
     }
 
     #[test]
