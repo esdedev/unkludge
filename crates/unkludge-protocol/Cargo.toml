@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[dependencies]
+thiserror.workspace = true
+
 [dev-dependencies]
 # The build-script logic in build/models.rs is also compiled into a test.
 serde.workspace = true
