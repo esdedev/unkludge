@@ -2,6 +2,7 @@
 //! missing from one of them. The protocol crate's own messages are in English: the common ones get
 //! translated in [`Tr::error`], and those that come with details of their own go through as they are.
 
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use unkludge_protocol::Error;
@@ -124,8 +125,14 @@ const ES: Tr = Tr {
     err_too_many_frames: "Demasiados fotogramas: al menos {got}, y el límite de este teclado es {max}",
 };
 
-/// The table for the system's language: Spanish if that's Spanish, English otherwise.
-pub fn for_language(spanish: bool) -> &'static Tr {
+/// The table for the system's language.
+pub fn t() -> &'static Tr {
+    static TABLE: OnceLock<&'static Tr> = OnceLock::new();
+    TABLE.get_or_init(|| for_language(crate::sys::is_spanish()))
+}
+
+/// Spanish if the language is Spanish, and English otherwise.
+fn for_language(spanish: bool) -> &'static Tr {
     if spanish { &ES } else { &EN }
 }
 
@@ -201,6 +208,12 @@ mod tests {
         assert_eq!(for_language(true).no_keyboard, ES.no_keyboard);
         assert_eq!(for_language(false).no_keyboard, EN.no_keyboard);
         assert_ne!(ES.no_keyboard, EN.no_keyboard);
+    }
+
+    #[test]
+    fn the_system_language_gives_one_of_the_tables() {
+        let table = t().no_keyboard;
+        assert!(table == EN.no_keyboard || table == ES.no_keyboard);
     }
 
     #[test]

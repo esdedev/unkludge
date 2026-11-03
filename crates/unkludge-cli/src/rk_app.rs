@@ -1,4 +1,5 @@
-//! Noticing the official app, which polls the keyboard and sends its own settings back to it.
+//! Noticing the official app, which polls the keyboard and sends its own settings back to it. The
+//! app compiles this same file, so both mean the same by it.
 
 /// Whether the official app seems to be running. It goes by the program's name, which could in
 /// principle belong to something else, so it's only good for a warning.

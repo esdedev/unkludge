@@ -1,0 +1,2 @@
+# Lets whoever is at the computer use Royal Kludge keyboards (USB vendor 258A) with Unkludge.
+KERNEL=="hidraw*", ATTRS{idVendor}=="258a", TAG+="uaccess"

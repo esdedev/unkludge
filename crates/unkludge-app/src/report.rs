@@ -5,7 +5,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use unkludge_protocol::Error;
-use unkludge_protocol::device::HidCollection;
+use unkludge_protocol::device::{HidCollection, list_collections};
 
 use crate::report_lines::{host_lines, keyboard_lines, report_header};
 use crate::worker::ReportData;
@@ -36,6 +36,17 @@ pub fn text(
         lines.extend(data.errors.iter().map(|error| format!("  {error}")));
     }
     lines.join("\n") + "\n"
+}
+
+/// Saves the report in the data folder and returns the file's path. This asks the system what's
+/// running and what it lists, but opens no device.
+pub fn save(data: &ReportData) -> io::Result<PathBuf> {
+    let dir = crate::sys::data_dir().ok_or(io::ErrorKind::NotFound)?;
+    let collections = list_collections();
+    save_in(
+        &dir,
+        &text(data, crate::sys::rk_app_running(), &collections),
+    )
 }
 
 /// Writes the report into `dir`, making it if needed, and returns the file's path.

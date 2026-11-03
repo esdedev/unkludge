@@ -33,7 +33,32 @@ impl Default for Settings {
     }
 }
 
+/// The settings file's name in the data folder.
+const FILE_NAME: &str = "settings.txt";
+
+/// A file in the data folder. A demo should keep its settings in a file of its own, using this with
+/// [`Settings::load_from`] and [`Settings::save_to`].
+pub fn path(file_name: &str) -> Option<PathBuf> {
+    Some(crate::sys::data_dir()?.join(file_name))
+}
+
 impl Settings {
+    /// The real settings. With no data folder there's nowhere to remember a first launch, so this
+    /// doesn't count as one.
+    pub fn load() -> Settings {
+        match path(FILE_NAME) {
+            Some(file) => Settings::load_from(&file),
+            None => Settings {
+                existed: true,
+                ..Settings::default()
+            },
+        }
+    }
+
+    pub fn save(&self) -> io::Result<()> {
+        self.save_to(&path(FILE_NAME).ok_or(io::ErrorKind::NotFound)?)
+    }
+
     /// Never fails. A file that's there but can't be read still counts as having existed, so that
     /// a damaged file doesn't look like a first launch and turn autostart on again.
     pub fn load_from(path: &Path) -> Settings {
