@@ -45,23 +45,12 @@ impl Default for Settings {
     }
 }
 
-/// The settings file's name in the data folder.
-const FILE_NAME: &str = "settings.txt";
-
-/// A file in the data folder. A demo should keep its settings in a file of its own, using this with
-/// [`Settings::load_from`] and [`Settings::save_to`].
-pub fn path(file_name: &str) -> Option<PathBuf> {
-    Some(crate::sys::data_dir()?.join(file_name))
-}
+/// The real settings file's name in the data folder.
+pub const FILE_NAME: &str = "settings.txt";
 
 impl Settings {
-    /// The real settings.
-    pub fn load() -> Settings {
-        Settings::load_at(path(FILE_NAME).as_deref())
-    }
-
     /// With no data folder there's nowhere to remember a first launch, so this doesn't count as one.
-    fn load_at(file: Option<&Path>) -> Settings {
+    pub fn load_at(file: Option<&Path>) -> Settings {
         match file {
             Some(file) => Settings::load_from(file),
             None => Settings {
@@ -69,10 +58,6 @@ impl Settings {
                 ..Settings::default()
             },
         }
-    }
-
-    pub fn save(&self) -> io::Result<()> {
-        self.save_to(&path(FILE_NAME).ok_or(io::ErrorKind::NotFound)?)
     }
 
     /// Never fails. A damaged file gives the defaults and gets replaced at the next save. One that
@@ -213,8 +198,12 @@ fn decode_hex(text: &str) -> Option<Vec<u8>> {
 }
 
 /// Whether the first launch of this program should make it start with the system. A copy run from
-/// a build folder isn't installed, so it shouldn't.
+/// a build folder isn't installed, and neither is a debug build wherever it's been put.
 pub fn starts_with_system_on_first_launch(exe: &Path) -> bool {
+    !cfg!(debug_assertions) && looks_installed(exe)
+}
+
+fn looks_installed(exe: &Path) -> bool {
     !exe.components().any(|part| part.as_os_str() == "target")
 }
 
@@ -520,26 +509,33 @@ mod tests {
     }
 
     #[test]
-    fn a_first_launch_starts_with_the_system_unless_from_a_build_folder() {
+    fn a_debug_build_doesnt_start_with_the_system_from_anywhere() {
+        // The tests run as a debug build or a release one, and the answer must follow.
+        let installed = Path::new("C:/Program Files/Unkludge/unkludge-app.exe");
+        assert_eq!(
+            starts_with_system_on_first_launch(installed),
+            !cfg!(debug_assertions)
+        );
+        assert!(!starts_with_system_on_first_launch(Path::new(
+            "C:/unkludge/target/release/unkludge-app.exe"
+        )));
+    }
+
+    #[test]
+    fn a_program_in_a_build_folder_doesnt_look_installed() {
         for path in [
             "/opt/unkludge/unkludge-app",
             "C:/Program Files/Unkludge/unkludge-app.exe",
             "/home/a/kl-target/debug/unkludge-app",
             "/home/a/my-target-practice/unkludge-app",
         ] {
-            assert!(
-                starts_with_system_on_first_launch(Path::new(path)),
-                "{path}"
-            );
+            assert!(looks_installed(Path::new(path)), "{path}");
         }
         for path in [
             "/home/a/unkludge/target/release/unkludge-app",
             "C:/unkludge/target/debug/unkludge-app.exe",
         ] {
-            assert!(
-                !starts_with_system_on_first_launch(Path::new(path)),
-                "{path}"
-            );
+            assert!(!looks_installed(Path::new(path)), "{path}");
         }
     }
 }

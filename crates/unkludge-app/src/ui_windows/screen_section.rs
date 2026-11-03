@@ -1,5 +1,7 @@
 //! The screen section: the preview, the file, how it fits, and the upload.
 
+use std::sync::Arc;
+
 use unkludge_protocol::model::ScreenSpec;
 use unkludge_protocol::screen::Fit;
 use windows::Win32::Graphics::Direct2D::ID2D1Bitmap;
@@ -35,27 +37,31 @@ fn bgra_from_rgb(rgb: &[u8]) -> Vec<u8> {
 }
 
 impl App {
-    /// Puts the frame that's due into the preview's bitmap, unless it's there already.
-    pub fn update_preview(&mut self) {
+    /// Puts the frame that's due into the preview's bitmap, unless it's there already. Says whether
+    /// it changed.
+    pub fn update_preview(&mut self) -> bool {
         let Some(animation) = self.state.animation().cloned() else {
-            return;
+            return false;
         };
         let frames = animation.frames();
         let elapsed = self.preview_since.elapsed().as_millis();
         let at = preview_frame(elapsed, frames.len(), animation.delay_ms());
         let Some(frame) = frames.get(at) else {
-            return;
+            return false;
         };
         let size = (u32::from(animation.width()), u32::from(animation.height()));
         let Some(gfx) = self.gfx.as_mut() else {
-            return;
+            return false;
         };
         let Ok(preview) = gfx.preview_bitmap(size) else {
-            return;
+            return false;
         };
-        let wanted = (std::sync::Arc::as_ptr(&animation) as usize, at);
-        if preview.holds == Some(wanted) {
-            return;
+        let already = preview
+            .holds
+            .as_ref()
+            .is_some_and(|(held, shown)| Arc::ptr_eq(held, &animation) && *shown == at);
+        if already {
+            return false;
         }
         let pixels = bgra_from_rgb(&rgb_from_565(frame));
         // SAFETY: `pixels` has a full frame at this pitch, and is read only during the call.
@@ -64,9 +70,11 @@ impl App {
                 .bitmap
                 .CopyFromMemory(None, pixels.as_ptr().cast(), size.0 * 4)
         };
-        if copied.is_ok() {
-            preview.holds = Some(wanted);
+        if copied.is_err() {
+            return false;
         }
+        preview.holds = Some((animation, at));
+        true
     }
 
     /// Where the picture goes, for this model's screen.
@@ -80,20 +88,15 @@ impl App {
         let Some(animation) = self.state.animation().cloned() else {
             return;
         };
-        let before = self
-            .gfx
-            .as_ref()
-            .and_then(|gfx| gfx.preview.as_ref()?.holds);
-        self.update_preview();
+        if !self.update_preview() {
+            return;
+        }
         let Some(gfx) = self.gfx.as_ref() else {
             return;
         };
         let Some(preview) = gfx.preview.as_ref() else {
             return;
         };
-        if preview.holds == before {
-            return;
-        }
         let d = Draw {
             rt: &gfx.rt,
             brush: &gfx.brush,

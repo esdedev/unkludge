@@ -1,5 +1,7 @@
 //! Colours, rectangles, fonts and the drawing shortcuts everything else paints with.
 
+use std::sync::Arc;
+
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_GRADIENT_STOP,
@@ -27,6 +29,8 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::HDC;
 use windows::core::{Interface, PCWSTR, Result, w};
 use windows_numerics::Vector2;
+
+use unkludge_protocol::screen::Animation;
 
 use crate::layout::Rect;
 
@@ -266,7 +270,7 @@ pub struct PreviewBitmap {
     pub bitmap: ID2D1Bitmap,
     pub size: (u32, u32),
     /// Which frame of which animation it holds now.
-    pub holds: Option<(usize, usize)>,
+    pub holds: Option<(Arc<Animation>, usize)>,
 }
 
 impl Gfx {

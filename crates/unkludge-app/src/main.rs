@@ -15,6 +15,7 @@ mod icon;
 mod layout;
 mod log;
 mod report;
+mod session;
 mod settings;
 mod state;
 mod worker;

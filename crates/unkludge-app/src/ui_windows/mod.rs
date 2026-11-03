@@ -20,6 +20,7 @@ mod tray;
 mod window;
 
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -38,9 +39,9 @@ use windows::Win32::UI::WindowsAndMessaging::HICON;
 pub use dialogs::refuse_start;
 pub use startup::run;
 
-use crate::args::DemoArgs;
 use crate::demo::Script;
 use crate::layout::Frame;
+use crate::session::Session;
 use crate::settings::Settings;
 use crate::state::{Slider, State};
 use crate::worker::{Event, WorkerHandle};
@@ -144,30 +145,31 @@ impl Anim {
     }
 }
 
-/// A demo's parts. See `crate::demo`.
-struct DemoSession {
-    args: DemoArgs,
-    script: Script,
-    shot_timer_set: bool,
-}
-
 pub struct App {
     hwnd: HWND,
     d2d: ID2D1Factory,
     dw: IDWriteFactory,
     fonts: Fonts,
     gfx: Option<Gfx>,
-    /// Pixels per inch: the monitor's, or what a demo asked for.
+    /// Pixels per inch to draw at: less than the monitor's if the window doesn't fit otherwise.
     dpi: f32,
+    /// The monitor's, or what a demo asked for.
+    monitor_dpi: f32,
     settings: Settings,
     state: State,
     frame: Frame,
-    /// `None` once it's been told to stop.
+    /// Not yet running, or told to stop.
     worker: Option<WorkerHandle>,
-    events: Receiver<Event>,
+    events: Option<Receiver<Event>>,
     /// A wake-up message is on its way, so the worker needn't post another.
     woken: Arc<AtomicBool>,
-    demo: Option<DemoSession>,
+    /// The real app or a demo, and all that differs between them.
+    session: Session,
+    /// What takes a demo to the state asked for.
+    script: Option<Script>,
+    shot_timer_set: bool,
+    /// What's waiting to be opened, which can take a while, so not while handling a message.
+    to_open: Vec<PathBuf>,
     shared: Rc<RefCell<Shared>>,
     accessible: Option<IAccessible>,
     /// The ring around what has the focus shows after using the keyboard, not the mouse.

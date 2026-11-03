@@ -52,6 +52,55 @@ const LIGHTS_H: f32 = TITLE_H + EFFECT_ROWS as f32 * (EFFECT_H + EFFECT_GAP) - E
 /// The most height the two columns ever need, with no preview taller than the screen card allows.
 const COLUMNS_MIN_H: f32 = LIGHTS_H + GAP + CLOCK_H;
 
+/// Below this the small text, at 11 DIPs, would be under 9 pixels and hard to read.
+pub const MIN_DPI: f32 = 80.0;
+const _: () = assert!(11.0 * MIN_DPI / 96.0 >= 9.0);
+
+/// A rectangle of pixels on the desktop: left, top, right, bottom.
+pub type PixelRect = (i32, i32, i32, i32);
+
+/// The DPI to draw at, so that the window fits the screen. That's the monitor's, unless a window of
+/// `client` DIPs plus its `frame` of pixels would be larger than the `work` area of pixels. Then
+/// everything gets drawn smaller, down to [`MIN_DPI`] and never larger than the monitor's.
+pub fn effective_dpi(dpi: f32, client: (f32, f32), frame: (i32, i32), work: (i32, i32)) -> f32 {
+    let fitting = |work: i32, frame: i32, dips: f32| (work - frame).max(1) as f32 * 96.0 / dips;
+    let fits = dpi
+        .min(fitting(work.0, frame.0, client.0))
+        .min(fitting(work.1, frame.1, client.1));
+    if fits < dpi {
+        // Whole numbers, so that rounding the window's size up can't push it past the edge.
+        fits.floor().max(MIN_DPI.min(dpi))
+    } else {
+        dpi
+    }
+}
+
+/// How many pixels some DIPs take at a DPI.
+pub fn pixels(dips: f32, dpi: f32) -> i32 {
+    (dips * dpi / 96.0).ceil() as i32
+}
+
+/// Where a window of this size goes to stay in the work area. If it's too large for that, its title
+/// bar is what stays on screen, top left.
+pub fn keep_in_work_area(x: i32, y: i32, size: (i32, i32), work: PixelRect) -> (i32, i32) {
+    let (left, top, right, bottom) = work;
+    (
+        x.min(right - size.0).max(left),
+        y.min(bottom - size.1).max(top),
+    )
+}
+
+/// Where a window of this size goes to be in the middle of the work area.
+pub fn centered_in_work_area(size: (i32, i32), work: PixelRect) -> (i32, i32) {
+    let (left, top, right, bottom) = work;
+    keep_in_work_area(
+        left + (right - left - size.0) / 2,
+        top + (bottom - top - size.1) / 2,
+        size,
+        work,
+    )
+}
+
 /// Where each part of the window goes. The window keeps its size whatever happens, except that a
 /// banner adds to its height.
 #[derive(Clone, Debug, PartialEq)]
@@ -328,11 +377,124 @@ mod tests {
         assert_eq!(Frame::new(0, 128).height, wide);
     }
 
+    /// A window's frame at a DPI, as measured: 18 by 47 pixels at 125 %.
+    fn frame_at(dpi: f32) -> (i32, i32) {
+        (
+            (14.4 * dpi / 96.0).ceil() as i32,
+            (37.6 * dpi / 96.0).ceil() as i32,
+        )
+    }
+
+    /// A screen's work area at a DPI, with the usual 48 DIPs of taskbar.
+    fn work_of(screen: (i32, i32), dpi: f32) -> (i32, i32) {
+        (screen.0, screen.1 - (48.0 * dpi / 96.0).ceil() as i32)
+    }
+
+    /// Common screens and scales.
+    const SCREENS: [((i32, i32), f32); 10] = [
+        ((1280, 720), 96.0),
+        ((1366, 768), 96.0),
+        ((1366, 768), 120.0),
+        ((1536, 864), 120.0),
+        ((1920, 1080), 96.0),
+        ((1920, 1080), 120.0),
+        ((1920, 1080), 144.0),
+        ((1920, 1080), 168.0),
+        ((2560, 1440), 192.0),
+        ((3840, 2160), 288.0),
+    ];
+
     #[test]
-    fn the_window_fits_a_small_laptop_at_100_percent() {
-        for height in heights() {
-            assert!(Frame::new(0, height).height <= 680.0);
+    fn the_window_fits_common_screens_at_every_scale_with_or_without_banners() {
+        for (screen, dpi) in SCREENS {
+            for banners in 0..3 {
+                for height in heights() {
+                    let needed = Frame::new(banners, height).height;
+                    let frame = frame_at(dpi);
+                    let work = work_of(screen, dpi);
+                    let drawn = effective_dpi(dpi, (WIDTH, needed), frame, work);
+                    assert!(drawn >= MIN_DPI, "{screen:?} at {dpi}: {drawn}");
+                    assert!(drawn <= dpi, "{screen:?} at {dpi}: {drawn}");
+                    assert!(
+                        pixels(needed, drawn) + frame.1 <= work.1,
+                        "{screen:?} at {dpi} with {banners} banners, {height} tall: {drawn}"
+                    );
+                    assert!(
+                        pixels(WIDTH, drawn) + frame.0 <= work.0,
+                        "{screen:?} at {dpi}: {drawn}"
+                    );
+                }
+            }
         }
+    }
+
+    #[test]
+    fn a_screen_with_room_gets_the_monitors_own_scale() {
+        let needed = Frame::new(0, 172).height;
+        for (screen, dpi) in [
+            ((1920, 1080), 96.0),
+            ((1920, 1080), 120.0),
+            ((2560, 1440), 144.0),
+        ] {
+            let drawn = effective_dpi(dpi, (WIDTH, needed), frame_at(dpi), work_of(screen, dpi));
+            assert_eq!(drawn, dpi, "{screen:?}");
+        }
+    }
+
+    #[test]
+    fn a_small_laptop_at_125_percent_draws_smaller_to_fit() {
+        let needed = Frame::new(0, 172).height;
+        let work = work_of((1366, 768), 120.0);
+        let drawn = effective_dpi(120.0, (WIDTH, needed), frame_at(120.0), work);
+        assert!(drawn < 120.0, "{drawn}");
+        assert!(drawn > 96.0, "{drawn}: still larger than at 100 %");
+    }
+
+    #[test]
+    fn a_narrow_screen_also_draws_smaller() {
+        let work = (1024, 2000);
+        let drawn = effective_dpi(120.0, (WIDTH, 640.0), (18, 47), work);
+        assert!(pixels(WIDTH, drawn) + 18 <= 1024, "{drawn}");
+    }
+
+    #[test]
+    fn nothing_gets_drawn_too_small_to_read() {
+        // Too small for anything: the text stays readable, and the window hangs off the bottom.
+        let drawn = effective_dpi(96.0, (WIDTH, 640.0), (14, 38), (1024, 400));
+        assert_eq!(drawn, MIN_DPI);
+        // A monitor already below that keeps its own.
+        assert_eq!(
+            effective_dpi(72.0, (WIDTH, 640.0), (14, 38), (800, 400)),
+            72.0
+        );
+    }
+
+    #[test]
+    fn a_window_stays_in_the_work_area() {
+        let work = (100, 50, 1100, 750);
+        assert_eq!(keep_in_work_area(200, 100, (300, 200), work), (200, 100));
+        assert_eq!(keep_in_work_area(-500, -500, (300, 200), work), (100, 50));
+        assert_eq!(keep_in_work_area(5000, 5000, (300, 200), work), (800, 550));
+    }
+
+    #[test]
+    fn a_window_too_large_for_the_work_area_keeps_its_title_bar_on_screen() {
+        let work = (0, 0, 1366, 708);
+        assert_eq!(keep_in_work_area(10, 10, (1500, 900), work), (0, 0));
+        assert_eq!(centered_in_work_area((1500, 900), work), (0, 0));
+    }
+
+    #[test]
+    fn a_window_opens_in_the_middle_of_the_work_area_of_any_monitor() {
+        assert_eq!(
+            centered_in_work_area((100, 50), (0, 0, 1000, 500)),
+            (450, 225)
+        );
+        // A monitor to the left of the main one.
+        assert_eq!(
+            centered_in_work_area((100, 50), (-1000, 0, 0, 500)),
+            (-550, 225)
+        );
     }
 
     #[test]

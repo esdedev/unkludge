@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-use unkludge_protocol::Device;
 use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::D2D_SIZE_U;
 use windows::Win32::Graphics::Direct2D::{
@@ -14,7 +13,10 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_PRESENT_OPTIONS_RETAIN_CONTENTS, D2D1CreateFactory,
 };
 use windows::Win32::Graphics::DirectWrite::{DWRITE_FACTORY_TYPE_SHARED, DWriteCreateFactory};
-use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
+use windows::Win32::Graphics::Gdi::{
+    BeginPaint, EndPaint, GetMonitorInfoW, InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO,
+    MonitorFromWindow, PAINTSTRUCT,
+};
 use windows::Win32::System::Threading::{GetCurrentProcess, SetProcessWorkingSetSize};
 use windows::Win32::UI::Accessibility::LresultFromObject;
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
@@ -23,26 +25,24 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{Interface, PCWSTR, Result, w};
 
 use super::gfx::{BG, Draw, Fonts, Gfx, R};
-use super::{Anim, App, Deferred, DemoSession, Shared, a11y, dialogs, tray};
-use crate::args::DemoArgs;
-use crate::demo::{DemoKeyboard, Script};
+use super::{Anim, App, Deferred, Shared, a11y, dialogs, tray};
 use crate::i18n::t;
-use crate::layout::{Frame, WIDTH};
-use crate::settings::{self, Settings};
+use crate::layout::{
+    Frame, PixelRect, WIDTH, centered_in_work_area, effective_dpi, keep_in_work_area, pixels,
+};
+use crate::session::{Session, SystemAutostart, open_real_keyboard};
+use crate::settings::Settings;
 use crate::state::{Slider, State};
-use crate::worker::{self, Cmd, Options};
+use crate::worker::{Cmd, Notify};
 use crate::{log, sys};
 
 pub(super) const CLASS: PCWSTR = w!("UnkludgeWindow");
 /// A demo's window has a class of its own, so that the real app never takes it for its other copy.
 pub(super) const DEMO_CLASS: PCWSTR = w!("UnkludgeDemoWindow");
-/// A demo's settings are its own, next to the real ones.
-pub(super) const DEMO_SETTINGS: &str = "settings-demo.txt";
-
 /// The bindings have this one with the common controls, which the app doesn't otherwise need.
 const WM_MOUSELEAVE: u32 = 0x02A3;
 pub const WM_SHOWAPP: u32 = WM_APP + 2;
-const WM_WORKER: u32 = WM_APP + 10;
+pub(super) const WM_WORKER: u32 = WM_APP + 10;
 pub const WM_INVOKE_ITEM: u32 = WM_APP + 11;
 
 pub const TIMER_MESSAGE: usize = 3;
@@ -57,7 +57,7 @@ pub(super) const TIMER_SHOT_GIVE_UP: usize = 6;
 pub(super) const SHOT_GIVE_UP_MS: u32 = 90_000;
 
 impl App {
-    pub(super) fn new(hwnd: HWND, settings: Settings, demo: Option<DemoArgs>) -> Result<App> {
+    pub(super) fn new(hwnd: HWND, settings: Settings, session: Session) -> Result<App> {
         // SAFETY: plain factory calls, whose results own their references.
         let (d2d, dw) = unsafe {
             (
@@ -67,61 +67,7 @@ impl App {
         };
         let fonts = Fonts::new(&dw, t().spanish)?;
 
-        let woken = Arc::new(AtomicBool::new(false));
-        let notify = {
-            let woken = Arc::clone(&woken);
-            let hwnd = hwnd.0 as isize;
-            Arc::new(move || {
-                if !woken.swap(true, Ordering::SeqCst) {
-                    // SAFETY: posting to a window that's gone is only a failed call.
-                    unsafe {
-                        let _ = PostMessageW(
-                            Some(HWND(hwnd as *mut _)),
-                            WM_WORKER,
-                            WPARAM(0),
-                            LPARAM(0),
-                        );
-                    }
-                }
-            })
-        };
-        let options = |rk_app_running| Options {
-            auto_clock: settings.auto_clock,
-            palettes: settings.palettes.clone(),
-            rk_app_running,
-        };
-        // The only place the real keyboard comes into it, and only when it isn't a demo.
-        let (worker, events, session) = match demo {
-            Some(args) => {
-                let model = unkludge_protocol::model::find(args.pid)
-                    .ok_or_else(windows::core::Error::empty)?;
-                let keyboard = DemoKeyboard::new(model, args.state);
-                let looking = Arc::clone(&keyboard);
-                let rk_app = Arc::clone(&keyboard);
-                let (worker, events) = worker::spawn(
-                    move || looking.open(),
-                    options(Box::new(move || rk_app.rk_app_running())),
-                    notify,
-                );
-                let session = DemoSession {
-                    script: Script::new(args.state, keyboard, sys::data_dir()),
-                    args,
-                    shot_timer_set: false,
-                };
-                (worker, events, Some(session))
-            }
-            None => {
-                let (worker, events) = worker::spawn(
-                    || Device::open(None),
-                    options(Box::new(sys::rk_app_running)),
-                    notify,
-                );
-                (worker, events, None)
-            }
-        };
-
-        let is_demo = session.is_some();
-        let autostart = !is_demo && sys::autostart_enabled();
+        let autostart = session.autostart_now(&SystemAutostart, false);
         let state = State::with_settings(&settings);
         let frame = Frame::new(0, state.preview_height());
         Ok(App {
@@ -131,14 +77,18 @@ impl App {
             fonts,
             gfx: None,
             dpi: 96.0,
+            monitor_dpi: 96.0,
             a_auto_clock: Anim::new(settings.auto_clock),
             settings,
             state,
             frame,
-            worker: Some(worker),
-            events,
-            woken,
-            demo: session,
+            worker: None,
+            events: None,
+            woken: Arc::new(AtomicBool::new(false)),
+            session,
+            script: None,
+            shot_timer_set: false,
+            to_open: Vec::new(),
             shared: Rc::new(RefCell::new(Shared {
                 items: Vec::new(),
                 focus: None,
@@ -156,9 +106,45 @@ impl App {
             preview_timer: None,
             deferred: None,
             modal: false,
-            tray_icon: tray::make_icon(16),
+            tray_icon: tray::make_icon(tray::small_icon_size()),
             quit: false,
         })
+    }
+
+    /// Starts the worker, which starts looking for the keyboard.
+    pub(super) fn start_worker(&mut self) {
+        let notify: Notify = {
+            let woken = Arc::clone(&self.woken);
+            let hwnd = self.hwnd.0 as isize;
+            Arc::new(move || {
+                if !woken.swap(true, Ordering::SeqCst) {
+                    // SAFETY: posting to a window that's gone is only a failed call.
+                    unsafe {
+                        let _ = PostMessageW(
+                            Some(HWND(hwnd as *mut _)),
+                            WM_WORKER,
+                            WPARAM(0),
+                            LPARAM(0),
+                        );
+                    }
+                }
+            })
+        };
+        let started = self.session.spawn_worker(
+            &self.settings,
+            sys::data_dir(),
+            notify,
+            open_real_keyboard,
+            Box::new(sys::rk_app_running),
+        );
+        match started {
+            Ok(running) => {
+                self.worker = Some(running.worker);
+                self.events = Some(running.events);
+                self.script = running.script;
+            }
+            Err(problem) => log::error(&problem),
+        }
     }
 
     pub fn invalidate(&self) {
@@ -182,7 +168,7 @@ impl App {
     }
 
     pub fn is_demo(&self) -> bool {
-        self.demo.is_some()
+        self.session.is_demo()
     }
 
     pub fn is_visible(&self) -> bool {
@@ -190,35 +176,22 @@ impl App {
         unsafe { IsWindowVisible(self.hwnd).as_bool() }
     }
 
-    /// A scripted demo takes its picture and goes, and leaves nothing open behind it.
-    pub(super) fn scripted(&self) -> bool {
-        self.demo
-            .as_ref()
-            .is_some_and(|demo| demo.args.shot.is_some())
+    /// Whether what's drawn can be seen, which minimised or in the tray it can't.
+    pub fn is_showing(&self) -> bool {
+        // SAFETY: as in `invalidate`.
+        self.is_visible() && !unsafe { IsIconic(self.hwnd).as_bool() }
     }
 
     pub fn save_settings(&self) {
-        let saved = if self.is_demo() {
-            match settings::path(DEMO_SETTINGS) {
-                Some(path) => self.settings.save_to(&path),
-                None => Ok(()),
-            }
-        } else {
-            self.settings.save()
-        };
-        if let Err(error) = saved {
+        let dir = sys::data_dir();
+        if let Err(error) = self.session.save_settings(&self.settings, dir.as_deref()) {
             log::error(&format!("the settings can't be saved: {error}"));
         }
     }
 
     /// Starts with the system or not. A demo only pretends.
     pub fn set_autostart(&mut self, on: bool) {
-        if self.is_demo() {
-            self.autostart = on;
-        } else {
-            sys::set_autostart(on);
-            self.autostart = sys::autostart_enabled();
-        }
+        self.autostart = self.session.set_autostart(on, &SystemAutostart);
         self.a_autostart.set(self.autostart);
         self.start_anim();
         self.invalidate();
@@ -233,29 +206,77 @@ impl App {
         self.invalidate();
     }
 
-    /// Fits the client area to the layout, without moving the window.
-    pub(super) fn fit_window(&self) {
-        // SAFETY: the handle is this window's own, and the rectangle is written by the call.
+    /// The work area of the monitor the window is on, unless a demo says otherwise.
+    fn work_area(&self) -> PixelRect {
+        let mut info = MONITORINFO {
+            cbSize: size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        // SAFETY: the handle is this window's own, and the structure is written by the call.
         unsafe {
-            let dpi = GetDpiForWindow(self.hwnd);
-            let scale = self.dpi / 96.0;
+            let monitor = MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST);
+            let _ = GetMonitorInfoW(monitor, &mut info);
+        }
+        let work = info.rcWork;
+        match self.session.demo_args().and_then(|args| args.work_area) {
+            Some((width, height)) => (work.left, work.top, work.left + width, work.top + height),
+            None => (work.left, work.top, work.right, work.bottom),
+        }
+    }
+
+    /// The window's size for the layout, drawing smaller if the screen is too small for it, and
+    /// keeps it on the screen.
+    pub(super) fn fit_window(&mut self) {
+        let work = self.work_area();
+        // SAFETY: the handle is this window's own, and the rectangles are written by the calls.
+        unsafe {
             let style = WINDOW_STYLE(GetWindowLongW(self.hwnd, GWL_STYLE) as u32);
-            let mut rect = RECT {
-                left: 0,
-                top: 0,
-                right: (WIDTH * scale).ceil() as i32,
-                bottom: (self.frame.height * scale).ceil() as i32,
-            };
-            let _ = AdjustWindowRectExForDpi(&mut rect, style, false, WINDOW_EX_STYLE(0), dpi);
-            let flags = SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE;
+            let dpi = GetDpiForWindow(self.hwnd);
+            let mut outer = RECT::default();
+            let _ = AdjustWindowRectExForDpi(&mut outer, style, false, WINDOW_EX_STYLE(0), dpi);
+            let frame = (outer.right - outer.left, outer.bottom - outer.top);
+            self.dpi = effective_dpi(
+                self.monitor_dpi,
+                (WIDTH, self.frame.height),
+                frame,
+                (work.2 - work.0, work.3 - work.1),
+            );
+            let size = (
+                pixels(WIDTH, self.dpi) + frame.0,
+                pixels(self.frame.height, self.dpi) + frame.1,
+            );
+            let mut now = RECT::default();
+            let _ = GetWindowRect(self.hwnd, &mut now);
+            let (x, y) = keep_in_work_area(now.left, now.top, size, work);
             let _ = SetWindowPos(
                 self.hwnd,
                 None,
+                x,
+                y,
+                size.0,
+                size.1,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+        self.invalidate();
+    }
+
+    /// Puts the window in the middle of the screen it's on.
+    pub(super) fn center_window(&self) {
+        // SAFETY: the handle is this window's own, and the rectangle is written by the call.
+        unsafe {
+            let mut now = RECT::default();
+            let _ = GetWindowRect(self.hwnd, &mut now);
+            let size = (now.right - now.left, now.bottom - now.top);
+            let (x, y) = centered_in_work_area(size, self.work_area());
+            let _ = SetWindowPos(
+                self.hwnd,
+                None,
+                x,
+                y,
                 0,
                 0,
-                rect.right - rect.left,
-                rect.bottom - rect.top,
-                flags,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
             );
         }
     }
@@ -279,27 +300,30 @@ impl App {
             (rect.right - rect.left).max(1) as u32,
             (rect.bottom - rect.top).max(1) as u32,
         );
-        let pixels = D2D_SIZE_U {
+        let client = D2D_SIZE_U {
             width: size.0,
             height: size.1,
         };
         if let Some(gfx) = &mut self.gfx {
-            if gfx.size != size
-                && let Some(window) = &gfx.window
-            {
-                // SAFETY: the render target is this window's own.
-                unsafe { window.Resize(&pixels)? };
+            // SAFETY: the render target is this window's own.
+            let resized = match &gfx.window {
+                Some(window) if gfx.size != size => unsafe { window.Resize(&client) },
+                _ => Ok(()),
+            };
+            if resized.is_ok() {
                 gfx.size = size;
+                // SAFETY: as above.
+                unsafe { gfx.rt.SetDpi(self.dpi, self.dpi) };
+                return Ok(());
             }
-            // SAFETY: as above.
-            unsafe { gfx.rt.SetDpi(self.dpi, self.dpi) };
-            return Ok(());
+            // One that can't be resized gets replaced.
+            self.gfx = None;
         }
         let gfx = Gfx::for_window(
             &self.d2d,
             D2D1_HWND_RENDER_TARGET_PROPERTIES {
                 hwnd: self.hwnd,
-                pixelSize: pixels,
+                pixelSize: client,
                 presentOptions: D2D1_PRESENT_OPTIONS_RETAIN_CONTENTS,
             },
         )?;
@@ -388,6 +412,10 @@ impl App {
         if !self.is_visible() {
             self.send(Some(Cmd::Refresh));
         }
+        // The system's entry says whether it starts with it, and that can change from outside.
+        self.autostart = self.session.autostart_now(&SystemAutostart, self.autostart);
+        self.a_autostart.set(self.autostart);
+        self.start_anim();
         // SAFETY: the handle is this window's own.
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_SHOW);
@@ -427,7 +455,7 @@ impl App {
                 }
                 self.invalidate();
             }
-            TIMER_PREVIEW => self.paint_preview_frame(),
+            TIMER_PREVIEW if self.is_showing() => self.paint_preview_frame(),
             TIMER_MESSAGE => {
                 // SAFETY: as above.
                 unsafe {
@@ -516,15 +544,22 @@ impl App {
             WM_KEYDOWN => self.key_down(wp.0 as u16).then_some(0),
             WM_SETCURSOR => self.set_cursor(lp).then_some(1),
             WM_SIZE => {
+                // Minimising and coming back stop and start the preview.
+                self.sync_preview_timer();
                 self.invalidate();
+                None
+            }
+            WM_DISPLAYCHANGE | WM_SETTINGCHANGE => {
+                // The screen, or the taskbar, may have changed what's room for the window.
+                self.fit_window();
                 None
             }
             WM_DPICHANGED => {
                 // A demo that asked for a DPI keeps it.
                 if self
-                    .demo
-                    .as_ref()
-                    .is_none_or(|demo| demo.args.dpi.is_none())
+                    .session
+                    .demo_args()
+                    .is_none_or(|args| args.dpi.is_none())
                 {
                     self.dpi = f32::from((wp.0 & 0xFFFF) as u16);
                     // SAFETY: the system passes the suggested rectangle in `lp`, valid for this
@@ -542,6 +577,7 @@ impl App {
                             SWP_NOZORDER | SWP_NOACTIVATE,
                         );
                     }
+                    self.fit_window();
                 }
                 self.invalidate();
                 Some(0)
@@ -667,6 +703,19 @@ impl App {
         if let Ok(mut app) = cell.try_borrow_mut() {
             app.modal = false;
             app.invalidate();
+        }
+    }
+
+    /// Opens what's waiting, which can take a while and shouldn't hold up anything else.
+    pub(super) fn open_what_waits(cell: &RefCell<App>) {
+        let waiting = match cell.try_borrow_mut() {
+            Ok(mut app) => std::mem::take(&mut app.to_open),
+            Err(_) => return,
+        };
+        for target in waiting {
+            if let Err(error) = sys::open(&target) {
+                log::error(&format!("the report's folder can't be opened: {error}"));
+            }
         }
     }
 

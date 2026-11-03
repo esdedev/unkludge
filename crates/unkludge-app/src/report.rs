@@ -14,6 +14,11 @@ use crate::worker::ReportData;
 /// does, show the saved file instead of opening a page.
 pub const FORM_URL: Option<&str> = None;
 
+/// The report's file in the data folder.
+pub const FILE_NAME: &str = "unkludge-report.txt";
+/// A demo's, so that it doesn't replace a real one someone hasn't sent yet.
+pub const DEMO_FILE_NAME: &str = "unkludge-report-demo.txt";
+
 /// The report's text. The caller finds out what the computer has to say, so this stays testable on
 /// any machine.
 pub fn text(
@@ -41,28 +46,27 @@ pub fn text(
     lines.join("\n") + "\n"
 }
 
-/// Saves the report in the data folder and returns the file's path. This asks the system what's
-/// running and what it lists, but opens no device.
-pub fn save(data: &ReportData) -> io::Result<PathBuf> {
-    let dir = crate::sys::data_dir().ok_or(io::ErrorKind::NotFound)?;
+/// Saves the report in `dir` and returns the file's path. This asks the system what's running and
+/// what it lists, but opens no device.
+pub fn save(data: &ReportData, dir: &Path) -> io::Result<PathBuf> {
     let collections = list_collections();
     save_in(
-        &dir,
+        dir,
+        FILE_NAME,
         &text(data, crate::sys::rk_app_running(), &collections),
     )
 }
 
-/// The same for a demo, which leaves the system's devices alone, even just listing them.
-pub fn save_demo(data: &ReportData) -> io::Result<PathBuf> {
-    let dir = crate::sys::data_dir().ok_or(io::ErrorKind::NotFound)?;
+/// The same for a demo, which leaves the system alone, even just listing its devices.
+pub fn save_demo(data: &ReportData, dir: &Path) -> io::Result<PathBuf> {
     let collections = Err(Error::Hid("not listed in a demo".to_string()));
-    save_in(&dir, &text(data, false, &collections))
+    save_in(dir, DEMO_FILE_NAME, &text(data, false, &collections))
 }
 
 /// Writes the report into `dir`, making it if needed, and returns the file's path.
-pub fn save_in(dir: &Path, text: &str) -> io::Result<PathBuf> {
+fn save_in(dir: &Path, name: &str, text: &str) -> io::Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
-    let path = dir.join("unkludge-report.txt");
+    let path = dir.join(name);
     std::fs::write(&path, text)?;
     Ok(path)
 }
@@ -183,7 +187,7 @@ mod tests {
     fn a_report_is_saved_where_it_is_asked_to_be() {
         let dir = std::env::temp_dir().join(format!("unkludge-report-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let path = save_in(&dir, "the text").unwrap();
+        let path = save_in(&dir, FILE_NAME, "the text").unwrap();
         assert_eq!(path, dir.join("unkludge-report.txt"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "the text");
         std::fs::remove_dir_all(&dir).unwrap();

@@ -8,11 +8,10 @@ use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
 
 use super::App;
 use super::window::{TIMER_MESSAGE, TIMER_PREVIEW, TIMER_SHOT};
-use crate::demo::Step;
-use crate::i18n::t;
+use crate::demo::{Script, Step};
 use crate::state::{Reaction, preview_interval};
 use crate::worker::{self, Cmd, Event};
-use crate::{log, report, sys};
+use crate::{log, sys};
 
 /// How long passing news stays at the foot of the window.
 const MESSAGE_TIME_MS: u32 = 6000;
@@ -24,7 +23,11 @@ impl App {
         let message_before = self.state.message.clone();
         let mut image_changed = false;
         let mut only_progress = true;
-        while let Ok(event) = self.events.try_recv() {
+        while let Some(event) = self
+            .events
+            .as_ref()
+            .and_then(|events| events.try_recv().ok())
+        {
             only_progress &= matches!(event, Event::Progress { .. });
             if cfg!(debug_assertions) {
                 print_event(&event);
@@ -59,8 +62,8 @@ impl App {
     }
 
     fn take_event(&mut self, event: Event) {
-        let steps = match &mut self.demo {
-            Some(demo) => demo.script.on_event(&event),
+        let steps = match &mut self.script {
+            Some(script) => script.on_event(&event),
             None => Vec::new(),
         };
         let reaction = self.state.apply(event, &mut self.settings);
@@ -98,41 +101,25 @@ impl App {
     }
 
     fn report_ready(&mut self, data: &worker::ReportData) {
-        let saved = if self.is_demo() {
-            report::save_demo(data)
-        } else {
-            report::save(data)
-        };
-        let note = match saved {
-            Ok(path) => {
-                // `FORM_URL` is `None` until the project is public, so showing the file is all
-                // there's to do. A scripted demo leaves no folder window open behind it.
-                if !self.scripted() {
-                    let folder = path.parent().unwrap_or(&path);
-                    if let Err(error) = sys::open(folder) {
-                        log::error(&format!("the report's folder can't be opened: {error}"));
-                    }
-                }
-                if let Some(form) = report::FORM_URL {
-                    let _ = sys::open(std::path::Path::new(form));
-                }
-                t().report_saved.to_string()
-            }
-            Err(error) => format!("{}: {error}", t().report_failed),
-        };
-        self.state.message = Some(crate::state::Note {
-            text: note,
-            tone: crate::state::Tone::Neutral,
-        });
+        let dir = sys::data_dir();
+        let outcome = self.session.report_ready(data, dir.as_deref());
+        self.state.message = Some(outcome.note);
+        self.to_open.extend(outcome.open);
     }
 
-    /// Starts the preview's timer, if there's an animation to show and a window to show it in.
+    /// Starts an animation's preview from its first frame.
     pub fn restart_preview(&mut self) {
         self.preview_since = Instant::now();
+        self.sync_preview_timer();
+    }
+
+    /// Runs the preview's timer if there's an animation to show and a window that can show it.
+    pub fn sync_preview_timer(&mut self) {
+        let showing = self.is_showing();
         let wanted = self
             .state
             .animation()
-            .filter(|animation| animation.frames().len() > 1 && self.is_visible())
+            .filter(|animation| animation.frames().len() > 1 && showing)
             .map(|animation| preview_interval(animation.delay_ms()));
         if wanted != self.preview_timer {
             // SAFETY: the handle is this window's own.
@@ -153,12 +140,13 @@ impl App {
     // Scripted demos.
 
     fn maybe_schedule_shot(&mut self) {
-        let Some(demo) = &mut self.demo else {
+        let Some(args) = self.session.demo_args() else {
             return;
         };
-        if demo.args.shot.is_some() && !demo.shot_timer_set && demo.script.reached() {
-            demo.shot_timer_set = true;
-            let delay = demo.args.shot_delay.as_millis().min(u128::from(u32::MAX)) as u32;
+        let reached = self.script.as_ref().is_some_and(Script::reached);
+        if args.shot.is_some() && !self.shot_timer_set && reached {
+            self.shot_timer_set = true;
+            let delay = args.shot_delay.as_millis().min(u128::from(u32::MAX)) as u32;
             // SAFETY: the handle is this window's own.
             unsafe {
                 SetTimer(Some(self.hwnd), TIMER_SHOT, delay.max(1), None);
@@ -167,13 +155,10 @@ impl App {
     }
 
     pub(super) fn take_shot(&mut self) {
-        let Some(path) = self.demo.as_ref().and_then(|demo| demo.args.shot.clone()) else {
+        let Some(path) = self.session.demo_args().and_then(|args| args.shot.clone()) else {
             return;
         };
-        let tabs = self
-            .demo
-            .as_ref()
-            .map_or(0, |demo| demo.script.tabs_before_shot());
+        let tabs = self.script.as_ref().map_or(0, Script::tabs_before_shot);
         // The keyboard works on what was last drawn, so draw once first.
         let mut saved = self.save_shot(&path);
         if tabs > 0 {

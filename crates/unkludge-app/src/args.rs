@@ -24,6 +24,8 @@ pub struct DemoArgs {
     pub state: DemoState,
     /// Draws at this DPI instead of the monitor's, to check other scales on one monitor.
     pub dpi: Option<u32>,
+    /// Lays out for a work area of this many pixels instead of the monitor's.
+    pub work_area: Option<(i32, i32)>,
     /// Writes a PNG of the window here and quits.
     pub shot: Option<PathBuf>,
     /// How long after the demo reached its state to take the picture.
@@ -47,6 +49,7 @@ impl Default for DemoArgs {
             pid: DEFAULT_DEMO_PID,
             state: DemoState::Connected,
             dpi: None,
+            work_area: None,
             shot: None,
             shot_delay: Duration::from_millis(600),
             exit_after: None,
@@ -88,6 +91,10 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
                 }
                 parsed.demo.get_or_insert_with(DemoArgs::default).dpi = Some(dpi);
             }
+            "--demo-work-area" => {
+                let area = parse_area(&value("a size, such as 1366x708")?)?;
+                parsed.demo.get_or_insert_with(DemoArgs::default).work_area = Some(area);
+            }
             "--demo-shot" => {
                 let path = PathBuf::from(value("a file")?);
                 parsed.demo.get_or_insert_with(DemoArgs::default).shot = Some(path);
@@ -118,6 +125,13 @@ fn parse_language(text: &str) -> Result<Language, String> {
 
 fn parse_number(text: &str) -> Result<u32, String> {
     text.parse().map_err(|_| format!("{text} isn't a number"))
+}
+
+fn parse_area(text: &str) -> Result<(i32, i32), String> {
+    let problem = || format!("{text} isn't a size: it goes like 1366x708");
+    let (width, height) = text.split_once('x').ok_or_else(problem)?;
+    let number = |part: &str| part.parse().ok().filter(|n| *n > 0).ok_or_else(problem);
+    Ok((number(width)?, number(height)?))
 }
 
 /// A supported model's product ID, in hexadecimal.
@@ -168,6 +182,7 @@ mod tests {
             &["--demo-model", "01A2"],
             &["--demo-state", "image"],
             &["--demo-dpi", "144"],
+            &["--demo-work-area", "1366x708"],
             &["--demo-shot", "a.png"],
             &["--demo-shot-delay", "10"],
             &["--demo-exit-after", "10"],
@@ -220,6 +235,18 @@ mod tests {
     fn a_wrong_demo_state_lists_the_right_ones() {
         let error = parsed(&["--demo-state", "nope"]).unwrap_err();
         assert!(error.contains("uploading"), "{error}");
+    }
+
+    #[test]
+    fn a_work_area_is_a_size() {
+        let demo = parsed(&["--demo-work-area", "1366x708"])
+            .unwrap()
+            .demo
+            .unwrap();
+        assert_eq!(demo.work_area, Some((1366, 708)));
+        for wrong in ["1366", "x", "0x708", "ax708", "1366x"] {
+            assert!(parsed(&["--demo-work-area", wrong]).is_err(), "{wrong}");
+        }
     }
 
     #[test]

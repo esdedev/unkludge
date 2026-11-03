@@ -1,18 +1,20 @@
 //! The tray icon and its menu, and the icon as the system wants it.
 
-use windows::Win32::Foundation::{HWND, POINT};
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateBitmap, CreateDIBSection, DIB_RGB_COLORS,
     DeleteObject,
 };
+use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetSystemMetricsForDpi};
 use windows::Win32::UI::Shell::{
     NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_ADD, NIM_DELETE, NIM_MODIFY,
     NOTIFYICONDATAW, Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconIndirect, CreatePopupMenu, DestroyMenu, GetCursorPos, HICON, ICONINFO,
-    MF_CHECKED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, RegisterWindowMessageW, SetForegroundWindow,
-    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP,
+    MF_CHECKED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, PostMessageW, RegisterWindowMessageW,
+    SM_CXICON, SM_CXSMICON, SetForegroundWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
+    WM_APP, WM_NULL,
 };
 use windows::core::{HSTRING, w};
 
@@ -41,6 +43,18 @@ pub fn wm_taskbar_created() -> u32 {
     static MESSAGE: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
     // SAFETY: the string is NUL-terminated and static.
     *MESSAGE.get_or_init(|| unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) })
+}
+
+/// The size the system wants small icons, such as the tray's, at its scale.
+pub fn small_icon_size() -> i32 {
+    // SAFETY: plain numbers.
+    unsafe { GetSystemMetricsForDpi(SM_CXSMICON, GetDpiForSystem()) }
+}
+
+/// The size it wants large ones, such as the window's.
+pub fn large_icon_size() -> i32 {
+    // SAFETY: plain numbers.
+    unsafe { GetSystemMetricsForDpi(SM_CXICON, GetDpiForSystem()) }
 }
 
 /// The app's icon as the system wants it. Falls back to no icon rather than to no app.
@@ -170,6 +184,8 @@ pub fn menu(hwnd: HWND, autostart: bool) -> MenuChoice {
             hwnd,
             None,
         );
+        // As the system's documentation asks, so that the menu goes away properly the next time.
+        let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
         let _ = DestroyMenu(menu);
         match id.0 as usize {
             MENU_OPEN => MenuChoice::Open,

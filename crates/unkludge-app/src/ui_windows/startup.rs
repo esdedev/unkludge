@@ -3,9 +3,12 @@
 use std::cell::RefCell;
 use std::time::Duration;
 
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
     DWMWA_CAPTION_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute,
+};
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromPoint,
 };
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -17,14 +20,15 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{HSTRING, PCWSTR, Result};
 
 use super::window::{
-    CLASS, DEMO_CLASS, DEMO_SETTINGS, SHOT_GIVE_UP_MS, TIMER_EXIT, TIMER_SHOT_GIVE_UP, WM_SHOWAPP,
+    CLASS, DEMO_CLASS, SHOT_GIVE_UP_MS, TIMER_EXIT, TIMER_SHOT_GIVE_UP, WM_SHOWAPP, WM_WORKER,
     trim_memory,
 };
 use super::{App, tray};
 use crate::args::Args;
 use crate::i18n::t;
+use crate::session::{Session, SystemAutostart};
 use crate::settings::{self, Settings};
-use crate::{log, sys};
+use crate::sys;
 
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     // SAFETY: the pointer is the one `run` stored, whose box outlives the message loop, and is taken
@@ -36,11 +40,21 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             return DefWindowProcW(hwnd, msg, wp, lp);
         }
         let cell = &*ptr;
+        if msg == WM_DESTROY {
+            PostQuitMessage(0);
+        }
         let result = match cell.try_borrow_mut() {
             Ok(mut app) => app.handle(msg, wp, lp),
-            Err(_) => None,
+            Err(_) => match when_busy(msg) {
+                WhenBusy::PostAgain => {
+                    let _ = PostMessageW(Some(hwnd), msg, wp, lp);
+                    Some(0)
+                }
+                WhenBusy::Default => None,
+            },
         };
         App::deferred_action(cell, hwnd);
+        App::open_what_waits(cell);
         let quitting = cell.try_borrow().is_ok_and(|app| app.quit && !app.modal);
         if quitting {
             let worker = {
@@ -55,7 +69,6 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 worker.shutdown();
             }
             let _ = DestroyWindow(hwnd);
-            PostQuitMessage(0);
             return LRESULT(0);
         }
         match result {
@@ -65,38 +78,33 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
     }
 }
 
-/// The settings of the real app, and what its first launch does.
-fn real_settings() -> Settings {
-    let settings = Settings::load();
-    if settings.existed {
-        // If the entry points at a copy that's gone, points it at this one.
-        sys::refresh_autostart(false);
-        return settings;
-    }
-    let installed =
-        std::env::current_exe().is_ok_and(|exe| settings::starts_with_system_on_first_launch(&exe));
-    if installed {
-        sys::set_autostart(true);
-    }
-    if let Err(error) = settings.save() {
-        log::error(&format!("the settings can't be saved: {error}"));
-    }
-    settings
+/// What to do with a message that comes while the app is busy with another.
+#[derive(Debug, PartialEq, Eq)]
+enum WhenBusy {
+    /// The system's handling is all it needs.
+    Default,
+    /// It has to reach the app, and would be lost otherwise. The worker's wake-up is one: no other
+    /// comes until it's been answered, so losing it would leave the window deaf.
+    PostAgain,
 }
 
-/// A demo's settings are its own file, in the data folder if there's one.
-fn demo_settings() -> Settings {
-    match settings::path(DEMO_SETTINGS) {
-        Some(path) => Settings::load_from(&path),
-        None => Settings::default(),
+fn when_busy(msg: u32) -> WhenBusy {
+    match msg {
+        WM_WORKER | WM_CLOSE => WhenBusy::PostAgain,
+        _ => WhenBusy::Default,
     }
 }
 
-/// Asks the copy that's running to show its window.
+/// Asks the copy that's running to show its window, and lets it come to the front, which the system
+/// only allows if the program in front says so.
 fn show_other_copy() {
-    // SAFETY: a null name means any window of the class, and posting to it can only fail.
+    // SAFETY: a null name means any window of the class. The number is written by the call, and the
+    // rest takes plain numbers and can only fail.
     unsafe {
         if let Ok(hwnd) = FindWindowW(CLASS, PCWSTR::null()) {
+            let mut process = 0;
+            GetWindowThreadProcessId(hwnd, Some(&mut process));
+            let _ = AllowSetForegroundWindow(process);
             let _ = PostMessageW(Some(hwnd), WM_SHOWAPP, WPARAM(0), LPARAM(0));
         }
     }
@@ -109,28 +117,28 @@ pub fn run(args: Args) {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
     }
-    let settings = match &args.demo {
-        // A demo has no business with the real copy, autostart or settings.
-        Some(_) => demo_settings(),
-        None => {
-            if !sys::claim_single_instance() {
-                show_other_copy();
-                return;
-            }
-            real_settings()
+    let session = Session::new(args.demo);
+    if session.claims_single_instance() && !sys::claim_single_instance() {
+        if Session::shows_other_copy(args.tray) {
+            show_other_copy();
         }
-    };
-    if let Err(error) = run_window(settings, args) {
+        return;
+    }
+    let installed =
+        std::env::current_exe().is_ok_and(|exe| settings::starts_with_system_on_first_launch(&exe));
+    let data_dir = sys::data_dir();
+    let settings = session.load_settings(data_dir.as_deref(), &SystemAutostart, installed);
+    if let Err(error) = run_window(settings, session, args.tray) {
         panic!("the window can't be made: {error}");
     }
 }
 
-fn run_window(settings: Settings, args: Args) -> Result<()> {
-    let demo = args.demo;
-    let class = if demo.is_some() { DEMO_CLASS } else { CLASS };
-    let title = match &demo {
-        Some(_) => HSTRING::from(format!("Unkludge - {}", t().demo)),
-        None => HSTRING::from("Unkludge"),
+fn run_window(settings: Settings, session: Session, start_hidden: bool) -> Result<()> {
+    let class = if session.is_demo() { DEMO_CLASS } else { CLASS };
+    let title = if session.is_demo() {
+        HSTRING::from(format!("Unkludge - {}", t().demo))
+    } else {
+        HSTRING::from("Unkludge")
     };
     // SAFETY: the message loop below owns the window's whole life, with `cell` outliving it. Each
     // call's arguments are valid for it.
@@ -141,8 +149,8 @@ fn run_window(settings: Settings, args: Args) -> Result<()> {
             style: CS_HREDRAW | CS_VREDRAW,
             lpfnWndProc: Some(wndproc),
             hInstance: instance.into(),
-            hIcon: tray::make_icon(32),
-            hIconSm: tray::make_icon(16),
+            hIcon: tray::make_icon(tray::large_icon_size()),
+            hIconSm: tray::make_icon(tray::small_icon_size()),
             hCursor: LoadCursorW(None, IDC_ARROW)?,
             lpszClassName: class,
             ..Default::default()
@@ -181,23 +189,28 @@ fn run_window(settings: Settings, args: Args) -> Result<()> {
         );
         DragAcceptFiles(hwnd, true);
 
-        let start_hidden = args.tray;
-        let forced_dpi = demo.as_ref().and_then(|demo| demo.dpi);
-        let scripted = demo.as_ref().is_some_and(|demo| demo.shot.is_some());
-        let shot_give_up = scripted;
-        let exit_after = demo.as_ref().and_then(|demo| demo.exit_after);
+        let forced_dpi = session.demo_args().and_then(|args| args.dpi);
+        let scripted = session.is_scripted();
+        let exit_after = session.demo_args().and_then(|args| args.exit_after);
 
-        let mut app = App::new(hwnd, settings, demo)?;
-        app.dpi = forced_dpi.unwrap_or_else(|| GetDpiForWindow(hwnd)) as f32;
-        app.fit_window();
-        place_window(hwnd);
-        if !scripted {
-            app.add_tray();
-        }
+        // Before anything can move the window, as moving it to another monitor sends a message
+        // about its DPI, and the app should get that.
+        let app = App::new(hwnd, settings, session)?;
         let cell = Box::new(RefCell::new(app));
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, (&raw const *cell) as isize);
 
-        if shot_give_up {
+        // Its size depends on the screen it's on, so that comes first.
+        move_to_monitor_of_cursor(hwnd);
+        {
+            let mut app = cell.borrow_mut();
+            app.monitor_dpi = forced_dpi.unwrap_or_else(|| GetDpiForWindow(hwnd)) as f32;
+            app.fit_window();
+            app.center_window();
+            if !scripted {
+                app.add_tray();
+            }
+        }
+        if scripted {
             SetTimer(Some(hwnd), TIMER_SHOT_GIVE_UP, SHOT_GIVE_UP_MS, None);
         }
         if let Some(after) = exit_after {
@@ -210,11 +223,22 @@ fn run_window(settings: Settings, args: Args) -> Result<()> {
         } else {
             cell.borrow_mut().show();
         }
+        // After showing, so that the first write to a keyboard, which is the clock, doesn't come from
+        // a program that hasn't appeared yet.
+        cell.borrow_mut().start_worker();
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
+        }
+        // If something else ended the window, what quitting does hasn't been done.
+        {
+            let mut app = cell.borrow_mut();
+            app.remove_tray();
+            if let Some(worker) = app.worker.take() {
+                worker.shutdown();
+            }
         }
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
         drop(cell);
@@ -222,18 +246,52 @@ fn run_window(settings: Settings, args: Args) -> Result<()> {
     Ok(())
 }
 
-/// In the middle of the screen.
+/// Puts the window on the monitor the mouse is on, which is where it was started from.
 ///
 /// # Safety
-/// `hwnd` must be a window of this thread.
-unsafe fn place_window(hwnd: HWND) {
-    // SAFETY: as the caller promises, and the rectangle is written by the call.
+/// `hwnd` must be a window of this thread, and the app mustn't be borrowed.
+unsafe fn move_to_monitor_of_cursor(hwnd: HWND) {
+    // SAFETY: as the caller promises, and the structures are written by the calls.
     unsafe {
-        let mut rect = RECT::default();
-        let _ = GetWindowRect(hwnd, &mut rect);
-        let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
-        let x = (GetSystemMetrics(SM_CXSCREEN) - width) / 2;
-        let y = (GetSystemMetrics(SM_CYSCREEN) - height) / 2;
-        let _ = SetWindowPos(hwnd, None, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+        let mut cursor = POINT::default();
+        let _ = GetCursorPos(&mut cursor);
+        let monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTOPRIMARY);
+        let mut info = MONITORINFO {
+            cbSize: size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if GetMonitorInfoW(monitor, &mut info).as_bool() {
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                info.rcWork.left,
+                info.rcWork.top,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_workers_wake_up_is_never_lost() {
+        assert_eq!(when_busy(WM_WORKER), WhenBusy::PostAgain);
+    }
+
+    #[test]
+    fn closing_the_window_is_never_lost() {
+        assert_eq!(when_busy(WM_CLOSE), WhenBusy::PostAgain);
+    }
+
+    #[test]
+    fn other_messages_get_the_systems_handling() {
+        for message in [WM_PAINT, WM_SIZE, WM_MOUSEMOVE, WM_DESTROY] {
+            assert_eq!(when_busy(message), WhenBusy::Default);
+        }
     }
 }
