@@ -1,0 +1,33 @@
+pid = 0x01DE
+name = "RK F75 Wired"
+protocol = "v2alt"
+fw = 2
+status = "experimental"
+layout = "01C6"
+
+[lighting]
+brightness = [0, 5, 10, 15, 20]
+speed = { min = 0, max = 4, default = 3 }
+sleep = false
+led_mask = 0x2100
+effects = [
+  { id = 1, name = "Solid", speed = false, brightness = true, rainbow = true, color = true, hw = 1 },
+  { id = 2, name = "Breathing", speed = true, brightness = true, rainbow = true, color = true, hw = 2 },
+  { id = 3, name = "Rainbow", speed = true, brightness = true, rainbow = false, color = false, hw = 3 },
+  { id = 4, name = "Flash", speed = true, brightness = true, rainbow = true, color = true, hw = 4 },
+  { id = 5, name = "Raindrops", speed = true, brightness = true, rainbow = true, color = true, hw = 5 },
+  { id = 6, name = "Colour wheel", speed = true, brightness = true, rainbow = true, color = true, hw = 6 },
+  { id = 7, name = "Ripples", speed = true, brightness = true, rainbow = true, color = true, hw = 7 },
+  { id = 8, name = "Starlight", speed = true, brightness = true, rainbow = true, color = true, hw = 8 },
+  { id = 9, name = "Fade", speed = true, brightness = true, rainbow = true, color = true },
+  { id = 10, name = "Snake", speed = true, brightness = true, rainbow = true, color = true, hw = 9 },
+  { id = 11, name = "Neon", speed = true, brightness = true, rainbow = true, color = true, hw = 10 },
+  { id = 12, name = "Reactive", speed = true, brightness = true, rainbow = true, color = true, hw = 11 },
+  { id = 13, name = "Sine wave", speed = true, brightness = true, rainbow = true, color = true, hw = 12 },
+  { id = 14, name = "Scanner", speed = true, brightness = true, rainbow = true, color = true },
+  { id = 15, name = "Windmill", speed = true, brightness = true, rainbow = false, color = false, hw = 13 },
+  { id = 16, name = "Waterfall", speed = true, brightness = true, rainbow = false, color = false, hw = 14 },
+  { id = 17, name = "Blossom", speed = true, brightness = true, rainbow = false, color = false, hw = 15 },
+  { id = 18, name = "Effect 18", speed = false, brightness = false, rainbow = false, color = false, hw = 19 },
+  { id = 19, name = "Effect 19", speed = false, brightness = false, rainbow = false, color = false },
+]

@@ -1,0 +1,813 @@
+pid = 0x0176
+name = "Sink87G"
+protocol = "v1"
+fw = 0
+status = "experimental"
+
+[lighting]
+sleep = true
+effects = [
+  { id = 1, name = "Solid", speed = false, brightness = true, rainbow = false, color = false },
+  { id = 2, name = "Breathing", speed = false, brightness = true, rainbow = false, color = false },
+  { id = 3, name = "Rainbow", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 4, name = "Flash", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 5, name = "Raindrops", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 6, name = "Colour wheel", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 7, name = "Ripples", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 8, name = "Starlight", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 9, name = "Fade", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 10, name = "Snake", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 11, name = "Neon", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 12, name = "Reactive", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 13, name = "Sine wave", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 14, name = "Scanner", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 15, name = "Windmill", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 16, name = "Waterfall", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 17, name = "Blossom", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 18, name = "Effect 18", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 19, name = "Effect 19", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 20, name = "Effect 20", speed = true, brightness = true, rainbow = false, color = false },
+]
+
+[[keys]]
+id = 1
+label = "Esc"
+rect = [15, 15, 42, 45]
+kind = 0x02
+code = 0x1B
+extra = 0x00000000
+matrix = 6
+
+[[keys]]
+id = 2
+label = "F1"
+rect = [103, 15, 130, 45]
+kind = 0x02
+code = 0x70
+extra = 0x00000000
+matrix = 12
+
+[[keys]]
+id = 3
+label = "F2"
+rect = [147, 15, 174, 45]
+kind = 0x02
+code = 0x71
+extra = 0x00000000
+matrix = 18
+
+[[keys]]
+id = 4
+label = "F3"
+rect = [191, 15, 218, 45]
+kind = 0x02
+code = 0x72
+extra = 0x00000000
+matrix = 24
+
+[[keys]]
+id = 5
+label = "F4"
+rect = [234, 15, 261, 45]
+kind = 0x02
+code = 0x73
+extra = 0x00000000
+matrix = 30
+
+[[keys]]
+id = 6
+label = "F5"
+rect = [300, 15, 327, 45]
+kind = 0x02
+code = 0x74
+extra = 0x00000000
+matrix = 36
+
+[[keys]]
+id = 7
+label = "F6"
+rect = [345, 15, 372, 45]
+kind = 0x02
+code = 0x75
+extra = 0x00000000
+matrix = 42
+
+[[keys]]
+id = 8
+label = "F7"
+rect = [389, 15, 416, 45]
+kind = 0x02
+code = 0x76
+extra = 0x00000000
+matrix = 48
+
+[[keys]]
+id = 9
+label = "F8"
+rect = [434, 15, 461, 45]
+kind = 0x02
+code = 0x77
+extra = 0x00000000
+matrix = 54
+
+[[keys]]
+id = 10
+label = "F9"
+rect = [500, 14, 527, 44]
+kind = 0x02
+code = 0x78
+extra = 0x00000000
+matrix = 60
+
+[[keys]]
+id = 11
+label = "F10"
+rect = [544, 14, 571, 44]
+kind = 0x02
+code = 0x79
+extra = 0x00000000
+matrix = 66
+
+[[keys]]
+id = 12
+label = "F11"
+rect = [588, 14, 615, 44]
+kind = 0x02
+code = 0x7A
+extra = 0x00000000
+matrix = 72
+
+[[keys]]
+id = 13
+label = "F12"
+rect = [632, 14, 659, 44]
+kind = 0x02
+code = 0x7B
+extra = 0x00000000
+matrix = 78
+
+[[keys]]
+id = 14
+label = "PrtSc"
+rect = [689, 15, 716, 45]
+kind = 0x02
+code = 0x2C
+extra = 0x00000000
+matrix = 84
+
+[[keys]]
+id = 15
+label = "SrcLock"
+rect = [733, 15, 760, 45]
+kind = 0x02
+code = 0x91
+extra = 0x00000000
+matrix = 90
+
+[[keys]]
+id = 16
+label = "Pause"
+rect = [777, 15, 804, 45]
+kind = 0x02
+code = 0x13
+extra = 0x00000000
+matrix = 96
+
+[[keys]]
+id = 17
+label = "`"
+rect = [14, 76, 41, 106]
+kind = 0x02
+code = 0xC0
+extra = 0x00000000
+matrix = 1
+
+[[keys]]
+id = 18
+label = "1"
+rect = [59, 76, 86, 106]
+kind = 0x02
+code = 0x31
+extra = 0x00000000
+matrix = 7
+
+[[keys]]
+id = 19
+label = "2"
+rect = [103, 76, 130, 106]
+kind = 0x02
+code = 0x32
+extra = 0x00000000
+matrix = 13
+
+[[keys]]
+id = 20
+label = "3"
+rect = [147, 76, 174, 106]
+kind = 0x02
+code = 0x33
+extra = 0x00000000
+matrix = 19
+
+[[keys]]
+id = 21
+label = "4"
+rect = [191, 76, 218, 106]
+kind = 0x02
+code = 0x34
+extra = 0x00000000
+matrix = 25
+
+[[keys]]
+id = 22
+label = "5"
+rect = [235, 76, 262, 106]
+kind = 0x02
+code = 0x35
+extra = 0x00000000
+matrix = 31
+
+[[keys]]
+id = 23
+label = "6"
+rect = [279, 76, 306, 106]
+kind = 0x02
+code = 0x36
+extra = 0x00000000
+matrix = 37
+
+[[keys]]
+id = 24
+label = "7"
+rect = [323, 76, 350, 106]
+kind = 0x02
+code = 0x37
+extra = 0x00000000
+matrix = 43
+
+[[keys]]
+id = 25
+label = "8"
+rect = [367, 76, 394, 106]
+kind = 0x02
+code = 0x38
+extra = 0x00000000
+matrix = 49
+
+[[keys]]
+id = 26
+label = "9"
+rect = [412, 76, 439, 106]
+kind = 0x02
+code = 0x39
+extra = 0x00000000
+matrix = 55
+
+[[keys]]
+id = 27
+label = "0"
+rect = [456, 76, 483, 106]
+kind = 0x02
+code = 0x30
+extra = 0x00000000
+matrix = 61
+
+[[keys]]
+id = 28
+label = "-"
+rect = [500, 76, 527, 106]
+kind = 0x02
+code = 0xBD
+extra = 0x00000000
+matrix = 67
+
+[[keys]]
+id = 29
+label = "="
+rect = [544, 76, 571, 106]
+kind = 0x02
+code = 0xBB
+extra = 0x00000000
+matrix = 73
+
+[[keys]]
+id = 30
+label = "Backspace"
+rect = [588, 75, 660, 105]
+kind = 0x02
+code = 0x08
+extra = 0x00000000
+matrix = 79
+
+[[keys]]
+id = 31
+label = "Insert"
+rect = [689, 75, 716, 105]
+kind = 0x02
+code = 0x2D
+extra = 0x00000000
+matrix = 85
+
+[[keys]]
+id = 32
+label = "Home"
+rect = [733, 75, 760, 105]
+kind = 0x02
+code = 0x24
+extra = 0x00000000
+matrix = 91
+
+[[keys]]
+id = 33
+label = "PgUp"
+rect = [778, 75, 805, 105]
+kind = 0x02
+code = 0x21
+extra = 0x00000000
+matrix = 97
+
+[[keys]]
+id = 34
+label = "Tab"
+rect = [16, 120, 66, 150]
+kind = 0x02
+code = 0x09
+extra = 0x00000000
+matrix = 2
+
+[[keys]]
+id = 35
+label = "Q"
+rect = [81, 120, 108, 150]
+kind = 0x02
+code = 0x51
+extra = 0x00000000
+matrix = 8
+
+[[keys]]
+id = 36
+label = "W"
+rect = [126, 120, 153, 150]
+kind = 0x02
+code = 0x57
+extra = 0x00000000
+matrix = 14
+
+[[keys]]
+id = 37
+label = "E"
+rect = [170, 120, 197, 150]
+kind = 0x02
+code = 0x45
+extra = 0x00000000
+matrix = 20
+
+[[keys]]
+id = 38
+label = "R"
+rect = [214, 120, 241, 150]
+kind = 0x02
+code = 0x52
+extra = 0x00000000
+matrix = 26
+
+[[keys]]
+id = 39
+label = "T"
+rect = [258, 120, 285, 150]
+kind = 0x02
+code = 0x54
+extra = 0x00000000
+matrix = 32
+
+[[keys]]
+id = 40
+label = "Y"
+rect = [302, 120, 329, 150]
+kind = 0x02
+code = 0x59
+extra = 0x00000000
+matrix = 38
+
+[[keys]]
+id = 41
+label = "U"
+rect = [346, 120, 373, 150]
+kind = 0x02
+code = 0x55
+extra = 0x00000000
+matrix = 44
+
+[[keys]]
+id = 42
+label = "I"
+rect = [389, 120, 416, 150]
+kind = 0x02
+code = 0x49
+extra = 0x00000000
+matrix = 50
+
+[[keys]]
+id = 43
+label = "O"
+rect = [433, 120, 460, 150]
+kind = 0x02
+code = 0x4F
+extra = 0x00000000
+matrix = 56
+
+[[keys]]
+id = 44
+label = "P"
+rect = [477, 120, 504, 150]
+kind = 0x02
+code = 0x50
+extra = 0x00000000
+matrix = 62
+
+[[keys]]
+id = 45
+label = "["
+rect = [521, 120, 548, 150]
+kind = 0x02
+code = 0xDB
+extra = 0x00000000
+matrix = 68
+
+[[keys]]
+id = 46
+label = "]"
+rect = [565, 120, 592, 150]
+kind = 0x02
+code = 0xDD
+extra = 0x00000000
+matrix = 74
+
+[[keys]]
+id = 47
+label = "\\"
+rect = [609, 119, 659, 149]
+kind = 0x02
+code = 0xDC
+extra = 0x00000000
+matrix = 80
+
+[[keys]]
+id = 48
+label = "Delete"
+rect = [686, 120, 713, 150]
+kind = 0x02
+code = 0x2E
+extra = 0x00000000
+matrix = 86
+
+[[keys]]
+id = 49
+label = "End"
+rect = [729, 120, 756, 150]
+kind = 0x02
+code = 0x23
+extra = 0x00000000
+matrix = 92
+
+[[keys]]
+id = 50
+label = "PgDn"
+rect = [776, 120, 803, 150]
+kind = 0x02
+code = 0x22
+extra = 0x00000000
+matrix = 98
+
+[[keys]]
+id = 51
+label = "CapsLock"
+rect = [17, 164, 77, 194]
+kind = 0x02
+code = 0x14
+extra = 0x00000000
+matrix = 3
+
+[[keys]]
+id = 52
+label = "A"
+rect = [93, 164, 120, 194]
+kind = 0x02
+code = 0x41
+extra = 0x00000000
+matrix = 9
+
+[[keys]]
+id = 53
+label = "S"
+rect = [139, 164, 166, 194]
+kind = 0x02
+code = 0x53
+extra = 0x00000000
+matrix = 15
+
+[[keys]]
+id = 54
+label = "D"
+rect = [182, 164, 209, 194]
+kind = 0x02
+code = 0x44
+extra = 0x00000000
+matrix = 21
+
+[[keys]]
+id = 55
+label = "F"
+rect = [226, 164, 253, 194]
+kind = 0x02
+code = 0x46
+extra = 0x00000000
+matrix = 27
+
+[[keys]]
+id = 56
+label = "G"
+rect = [269, 164, 296, 194]
+kind = 0x02
+code = 0x47
+extra = 0x00000000
+matrix = 33
+
+[[keys]]
+id = 57
+label = "H"
+rect = [312, 164, 339, 194]
+kind = 0x02
+code = 0x48
+extra = 0x00000000
+matrix = 39
+
+[[keys]]
+id = 58
+label = "J"
+rect = [354, 164, 381, 194]
+kind = 0x02
+code = 0x4A
+extra = 0x00000000
+matrix = 45
+
+[[keys]]
+id = 59
+label = "K"
+rect = [400, 164, 427, 194]
+kind = 0x02
+code = 0x4B
+extra = 0x00000000
+matrix = 51
+
+[[keys]]
+id = 60
+label = "L"
+rect = [444, 164, 471, 194]
+kind = 0x02
+code = 0x4C
+extra = 0x00000000
+matrix = 57
+
+[[keys]]
+id = 61
+label = ";"
+rect = [488, 164, 515, 194]
+kind = 0x02
+code = 0xBA
+extra = 0x00000000
+matrix = 63
+
+[[keys]]
+id = 62
+label = "'"
+rect = [533, 163, 560, 193]
+kind = 0x02
+code = 0xDE
+extra = 0x00000000
+matrix = 69
+
+[[keys]]
+id = 63
+label = "Enter"
+rect = [575, 163, 659, 193]
+kind = 0x02
+code = 0x0D
+extra = 0x00000000
+matrix = 81
+
+[[keys]]
+id = 64
+label = "LShift"
+rect = [17, 207, 97, 237]
+kind = 0x02
+code = 0xA0
+extra = 0x00000000
+matrix = 4
+
+[[keys]]
+id = 65
+label = "Z"
+rect = [115, 208, 142, 238]
+kind = 0x02
+code = 0x5A
+extra = 0x00000000
+matrix = 10
+
+[[keys]]
+id = 66
+label = "X"
+rect = [160, 207, 187, 237]
+kind = 0x02
+code = 0x58
+extra = 0x00000000
+matrix = 16
+
+[[keys]]
+id = 67
+label = "C"
+rect = [203, 207, 230, 237]
+kind = 0x02
+code = 0x43
+extra = 0x00000000
+matrix = 22
+
+[[keys]]
+id = 68
+label = "V"
+rect = [246, 207, 273, 237]
+kind = 0x02
+code = 0x56
+extra = 0x00000000
+matrix = 28
+
+[[keys]]
+id = 69
+label = "B"
+rect = [290, 207, 317, 237]
+kind = 0x02
+code = 0x42
+extra = 0x00000000
+matrix = 34
+
+[[keys]]
+id = 70
+label = "N"
+rect = [334, 207, 361, 237]
+kind = 0x02
+code = 0x4E
+extra = 0x00000000
+matrix = 40
+
+[[keys]]
+id = 71
+label = "M"
+rect = [378, 207, 405, 237]
+kind = 0x02
+code = 0x4D
+extra = 0x00000000
+matrix = 46
+
+[[keys]]
+id = 72
+label = ","
+rect = [421, 207, 448, 237]
+kind = 0x02
+code = 0xBC
+extra = 0x00000000
+matrix = 52
+
+[[keys]]
+id = 73
+label = "."
+rect = [465, 207, 492, 237]
+kind = 0x02
+code = 0xBE
+extra = 0x00000000
+matrix = 58
+
+[[keys]]
+id = 74
+label = "/"
+rect = [509, 207, 536, 237]
+kind = 0x02
+code = 0xBF
+extra = 0x00000000
+matrix = 64
+
+[[keys]]
+id = 75
+label = "RShift"
+rect = [554, 206, 658, 236]
+kind = 0x02
+code = 0xA1
+extra = 0x00000000
+matrix = 76
+
+[[keys]]
+id = 76
+label = "Up"
+rect = [731, 206, 758, 236]
+kind = 0x02
+code = 0x26
+extra = 0x00000000
+matrix = 94
+
+[[keys]]
+id = 77
+label = "LCtrl"
+rect = [16, 252, 55, 282]
+kind = 0x02
+code = 0xA2
+extra = 0x00000000
+matrix = 5
+
+[[keys]]
+id = 78
+label = "LWin"
+rect = [69, 252, 109, 282]
+kind = 0x02
+code = 0x5B
+extra = 0x00000000
+matrix = 11
+
+[[keys]]
+id = 79
+label = "LAlt"
+rect = [124, 252, 164, 282]
+kind = 0x02
+code = 0xA4
+extra = 0x00000000
+matrix = 17
+
+[[keys]]
+id = 80
+label = "Space"
+rect = [179, 251, 439, 281]
+kind = 0x02
+code = 0x20
+extra = 0x00000000
+matrix = 35
+
+[[keys]]
+id = 81
+label = "RAlt"
+rect = [456, 251, 496, 281]
+kind = 0x02
+code = 0xA5
+extra = 0x00000000
+matrix = 53
+
+[[keys]]
+id = 82
+label = "FN"
+rect = [510, 251, 550, 281]
+kind = 0x02
+code = 0xFA
+extra = 0x00000000
+matrix = 59
+
+[[keys]]
+id = 83
+label = "App"
+rect = [565, 251, 605, 281]
+kind = 0x02
+code = 0x5D
+extra = 0x00000000
+matrix = 65
+
+[[keys]]
+id = 84
+label = "RCtrl"
+rect = [619, 250, 659, 280]
+kind = 0x02
+code = 0xA3
+extra = 0x00000000
+matrix = 77
+
+[[keys]]
+id = 85
+label = "Left"
+rect = [683, 250, 715, 280]
+kind = 0x02
+code = 0x25
+extra = 0x00000000
+matrix = 89
+
+[[keys]]
+id = 86
+label = "Down"
+rect = [723, 250, 759, 280]
+kind = 0x02
+code = 0x28
+extra = 0x00000000
+matrix = 95
+
+[[keys]]
+id = 87
+label = "Right"
+rect = [766, 250, 802, 280]
+kind = 0x02
+code = 0x27
+extra = 0x00000000
+matrix = 101

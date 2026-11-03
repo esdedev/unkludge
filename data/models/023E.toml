@@ -1,0 +1,24 @@
+pid = 0x023E
+name = "RK100"
+protocol = "v1"
+fw = 0
+status = "experimental"
+layout = "0056"
+
+[lighting]
+sleep = true
+effects = [
+  { id = 1, name = "Solid", speed = false, brightness = true, rainbow = false, color = false },
+  { id = 2, name = "Breathing", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 3, name = "Rainbow", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 4, name = "Flash", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 5, name = "Raindrops", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 6, name = "Colour wheel", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 7, name = "Ripples", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 8, name = "Starlight", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 9, name = "Fade", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 10, name = "Snake", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 11, name = "Neon", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 12, name = "Reactive", speed = true, brightness = true, rainbow = false, color = false },
+  { id = 13, name = "Sine wave", speed = false, brightness = false, rainbow = false, color = false },
+]
