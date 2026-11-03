@@ -572,7 +572,6 @@ matrix = 4
 
 [[keys]]
 id = 61
-label = "K132"
 rect = [27, 225, 54, 256]
 kind = 0x02
 code = 0xDA

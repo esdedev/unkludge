@@ -958,7 +958,6 @@ fn1 = { kind = 0x02, code = 0x23, extra = 0x00000000 }
 
 [[keys]]
 id = 99
-label = "K131"
 rect = [194, 263, 225, 297]
 kind = 0x02
 code = 0xEB
@@ -967,7 +966,6 @@ matrix = 23
 
 [[keys]]
 id = 100
-label = "K132"
 rect = [383, 262, 412, 296]
 kind = 0x02
 code = 0xDA
@@ -976,7 +974,6 @@ matrix = 41
 
 [[keys]]
 id = 101
-label = "K133"
 rect = [428, 262, 457, 296]
 kind = 0x02
 code = 0xD7
@@ -985,7 +982,6 @@ matrix = 47
 
 [[keys]]
 id = 102
-label = "K14"
 rect = [602, 86, 631, 120]
 kind = 0x02
 code = 0xC3

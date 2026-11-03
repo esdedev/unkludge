@@ -74,25 +74,24 @@ fn section_index(sections: &mut Vec<Section>, name: &str) -> usize {
     sections.len() - 1
 }
 
-/// Decodes a config file. Returns the text, and whether bytes had to be replaced.
+/// Decodes a config file, or says why it can't.
 ///
-/// A `FF FE` BOM means UTF-16 LE. Anything else is read as UTF-8: most files are plain ASCII, and
-/// the ones with non-ASCII legends and no BOM are UTF-8. A file that is neither comes back with
-/// the bad bytes replaced and the flag set, so the caller can warn.
-pub fn decode(bytes: &[u8]) -> (String, bool) {
+/// A `FF FE` BOM means UTF-16 LE. Anything else must be UTF-8: most files are plain ASCII, and the
+/// ones with non-ASCII legends and no BOM are UTF-8. Nothing is replaced, so a bad legend can't
+/// reach the output.
+pub fn decode(bytes: &[u8]) -> Result<String, String> {
     if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
-        let (pairs, _) = rest.as_chunks::<2>();
+        let (pairs, odd) = rest.as_chunks::<2>();
+        if !odd.is_empty() {
+            return Err("UTF-16 with an odd number of bytes".to_string());
+        }
         let units: Vec<u16> = pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect();
-        return match String::from_utf16(&units) {
-            Ok(text) => (text, false),
-            Err(_) => (String::from_utf16_lossy(&units), true),
-        };
+        return String::from_utf16(&units).map_err(|_| "invalid UTF-16".to_string());
     }
     let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
-    match std::str::from_utf8(bytes) {
-        Ok(text) => (text.to_string(), false),
-        Err(_) => (String::from_utf8_lossy(bytes).into_owned(), true),
-    }
+    std::str::from_utf8(bytes)
+        .map(str::to_string)
+        .map_err(|_| "neither UTF-16 with a BOM nor UTF-8".to_string())
 }
 
 /// Parses a decimal or `0x` hexadecimal number.
@@ -190,30 +189,55 @@ mod tests {
     }
 
     #[test]
-    fn decodes_utf16_when_the_bom_says_so() {
+    fn a_section_line_clears_a_pending_label() {
+        let ini = Ini::parse("[KEY]\n;Note\n[FN1]\nK1=1\n");
+        assert_eq!(ini.section("FN1").unwrap().entries[0].comment, None);
+    }
+
+    fn utf16_le(text: &str) -> Vec<u8> {
         let mut bytes = vec![0xFF, 0xFE];
-        for unit in "[OPT]\r\nFw=1".encode_utf16() {
+        for unit in text.encode_utf16() {
             bytes.extend_from_slice(&unit.to_le_bytes());
         }
-        assert_eq!(decode(&bytes), ("[OPT]\r\nFw=1".to_string(), false));
+        bytes
+    }
+
+    #[test]
+    fn decodes_utf16_when_the_bom_says_so() {
+        assert_eq!(decode(&utf16_le("[OPT]\r\nFw=1")).unwrap(), "[OPT]\r\nFw=1");
     }
 
     #[test]
     fn decodes_files_without_a_bom_as_utf8() {
-        assert_eq!(decode(b"[OPT]\nFw=1"), ("[OPT]\nFw=1".to_string(), false));
+        assert_eq!(decode(b"[OPT]\nFw=1").unwrap(), "[OPT]\nFw=1");
         let text = ";\u{97f3}\u{91cf}-";
-        assert_eq!(decode(text.as_bytes()), (text.to_string(), false));
+        assert_eq!(decode(text.as_bytes()).unwrap(), text);
     }
 
     #[test]
     fn drops_a_utf8_bom() {
-        assert_eq!(decode(b"\xEF\xBB\xBF[OPT]"), ("[OPT]".to_string(), false));
+        assert_eq!(decode(b"\xEF\xBB\xBF[OPT]").unwrap(), "[OPT]");
     }
 
     #[test]
-    fn flags_bytes_it_had_to_replace() {
-        let (text, replaced) = decode(b";\xC9\xCF\nFw=1");
-        assert!(replaced);
-        assert!(text.ends_with("\nFw=1"));
+    fn bytes_that_are_not_utf8_are_an_error() {
+        assert!(decode(b";\xC9\xCF\nFw=1").is_err());
+    }
+
+    #[test]
+    fn a_utf16_be_bom_is_an_error() {
+        assert!(decode(b"\xFE\xFF\x00[\x00O").is_err());
+    }
+
+    #[test]
+    fn a_lone_surrogate_is_an_error() {
+        assert!(decode(b"\xFF\xFE\x00\xD8").is_err());
+    }
+
+    #[test]
+    fn utf16_with_an_odd_number_of_bytes_is_an_error() {
+        let mut bytes = utf16_le("[OPT]");
+        bytes.push(b'x');
+        assert!(decode(&bytes).is_err());
     }
 }

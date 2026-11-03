@@ -976,7 +976,6 @@ matrix = 47
 
 [[keys]]
 id = 102
-label = "K14"
 rect = [585, 85, 613, 115]
 kind = 0x02
 code = 0xC3

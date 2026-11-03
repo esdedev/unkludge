@@ -933,7 +933,6 @@ matrix = 78
 
 [[keys]]
 id = 96
-label = "K14"
 rect = [562, 78, 592, 108]
 kind = 0x02
 code = 0xC3
@@ -942,7 +941,6 @@ matrix = 79
 
 [[keys]]
 id = 97
-label = "K131"
 rect = [188, 241, 218, 271]
 kind = 0x02
 code = 0xEB
@@ -951,7 +949,6 @@ matrix = 23
 
 [[keys]]
 id = 98
-label = "K132"
 rect = [359, 240, 389, 270]
 kind = 0x02
 code = 0xDA
@@ -960,7 +957,6 @@ matrix = 47
 
 [[keys]]
 id = 99
-label = "K133"
 rect = [401, 240, 431, 270]
 kind = 0x02
 code = 0xD7

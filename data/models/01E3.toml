@@ -824,7 +824,6 @@ matrix = 76
 
 [[keys]]
 id = 89
-label = "K56"
 rect = [502, 192, 526, 218]
 kind = 0x02
 code = 0xC1

@@ -28,10 +28,10 @@ const EFFECT_NAMES: [&str; 17] = [
     "Blossom",
 ];
 
-/// `[OPT]` keys whose meaning is known: the ones stored below, and the ones known to be UI hints
-/// or pacing values that the model files don't need. Anything else gets a warning, so a new key in
-/// a new RK release, or one nobody has worked out yet, doesn't pass silently.
-const KNOWN_KEYS: [&str; 39] = [
+/// `[OPT]` keys that don't warn. Anything else does, so a new key in a new RK release, or one that
+/// matters and nobody has worked out yet, doesn't pass silently.
+const KNOWN_KEYS: [&str; 66] = [
+    // Stored below, or known to be UI hints or pacing values the model files don't need.
     "AccessInter",
     "Channel",
     "CmdReset",
@@ -71,10 +71,45 @@ const KNOWN_KEYS: [&str; 39] = [
     "VerNeedToUpdate",
     "Wired",
     "siScreen",
+    // Seen, deliberately ignored. Their meaning isn't established; they just don't feed anything
+    // the model files store.
+    "DebounceHW",
+    "DebounceName",
+    "DebounceUI",
+    "DefSideLedIndex",
+    "GameGroupNum",
+    "KbLayout",
+    "KeyNotToSetColor",
+    "KeyUseLEDImg",
+    "LayerMask",
+    "LayoutKeyNum",
+    "MacroBufferNum",
+    "MaxEftKeyIndex",
+    "MaxKeyNum",
+    "Media",
+    "MusicMask",
+    "NoUpdate",
+    "RGBKb",
+    "ShowAutoDetect",
+    "ShowMusic",
+    "ShowRealTime",
+    "ShowSideLED",
+    "SideBri",
+    "SideSpeed",
+    "TapRange",
+    "TsDefault",
+    "TsOffset",
+    "clrGaoshou",
 ];
 
-/// Known keys that come numbered, as `LedOpt1`, `LedOpt2`...
-const KNOWN_NUMBERED_KEYS: [&str; 2] = ["LedOpt", "sf"];
+/// The same for keys that come numbered, as `LedOpt1`, `LedOpt2`... The last two are seen,
+/// deliberately ignored.
+const KNOWN_NUMBERED_KEYS: [&str; 4] = ["LedOpt", "sf", "GaoshouKey", "SideLedOpt"];
+
+const KNOWN_SECTIONS: [&str; 4] = ["OPT", "KEY", "FN1", "FN2"];
+
+/// The frame number on the wire is one byte.
+const MAX_FRAMES: u32 = 255;
 
 #[derive(Debug)]
 pub struct Screen {
@@ -101,7 +136,7 @@ pub struct Effect {
     pub brightness: bool,
     pub rainbow: bool,
     pub color: bool,
-    /// Effect byte when it isn't the same as `id`. 0 means "same as `id`".
+    /// Raw value of `LedOpt` column 0, not interpreted. Written only when non-zero.
     pub hw: u32,
 }
 
@@ -128,7 +163,7 @@ pub struct Layer {
     pub extra: u32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Key {
     pub id: u32,
     pub label: Option<String>,
@@ -148,6 +183,7 @@ pub struct Model {
     pub pid: u16,
     pub name: String,
     pub fw: u32,
+    /// From `KbImgUse`, until `resolve_layouts` decides whether it holds.
     pub layout: Option<u16>,
     pub screen: Option<Screen>,
     pub lighting: Lighting,
@@ -193,6 +229,10 @@ pub fn model_name(pid: u16, names: &BTreeMap<u16, String>) -> String {
 }
 
 pub fn parse_model(pid: u16, name: String, ini: &Ini) -> Result<Parsed, String> {
+    // A file in the wrong encoding or with renamed sections parses to nothing at all. Stop here
+    // rather than write an empty model.
+    let opt_section = ini.section("OPT").ok_or("no [OPT] section")?;
+    let key_section = ini.section("KEY").ok_or("no [KEY] section")?;
     let fw = opt_num(ini, "Fw")?.unwrap_or(0);
     if fw > 2 {
         return Err(format!("Fw={fw} isn't a known value"));
@@ -200,12 +240,8 @@ pub fn parse_model(pid: u16, name: String, ini: &Ini) -> Result<Parsed, String> 
     let layout = opt_num(ini, "KbImgUse")?
         .map(|value| to_u16(value, "KbImgUse"))
         .transpose()?;
-    let mut warnings = Vec::new();
-    // A model with a layout shares the keys of the model it points to.
-    let keys = match layout {
-        Some(_) => Vec::new(),
-        None => parse_keys(ini, &mut warnings)?,
-    };
+    let mut warnings = unknown_sections(ini);
+    let keys = parse_keys(key_section, ini, &mut warnings)?;
     let model = Model {
         pid,
         name,
@@ -218,7 +254,7 @@ pub fn parse_model(pid: u16, name: String, ini: &Ini) -> Result<Parsed, String> 
     };
     Ok(Parsed {
         model,
-        unknown: unknown_keys(ini),
+        unknown: unknown_keys(opt_section),
         warnings,
     })
 }
@@ -252,7 +288,15 @@ fn parse_screen(ini: &Ini) -> Result<Option<Screen>, String> {
     let Some(&[width, height]) = size.as_deref() else {
         return Err("ShowScreen without a width,height siScreen".to_string());
     };
+    if width == 0 || height == 0 {
+        return Err(format!("siScreen={width},{height} has no pixels"));
+    }
     let max_frames = max_frames.ok_or("ShowScreen without MaxScreenFrame")?;
+    if !(1..=MAX_FRAMES).contains(&max_frames) {
+        return Err(format!(
+            "MaxScreenFrame={max_frames} isn't 1 to {MAX_FRAMES}"
+        ));
+    }
     Ok(Some(Screen {
         width,
         height,
@@ -265,19 +309,9 @@ fn parse_screen(ini: &Ini) -> Result<Option<Screen>, String> {
 
 fn parse_lighting(ini: &Ini) -> Result<Lighting, String> {
     let brightness = opt_list(ini, "LightHW")?
-        .map(|list| {
-            list.into_iter()
-                .map(|value| {
-                    u8::try_from(value).map_err(|_| format!("LightHW value {value} isn't a byte"))
-                })
-                .collect::<Result<Vec<u8>, String>>()
-        })
+        .map(parse_brightness)
         .transpose()?;
-    // Packed as default<<16 | max<<8 | min.
-    let speed = opt_num(ini, "SpeedParam")?.map(|value| {
-        let [min, max, default, _] = value.to_le_bytes();
-        Speed { min, max, default }
-    });
+    let speed = opt_num(ini, "SpeedParam")?.map(parse_speed).transpose()?;
     Ok(Lighting {
         brightness,
         speed,
@@ -288,10 +322,33 @@ fn parse_lighting(ini: &Ini) -> Result<Lighting, String> {
     })
 }
 
+fn parse_brightness(list: Vec<u32>) -> Result<Vec<u8>, String> {
+    if list.is_empty() {
+        return Err("LightHW is empty".to_string());
+    }
+    list.into_iter()
+        .map(|value| u8::try_from(value).map_err(|_| format!("LightHW value {value} isn't a byte")))
+        .collect()
+}
+
+/// Packed as default<<16 | max<<8 | min.
+fn parse_speed(value: u32) -> Result<Speed, String> {
+    let [min, max, default, top] = value.to_le_bytes();
+    if top != 0 {
+        return Err(format!("SpeedParam={value:#x} has more than 3 bytes"));
+    }
+    if min > max {
+        return Err(format!(
+            "SpeedParam={value:#x} has min {min} above max {max}"
+        ));
+    }
+    Ok(Speed { min, max, default })
+}
+
 /// Reads `LedOpt1`, `LedOpt2`... and stops at the first missing number, like RK's own parser, so
 /// whatever comes after a gap is never read.
 ///
-/// Columns: effect byte override (0 = none), speed, brightness, direction, rainbow, colour.
+/// Columns: raw hardware value (see `Effect::hw`), speed, brightness, direction, rainbow, colour.
 fn parse_effects(ini: &Ini) -> Result<Vec<Effect>, String> {
     let mut effects = Vec::new();
     for id in 1u32.. {
@@ -315,6 +372,9 @@ fn parse_effects(ini: &Ini) -> Result<Vec<Effect>, String> {
             hw,
         });
     }
+    if effects.is_empty() {
+        return Err("no LedOpt1".to_string());
+    }
     Ok(effects)
 }
 
@@ -331,16 +391,21 @@ fn parse_wireless(ini: &Ini) -> Result<Option<Wireless>, String> {
     }
 }
 
-/// `K<n>` number of a key entry.
+/// `K<n>` number of a key entry. Also tells a real legend from a comment that only names a key.
 fn key_id(key: &str) -> Option<u32> {
-    key.strip_prefix('K')?.parse().ok()
+    let digits = key.strip_prefix('K')?;
+    if !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
 }
 
-fn parse_keys(ini: &Ini, warnings: &mut Vec<String>) -> Result<Vec<Key>, String> {
+fn parse_keys(
+    section: &Section,
+    ini: &Ini,
+    warnings: &mut Vec<String>,
+) -> Result<Vec<Key>, String> {
     let mut keys = Vec::new();
-    let Some(section) = ini.section("KEY") else {
-        return Ok(keys);
-    };
     for entry in &section.entries {
         let Some(id) = key_id(&entry.key) else {
             warnings.push(format!("{} in KEY isn't a key", entry.key));
@@ -365,7 +430,10 @@ fn parse_keys(ini: &Ini, warnings: &mut Vec<String>) -> Result<Vec<Key>, String>
         };
         keys.push(Key {
             id,
-            label: entry.comment.clone(),
+            label: entry
+                .comment
+                .clone()
+                .filter(|comment| key_id(comment).is_none()),
             rect: [left, top, right, bottom],
             kind,
             code,
@@ -377,6 +445,10 @@ fn parse_keys(ini: &Ini, warnings: &mut Vec<String>) -> Result<Vec<Key>, String>
         });
     }
     keys.sort_by_key(|key| key.id);
+    // The parser already keeps the first of two identical spellings; these are K1 and K01.
+    if let Some(pair) = keys.windows(2).find(|pair| pair[0].id == pair[1].id) {
+        return Err(format!("K{} is in KEY under two spellings", pair[0].id));
+    }
     if let Some(section) = ini.section("FN1") {
         for (index, layer) in parse_layer(section, &keys, warnings)? {
             keys[index].fn1 = Some(layer);
@@ -397,6 +469,7 @@ fn parse_layer(
     warnings: &mut Vec<String>,
 ) -> Result<Vec<(usize, Layer)>, String> {
     let mut layers = Vec::new();
+    let mut seen = BTreeSet::new();
     for entry in &section.entries {
         let columns = parse_list(&entry.value);
         let Some(&[kind, code, extra]) = columns.as_deref() else {
@@ -405,7 +478,13 @@ fn parse_layer(
                 entry.key, entry.value, section.name
             ));
         };
-        let index = key_id(&entry.key).and_then(|id| keys.iter().position(|key| key.id == id));
+        let id = key_id(&entry.key);
+        if let Some(id) = id
+            && !seen.insert(id)
+        {
+            return Err(format!("K{id} is in {} under two spellings", section.name));
+        }
+        let index = id.and_then(|id| keys.iter().position(|key| key.id == id));
         match index {
             Some(index) => layers.push((index, Layer { kind, code, extra })),
             None => warnings.push(format!("{} in {} has no key", entry.key, section.name)),
@@ -414,10 +493,15 @@ fn parse_layer(
     Ok(layers)
 }
 
-fn unknown_keys(ini: &Ini) -> Vec<String> {
-    let Some(section) = ini.section("OPT") else {
-        return Vec::new();
-    };
+fn unknown_sections(ini: &Ini) -> Vec<String> {
+    ini.sections
+        .iter()
+        .filter(|section| !KNOWN_SECTIONS.contains(&section.name.as_str()))
+        .map(|section| format!("unknown section [{}]", section.name))
+        .collect()
+}
+
+fn unknown_keys(section: &Section) -> Vec<String> {
     let mut unknown = BTreeSet::new();
     for entry in &section.entries {
         let key = entry.key.as_str();
@@ -431,6 +515,34 @@ fn unknown_keys(ini: &Ini) -> Vec<String> {
         }
     }
     unknown.into_iter().collect()
+}
+
+/// Second pass over the set, comparing each model that has a layout with the model it points to.
+/// Identical keys: the layout stays and the model stores none. Any difference: the model drops the
+/// layout and stores its own. A layout to a missing model is left for `validate`.
+///
+/// Returns how many models ended up with their own keys despite pointing to another model.
+pub fn resolve_layouts(models: &mut [Model]) -> usize {
+    let same_keys: Vec<Option<bool>> = models
+        .iter()
+        .map(|model| {
+            let layout = model.layout?;
+            let target = models.iter().find(|target| target.pid == layout)?;
+            Some(model.keys == target.keys)
+        })
+        .collect();
+    let mut own_keys = 0;
+    for (model, same_keys) in models.iter_mut().zip(same_keys) {
+        match same_keys {
+            Some(true) => model.keys.clear(),
+            Some(false) => {
+                model.layout = None;
+                own_keys += 1;
+            }
+            None => {}
+        }
+    }
+    own_keys
 }
 
 /// Checks the whole set. Returns one message per problem.
@@ -451,7 +563,7 @@ pub fn validate(models: &[Model]) -> Vec<String> {
         if let Some(layout) = model.layout {
             match by_pid.get(&layout) {
                 None => errors.push(format!("{pid:04X}: layout {layout:04X} doesn't exist")),
-                Some(target) if target.layout.is_some() => {
+                Some(target) if target.layout.is_some() || target.keys.is_empty() => {
                     errors.push(format!("{pid:04X}: layout {layout:04X} has no keys"));
                 }
                 Some(_) => {}
@@ -596,9 +708,25 @@ mod tests {
 
     const LED: &str = "LedOpt1=0,0,1,0,1,1\nLedOpt2=0,1,1,0,0,0\n";
 
+    /// Smallest valid file. `opt` comes first so its keys win over the default effect: repeated
+    /// keys keep the first.
+    fn file(opt: &str) -> String {
+        format!("[OPT]\n{opt}\nLedOpt1=0,0,0,0,0,0\n[KEY]\n;Esc\nK1=1,2,3,4,0x02,0x1B,0x00,0\n")
+    }
+
     fn parse(opt: &str) -> Parsed {
-        let text = format!("[OPT]\n{opt}\n[KEY]\n;Esc\nK1=1,2,3,4,0x02,0x1B,0x00,0\n");
-        parse_model(0x0265, "RK Test".to_string(), &Ini::parse(&text)).unwrap()
+        parse_model(0x0265, "RK Test".to_string(), &Ini::parse(&file(opt))).unwrap()
+    }
+
+    /// The error for a file that is valid except for `opt`.
+    fn error(opt: &str) -> String {
+        parse_model(0x0265, "RK Test".to_string(), &Ini::parse(&file(opt))).unwrap_err()
+    }
+
+    /// A valid `[OPT]` followed by these sections.
+    fn with_sections(sections: &str) -> Result<Parsed, String> {
+        let text = format!("[OPT]\nLedOpt1=0,0,0,0,0,0\n{sections}");
+        parse_model(1, "x".to_string(), &Ini::parse(&text))
     }
 
     fn model(opt: &str) -> Model {
@@ -617,8 +745,7 @@ mod tests {
 
     #[test]
     fn unknown_fw_is_an_error() {
-        let ini = Ini::parse("[OPT]\nFw=3\n[KEY]\n");
-        let error = parse_model(1, "x".to_string(), &ini).unwrap_err();
+        let error = error("Fw=3");
         assert!(error.contains("Fw"), "{error}");
     }
 
@@ -663,8 +790,64 @@ mod tests {
             "ShowScreen=1\nsiScreen=320\nMaxScreenFrame=60",
             "siScreen=320,172\nMaxScreenFrame=60",
         ] {
-            let ini = Ini::parse(&format!("[OPT]\nFw=1\n{opt}\n[KEY]\n"));
-            assert!(parse_model(1, "x".to_string(), &ini).is_err(), "{opt}");
+            let error = error(&format!("Fw=1\n{opt}"));
+            assert!(error.contains("Screen"), "{opt}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_screen_with_no_pixels_is_an_error() {
+        for size in ["0,172", "320,0"] {
+            let error = error(&format!("ShowScreen=1\nsiScreen={size}\nMaxScreenFrame=60"));
+            assert!(error.contains("siScreen"), "{size}: {error}");
+        }
+    }
+
+    #[test]
+    fn max_frames_must_fit_the_frame_byte() {
+        let frames = |n: u32| format!("ShowScreen=1\nsiScreen=8,8\nMaxScreenFrame={n}");
+        assert_eq!(model(&frames(200)).screen.unwrap().max_frames, 200);
+        assert_eq!(model(&frames(255)).screen.unwrap().max_frames, 255);
+        for n in [0, 256] {
+            let error = error(&frames(n));
+            assert!(error.contains("MaxScreenFrame"), "{n}: {error}");
+        }
+    }
+
+    #[test]
+    fn missing_sections_are_errors() {
+        let parse = |text: &str| parse_model(1, "x".to_string(), &Ini::parse(text));
+        for (text, expected) in [
+            ("", "OPT"),
+            ("[KEY]\nK1=1,2,3,4,2,1,0,0\n", "OPT"),
+            ("[opt]\nLedOpt1=0,0,0,0,0,0\n[KEY]\n", "OPT"),
+            ("[OPT]\nLedOpt1=0,0,0,0,0,0\n", "KEY"),
+            ("[OPT]\nLedOpt1=0,0,0,0,0,0\n[key]\n", "KEY"),
+        ] {
+            let error = parse(text).unwrap_err();
+            assert!(error.contains(expected), "{text:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_file_with_no_effects_is_an_error() {
+        let parse = |text: &str| parse_model(1, "x".to_string(), &Ini::parse(text));
+        let error = parse("[OPT]\n[KEY]\n").unwrap_err();
+        assert!(error.contains("LedOpt1"), "{error}");
+        // A gap at the very start also means nothing is read.
+        let error = parse("[OPT]\nLedOpt2=0,0,0,0,0,0\n[KEY]\n").unwrap_err();
+        assert!(error.contains("LedOpt1"), "{error}");
+    }
+
+    #[test]
+    fn values_too_big_for_16_bits_are_errors_not_truncated() {
+        for (opt, expected) in [
+            ("KbImgUse=0x10000", "KbImgUse"),
+            ("VID_Wireless=0x10000\nPID_Wireless=0x0150", "VID_Wireless"),
+            ("VID_Wireless=0x258A\nPID_Wireless=0x10000", "PID_Wireless"),
+        ] {
+            let error = error(opt);
+            assert!(error.contains(expected), "{opt}: {error}");
         }
     }
 
@@ -685,8 +868,8 @@ mod tests {
 
     #[test]
     fn half_a_wireless_pair_is_an_error() {
-        let ini = Ini::parse("[OPT]\nVID_Wireless=0x258a\n[KEY]\n");
-        assert!(parse_model(1, "x".to_string(), &ini).is_err());
+        let error = error("VID_Wireless=0x258a");
+        assert!(error.contains("Wireless"), "{error}");
     }
 
     #[test]
@@ -699,10 +882,25 @@ mod tests {
     }
 
     #[test]
+    fn speed_param_out_of_range_is_an_error() {
+        // Top byte set.
+        assert!(error("SpeedParam=0x01010500").contains("SpeedParam"));
+        // min 5 above max 1.
+        assert!(error("SpeedParam=0x010105").contains("SpeedParam"));
+    }
+
+    #[test]
     fn light_hw_is_the_brightness_list() {
         let lighting = model("LightUI=9,9\nLightHW=0,4,8,12,16,20").lighting;
         assert_eq!(lighting.brightness, Some(vec![0, 4, 8, 12, 16, 20]));
         assert!(model("LightUI=9,9").lighting.brightness.is_none());
+    }
+
+    #[test]
+    fn light_hw_must_be_a_list_of_bytes() {
+        assert_eq!(model("LightHW=255").lighting.brightness, Some(vec![255]));
+        assert!(error("LightHW=256").contains("LightHW"));
+        assert!(error("LightHW=").contains("LightHW"));
     }
 
     #[test]
@@ -770,8 +968,7 @@ mod tests {
 
     #[test]
     fn short_led_opt_is_an_error() {
-        let ini = Ini::parse("[OPT]\nLedOpt1=0,1,1\n[KEY]\n");
-        assert!(parse_model(1, "x".to_string(), &ini).is_err());
+        assert!(error("LedOpt1=0,1,1").contains("LedOpt1"));
     }
 
     #[test]
@@ -799,14 +996,38 @@ mod tests {
     }
 
     #[test]
+    fn seen_and_ignored_keys_do_not_warn() {
+        let parsed =
+            parse("DebounceHW=1,4\nRGBKb=1\nclrGaoshou=1,2,3\nGaoshouKey1=1b\nSideLedOpt1=0");
+        assert!(parsed.unknown.is_empty(), "{:?}", parsed.unknown);
+    }
+
+    #[test]
+    fn keys_nobody_has_explained_keep_warning() {
+        let parsed = parse("OtherFun=1\nUnRectKey=1,2");
+        assert_eq!(parsed.unknown, ["OtherFun", "UnRectKey"]);
+    }
+
+    #[test]
+    fn unknown_sections_are_a_warning() {
+        let parsed = with_sections("[KEY]\n[FN3]\nK1=1,2,3\n").unwrap();
+        assert_eq!(parsed.warnings, ["unknown section [FN3]"]);
+        assert!(
+            with_sections("[KEY]\n[FN1]\n[FN2]\n")
+                .unwrap()
+                .warnings
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn key_line_with_type_code_extra_and_matrix() {
-        let text = "[OPT]\n[KEY]\nK87=0,0,0,0,0x09,0x01,0x0700000D,84\n";
-        let parsed = parse_model(1, "x".to_string(), &Ini::parse(text)).unwrap();
+        let parsed = with_sections("[KEY]\nK70=0,0,0,0,0x09,0x02,0x0600000E,77\n").unwrap();
         let key = &parsed.model.keys[0];
-        assert_eq!(key.id, 87);
+        assert_eq!(key.id, 70);
         assert_eq!(key.rect, [0, 0, 0, 0]);
-        assert_eq!((key.kind, key.code, key.extra), (9, 1, 0x0700_000D));
-        assert_eq!(key.matrix, 84);
+        assert_eq!((key.kind, key.code, key.extra), (9, 2, 0x0600_000E));
+        assert_eq!(key.matrix, 77);
         assert!(key.matrix_extra.is_empty());
     }
 
@@ -821,48 +1042,90 @@ mod tests {
 
     #[test]
     fn key_line_with_more_matrix_columns() {
-        let text = "[OPT]\n[KEY]\nK59=145,187,167,209, 0x02,0x5A,0x00,10,10,16\n";
-        let parsed = parse_model(1, "x".to_string(), &Ini::parse(text)).unwrap();
+        let parsed = with_sections("[KEY]\nK7=11,22,33,44, 0x02,0x41,0x00,5,5,9\n").unwrap();
         let key = &parsed.model.keys[0];
-        assert_eq!(key.matrix, 10);
-        assert_eq!(key.matrix_extra, [10, 16]);
+        assert_eq!(key.matrix, 5);
+        assert_eq!(key.matrix_extra, [5, 9]);
     }
 
     #[test]
     fn short_key_line_is_an_error() {
-        let ini = Ini::parse("[OPT]\n[KEY]\nK1=1,2,3\n");
-        let error = parse_model(1, "x".to_string(), &ini).unwrap_err();
+        let error = with_sections("[KEY]\nK1=1,2,3\n").unwrap_err();
         assert!(error.contains("K1"), "{error}");
     }
 
     #[test]
     fn keys_are_sorted_by_number() {
-        let text = "[OPT]\n[KEY]\nK10=0,0,0,0,2,1,0,0\nK2=0,0,0,0,2,1,0,0\n";
-        let parsed = parse_model(1, "x".to_string(), &Ini::parse(text)).unwrap();
+        let parsed = with_sections("[KEY]\nK10=0,0,0,0,2,1,0,0\nK2=0,0,0,0,2,1,0,0\n").unwrap();
         let ids: Vec<u32> = parsed.model.keys.iter().map(|k| k.id).collect();
         assert_eq!(ids, [2, 10]);
     }
 
     #[test]
+    fn two_spellings_of_a_key_number_are_an_error() {
+        let error = with_sections("[KEY]\nK1=0,0,0,0,2,1,0,0\nK01=0,0,0,0,2,1,0,0\n").unwrap_err();
+        assert!(error.contains("K1"), "{error}");
+        let error =
+            with_sections("[KEY]\nK1=0,0,0,0,2,1,0,0\n[FN1]\nK1=2,1,0\nK01=2,2,0\n").unwrap_err();
+        assert!(error.contains("K1"), "{error}");
+    }
+
+    #[test]
+    fn the_same_spelling_twice_keeps_the_first() {
+        let parsed = with_sections("[KEY]\nK1=0,0,0,0,2,7,0,0\nK1=0,0,0,0,2,8,0,0\n").unwrap();
+        assert_eq!(parsed.model.keys.len(), 1);
+        assert_eq!(parsed.model.keys[0].code, 7);
+    }
+
+    #[test]
+    fn a_line_in_key_that_is_not_a_key_is_a_warning() {
+        let parsed =
+            with_sections("[KEY]\nFoo=1\nK+1=0,0,0,0,2,1,0,0\nK2=0,0,0,0,2,1,0,0\n").unwrap();
+        assert_eq!(
+            parsed.warnings,
+            ["Foo in KEY isn't a key", "K+1 in KEY isn't a key"]
+        );
+        assert_eq!(parsed.model.keys.len(), 1);
+    }
+
+    #[test]
+    fn a_comment_naming_a_key_number_is_not_a_legend() {
+        let parsed = with_sections(
+            "[KEY]\n;K14\nK1=0,0,0,0,2,1,0,0\n;K\nK2=0,0,0,0,2,1,0,0\n\
+             ;K2x\nK3=0,0,0,0,2,1,0,0\nK131\nK4=0,0,0,0,2,1,0,0\n",
+        )
+        .unwrap();
+        let labels: Vec<Option<&str>> = parsed
+            .model
+            .keys
+            .iter()
+            .map(|key| key.label.as_deref())
+            .collect();
+        assert_eq!(labels, [None, Some("K"), Some("K2x"), None]);
+    }
+
+    #[test]
     fn fn_layers_attach_to_their_key() {
-        let text = "[OPT]\n[KEY]\nK1=0,0,0,0,2,0x1B,0,0\nK2=0,0,0,0,2,0x70,0,1\n\
-                    [FN1]\n;F1\nK2=0x09,0x01,0x02000194\n[FN2]\nK1=0x02,0x91,0x00,\n";
-        let parsed = parse_model(1, "x".to_string(), &Ini::parse(text)).unwrap();
+        let parsed = with_sections(
+            "[KEY]\nK1=0,0,0,0,2,0x1B,0,0\nK2=0,0,0,0,2,0x70,0,1\n\
+             [FN1]\n;F1\nK2=0x09,0x03,0x05000123\n[FN2]\nK1=0x02,0x92,0x00,\n",
+        )
+        .unwrap();
         let keys = &parsed.model.keys;
         assert_eq!(keys[0].fn1, None);
         assert_eq!(
             keys[1].fn1,
             Some(Layer {
                 kind: 9,
-                code: 1,
-                extra: 0x0200_0194
+                code: 3,
+                extra: 0x0500_0123
             })
         );
         assert_eq!(
             keys[0].fn2,
             Some(Layer {
                 kind: 2,
-                code: 0x91,
+                code: 0x92,
                 extra: 0
             })
         );
@@ -871,16 +1134,104 @@ mod tests {
 
     #[test]
     fn fn_entry_without_a_key_is_a_warning() {
-        let text = "[OPT]\n[KEY]\n[FN1]\nK9=2,1,0\n";
-        let parsed = parse_model(1, "x".to_string(), &Ini::parse(text)).unwrap();
-        assert_eq!(parsed.warnings.len(), 1);
-        assert!(parsed.warnings[0].contains("K9"));
+        let parsed = with_sections("[KEY]\n[FN1]\nK9=2,1,0\n").unwrap();
+        assert_eq!(parsed.warnings, ["K9 in FN1 has no key"]);
+    }
+
+    const KEYS: &str = "[KEY]\n;Esc\nK1=1,2,3,4,2,0x1B,7,5,6\n[FN1]\nK1=9,1,7\n[FN2]\nK1=9,1,8\n";
+
+    /// A model with these key sections, pointing to `layout` if there is one.
+    fn keyed(pid: u16, layout: Option<u16>, sections: &str) -> Model {
+        let pointer = layout.map_or(String::new(), |l| format!("KbImgUse=0x{l:04X}\n"));
+        let text = format!("[OPT]\n{pointer}LedOpt1=0,0,0,0,0,0\n{sections}");
+        parse_model(pid, "x".to_string(), &Ini::parse(&text))
+            .unwrap()
+            .model
     }
 
     #[test]
-    fn models_with_a_layout_store_no_keys() {
-        assert!(model("KbImgUse=0x01fa").keys.is_empty());
-        assert_eq!(model("").keys.len(), 1);
+    fn identical_keys_keep_the_layout_and_store_none() {
+        // The pointing model comes first: order in the set must not matter.
+        let mut models = [keyed(2, Some(1), KEYS), keyed(1, None, KEYS)];
+        assert_eq!(resolve_layouts(&mut models), 0);
+        assert_eq!(models[0].layout, Some(1));
+        assert!(models[0].keys.is_empty());
+        assert_eq!(models[1].layout, None);
+        assert_eq!(models[1].keys.len(), 1);
+        let text = to_toml(&models[0]);
+        assert!(text.contains("layout = \"0001\"\n"), "{text}");
+        assert!(!text.contains("[[keys]]"), "{text}");
+        assert!(validate(&models).is_empty());
+    }
+
+    #[test]
+    fn any_key_difference_gives_the_model_its_own_keys() {
+        for (field, sections) in [
+            (
+                "rect",
+                "[KEY]\n;Esc\nK1=9,2,3,4,2,0x1B,7,5,6\n[FN1]\nK1=9,1,7\n[FN2]\nK1=9,1,8\n",
+            ),
+            (
+                "kind",
+                "[KEY]\n;Esc\nK1=1,2,3,4,3,0x1B,7,5,6\n[FN1]\nK1=9,1,7\n[FN2]\nK1=9,1,8\n",
+            ),
+            (
+                "code",
+                "[KEY]\n;Esc\nK1=1,2,3,4,2,0x1C,7,5,6\n[FN1]\nK1=9,1,7\n[FN2]\nK1=9,1,8\n",
+            ),
+            (
+                "extra",
+                "[KEY]\n;Esc\nK1=1,2,3,4,2,0x1B,8,5,6\n[FN1]\nK1=9,1,7\n[FN2]\nK1=9,1,8\n",
+            ),
+            (
+                "matrix",
+                "[KEY]\n;Esc\nK1=1,2,3,4,2,0x1B,7,4,6\n[FN1]\nK1=9,1,7\n[FN2]\nK1=9,1,8\n",
+            ),
+            (
+                "matrix_extra",
+                "[KEY]\n;Esc\nK1=1,2,3,4,2,0x1B,7,5\n[FN1]\nK1=9,1,7\n[FN2]\nK1=9,1,8\n",
+            ),
+            (
+                "fn1",
+                "[KEY]\n;Esc\nK1=1,2,3,4,2,0x1B,7,5,6\n[FN1]\nK1=9,2,7\n[FN2]\nK1=9,1,8\n",
+            ),
+            (
+                "fn2",
+                "[KEY]\n;Esc\nK1=1,2,3,4,2,0x1B,7,5,6\n[FN1]\nK1=9,1,7\n[FN2]\nK1=9,2,8\n",
+            ),
+            (
+                "label",
+                "[KEY]\n;Tab\nK1=1,2,3,4,2,0x1B,7,5,6\n[FN1]\nK1=9,1,7\n[FN2]\nK1=9,1,8\n",
+            ),
+            (
+                "key count",
+                "[KEY]\n;Esc\nK1=1,2,3,4,2,0x1B,7,5,6\nK2=1,2,3,4,2,1,0,0\n[FN1]\nK1=9,1,7\n[FN2]\nK1=9,1,8\n",
+            ),
+        ] {
+            let mut models = [keyed(2, Some(1), sections), keyed(1, None, KEYS)];
+            assert_eq!(resolve_layouts(&mut models), 1, "{field}");
+            assert_eq!(models[0].layout, None, "{field}");
+            assert!(!models[0].keys.is_empty(), "{field}");
+            let text = to_toml(&models[0]);
+            assert!(!text.contains("layout"), "{field}: {text}");
+            assert!(text.contains("[[keys]]"), "{field}: {text}");
+            assert!(validate(&models).is_empty(), "{field}");
+        }
+    }
+
+    #[test]
+    fn a_legend_that_only_names_a_key_number_does_not_count_as_a_difference() {
+        let sections = KEYS.replace(";Esc", ";K14");
+        let owner = KEYS.replace(";Esc\n", "");
+        let mut models = [keyed(2, Some(1), &sections), keyed(1, None, &owner)];
+        assert_eq!(resolve_layouts(&mut models), 0);
+    }
+
+    #[test]
+    fn a_layout_to_a_missing_model_is_left_for_validate() {
+        let mut models = [keyed(2, Some(1), KEYS)];
+        assert_eq!(resolve_layouts(&mut models), 0);
+        assert_eq!(validate(&models).len(), 1);
     }
 
     #[test]
@@ -953,6 +1304,15 @@ mod tests {
     }
 
     #[test]
+    fn layout_to_an_owner_with_no_keys_is_an_error() {
+        let mut empty = stub(2, 1, None);
+        empty.keys.clear();
+        let errors = validate(&[stub(1, 1, Some(2)), empty]);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("0002"), "{}", errors[0]);
+    }
+
+    #[test]
     fn screen_outside_fw_1_is_an_error() {
         let opt = "Fw=2\nShowScreen=1\nsiScreen=1,1\nMaxScreenFrame=1";
         let errors = validate(&[model(opt)]);
@@ -966,6 +1326,7 @@ mod tests {
                    VID_Wireless=0x258a\nPID_Wireless=0x0150\n";
         let mut model = model(opt);
         model.name = "RK S85 ES".to_string();
+        model.keys.clear();
         let expected = r#"pid = 0x0265
 name = "RK S85 ES"
 protocol = "v2"
@@ -1000,7 +1361,7 @@ pid = 0x0150
     fn toml_for_a_model_with_keys() {
         let text = "[OPT]\nLedMask=0x2100\nLedOpt1=3,1,0,0,0,0\n\
                     [KEY]\n;\\\nK2=1,2,3,4,0x02,0xDC,0x00,7\n;\"\nK3=0,0,0,0,0x09,0x01,0x0700000D,8,8,9\n\
-                    K4=0,0,0,0,0x02,0x20,0x00,1\n[FN1]\nK2=0x09,0x01,0x02000194\n[FN2]\nK2=0x02,0x91,0x00\n";
+                    K4=0,0,0,0,0x02,0x20,0x00,1\n[FN1]\nK2=0x09,0x03,0x05000123\n[FN2]\nK2=0x02,0x92,0x00\n";
         let parsed = parse_model(0x00AB, "RK \"Q\"".to_string(), &Ini::parse(text)).unwrap();
         let expected = r#"pid = 0x00AB
 name = "RK \"Q\""
@@ -1023,8 +1384,8 @@ kind = 0x02
 code = 0xDC
 extra = 0x00000000
 matrix = 7
-fn1 = { kind = 0x09, code = 0x01, extra = 0x02000194 }
-fn2 = { kind = 0x02, code = 0x91, extra = 0x00000000 }
+fn1 = { kind = 0x09, code = 0x03, extra = 0x05000123 }
+fn2 = { kind = 0x02, code = 0x92, extra = 0x00000000 }
 
 [[keys]]
 id = 3
