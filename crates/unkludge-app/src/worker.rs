@@ -6,40 +6,52 @@
 //! device comes from is up to a factory, which is also how a demo build gets a keyboard that doesn't
 //! exist.
 //!
-//! **During an upload** the worker is inside the upload, and only sees commands between chunks:
+//! **During an upload** the worker is inside the upload. It sees commands between steps, and those
+//! that come during the upload's last pauses right after it, all under these rules:
 //! - A lighting change, or another upload, is refused with [`Problem::Busy`], and nothing about it
 //!   stays behind. An upload can take many minutes, so a change that took effect when it ended would
 //!   come as a surprise, and whether a keyboard takes config writes during an upload is unknown. The
 //!   interface should disable those controls between [`Event::UploadStarted`] and the end.
 //! - The clock waits, as the official app does while it's busy, and is set once after the upload
-//!   ends in any way. That covers [`Cmd::SyncClock`], and [`Cmd::Resumed`] with the automatic clock on.
+//!   ends in any way, if the keyboard is still there. [`Cmd::SyncClock`] always counts. For
+//!   [`Cmd::Resumed`] it depends on the automatic clock still being on by then.
 //! - [`Cmd::LoadImage`] and [`Cmd::Report`] work, neither of them touching the keyboard.
-//! - [`Cmd::Refresh`] does nothing, as the state gets read after the upload anyway.
+//! - [`Cmd::Refresh`] does nothing, as the next look at the keyboard is close after the upload.
 //!
 //! **Cancelling** goes straight from [`WorkerHandle::send`] to a flag that the upload reads, and
 //! [`Event::Cancelling`] goes out at once. A stalled keyboard can take up to 16 s to get through the
-//! ack waits that are left before [`Event::UploadCancelled`].
+//! ack waits that are left. Every `Cancelling` is followed by exactly one end event:
+//! [`Event::UploadCancelled`], or [`Event::UploadDone`] or [`Event::UploadFailed`] if the upload got
+//! to its end first. An upload that hasn't started by then doesn't start, and gets `UploadCancelled`.
+//!
+//! **A keyboard whose config block can't be used** stays connected, as it's there, but nothing is
+//! written to it: no lighting, no clock, no upload. Each command says [`Problem::UnusableConfig`], and
+//! a clock that was due is set if a later read comes back good.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError, channel};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use unkludge_protocol::clock::set_clock;
 use unkludge_protocol::config::Config;
-use unkludge_protocol::device::PacketEvent;
 use unkludge_protocol::lighting::{self, CurrentLighting, LightingChange, Palettes};
 use unkludge_protocol::model::Model;
-use unkludge_protocol::screen::{Animation, Fit, LoadOptions, Progress, UploadOutcome, UploadPlan};
+use unkludge_protocol::screen::{Animation, Fit, Progress, UploadOutcome, UploadPlan};
 use unkludge_protocol::transport::Transport;
 use unkludge_protocol::{Device, Error};
 use unkludge_shared::local_time::device_now;
 
+mod loader;
 #[cfg(test)]
 mod tests;
+mod timing;
+
+use loader::{LoadRequest, Loader, decode_image};
+use timing::{Beat, ChunkTime, ChunkTimer, WatchTimes, watch};
 
 /// How often to look for a keyboard when there is none.
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(2);
@@ -47,16 +59,30 @@ const RECONNECT_INTERVAL: Duration = Duration::from_secs(2);
 const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 /// How long a slider has to stay still before its value goes to the keyboard.
 const SETTLE_TIME: Duration = Duration::from_millis(300);
-/// The ack latency to assume until one has been measured: uploads were measured at 5 to 6 chunks a
-/// second on an S85 ES.
-const DEFAULT_ACK_LATENCY: Duration = Duration::from_millis(180);
 /// How many errors a report can list.
 const MAX_ERRORS: usize = 20;
-/// How long [`WorkerHandle::shutdown`] gives an upload to abort.
-const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
+
+/// How long things take when nothing is being tested.
+const TIMINGS: Timings = Timings {
+    watch: WatchTimes {
+        hung_after: Duration::from_secs(30),
+        check_every: Duration::from_secs(1),
+    },
+    shutdown_wait: Duration::from_secs(2),
+};
+
+#[derive(Clone, Copy)]
+struct Timings {
+    watch: WatchTimes,
+    /// How long [`WorkerHandle::shutdown`] gives an upload to abort.
+    shutdown_wait: Duration,
+}
 
 /// Wakes the interface so that it reads the waiting events. Must not block.
 pub type Notify = Arc<dyn Fn() + Send + Sync>;
+
+/// Where the worker gets the time, so that a test can have it pass differently.
+type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
 
 /// What the interface can ask for.
 pub enum Cmd {
@@ -67,13 +93,14 @@ pub enum Cmd {
     AdjustLighting(LightingChange),
     /// Sets the clock now, or after the upload if one is running.
     SyncClock,
-    /// The computer came back from sleep: sets the clock if the automatic clock is on, and checks
-    /// that the keyboard is still there.
+    /// The computer came back from sleep: looks at the keyboard now, and if it's still there sets
+    /// the clock, as long as the automatic clock is on.
     Resumed,
     /// Decodes a file for the connected keyboard's screen, on a thread of its own. Ends in
-    /// [`Event::ImageLoaded`] or [`Event::ImageFailed`], and a later request replaces an earlier one
-    /// still running. Change of fit or delay means loading again. Frames past the model's limit are
-    /// cut, which [`Animation::truncated`] says.
+    /// [`Event::ImageLoaded`] or [`Event::ImageFailed`], and a later request replaces an earlier one,
+    /// which then tells nothing, even if the later one is refused with [`Problem::NoKeyboard`].
+    /// Change of fit or delay means loading again. Frames past the model's limit are cut, which
+    /// [`Animation::truncated`] says.
     LoadImage {
         path: PathBuf,
         fit: Fit,
@@ -96,6 +123,8 @@ pub enum Problem {
     Busy,
     /// Needs a keyboard, and none is connected.
     NoKeyboard,
+    /// Would write to a keyboard whose config block can't be used, which isn't done.
+    UnusableConfig,
     Device(Error),
 }
 
@@ -107,7 +136,7 @@ pub struct LoadedImage {
     pub animation: Arc<Animation>,
     /// What an upload would send. It can have fewer frames than the animation.
     pub plan: UploadPlan,
-    /// How long uploading it may take, going by the ack latency measured so far.
+    /// How long uploading it may take: as [`Event::UploadStarted`] would say now.
     pub estimate: Duration,
 }
 
@@ -142,16 +171,19 @@ pub enum Event {
     ImageFailed(Error),
     /// An upload began. It ends in `UploadDone`, `UploadCancelled` or `UploadFailed`.
     UploadStarted {
+        /// The steps, as in [`Event::Progress`].
         total: usize,
+        /// The steps times the time a chunk takes, measured so far or else assumed.
         estimate: Duration,
     },
     Progress {
         done: usize,
         total: usize,
-        /// Going by the ack latency measured so far.
+        /// The steps left times the time a chunk takes, measured so far or else assumed.
         remaining: Duration,
     },
-    /// A cancel was asked for and the upload will stop soon. Tell the user, as it can take a while.
+    /// A cancel was asked for. Tell the user, as it can take a while. Exactly one of `UploadDone`,
+    /// `UploadCancelled` and `UploadFailed` follows.
     Cancelling,
     UploadDone,
     /// The keyboard took every frame but didn't acknowledge the finish, so it may not show the new
@@ -163,6 +195,11 @@ pub enum Event {
     Error(Problem),
     /// Told at the start and whenever it changes.
     RkAppRunning(bool),
+    /// Something the keyboard should have answered has taken over 30 s, and the worker can't do
+    /// anything else until it does. Told once, until `Responding`.
+    Hung,
+    /// After `Hung`, things have moved again.
+    Responding,
     ReportReady(ReportData),
 }
 
@@ -190,28 +227,43 @@ impl Emitter {
 /// What the interface's thread and the worker's share about an upload.
 #[derive(Default)]
 struct Shared {
-    uploading: AtomicBool,
+    /// Its lock also keeps a cancel and the end of an upload from crossing, so that a `Cancelling`
+    /// is always told before the end event.
+    uploading: Mutex<bool>,
     cancel: AtomicBool,
 }
 
 impl Shared {
-    /// Lets an upload that's been asked for be cancelled even before the worker gets to it. A cancel
-    /// from an upload still running stays set for that one.
+    /// Lets an upload that's been asked for be cancelled even before the worker gets to it.
     fn begin_upload(&self) {
-        if !self.uploading.swap(true, Ordering::SeqCst) {
-            self.cancel.store(false, Ordering::SeqCst);
-        }
+        *self
+            .uploading
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = true;
     }
 
     fn request_cancel(&self, emitter: &Emitter) {
-        if self.uploading.load(Ordering::SeqCst) && !self.cancel.swap(true, Ordering::SeqCst) {
+        let uploading = self
+            .uploading
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if *uploading && !self.cancel.swap(true, Ordering::SeqCst) {
             emitter.emit(Event::Cancelling);
         }
     }
 
-    fn end_upload(&self) {
-        self.uploading.store(false, Ordering::SeqCst);
-        self.cancel.store(false, Ordering::SeqCst);
+    fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::SeqCst)
+    }
+
+    /// Returns whether a cancel had been asked for.
+    fn end_upload(&self) -> bool {
+        let mut uploading = self
+            .uploading
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        *uploading = false;
+        self.cancel.swap(false, Ordering::SeqCst)
     }
 }
 
@@ -221,6 +273,8 @@ pub struct WorkerHandle {
     shared: Arc<Shared>,
     emitter: Emitter,
     thread: Option<JoinHandle<()>>,
+    beat: Arc<Beat>,
+    shutdown_wait: Duration,
 }
 
 impl WorkerHandle {
@@ -237,14 +291,22 @@ impl WorkerHandle {
         }
     }
 
-    /// Stops the worker, for quitting. An upload gets a moment to abort, so that the keyboard isn't
-    /// left waiting for the rest of it, but a stalled keyboard doesn't hold up quitting.
+    /// Stops the worker, for quitting. A slider that hasn't settled gets written. An upload gets a
+    /// moment to abort, so that the keyboard isn't left waiting for the rest of it, but a stalled
+    /// keyboard doesn't hold up quitting.
     pub fn shutdown(self) {
         self.shared.request_cancel(&self.emitter);
-        let WorkerHandle { cmds, thread, .. } = self;
+        let WorkerHandle {
+            cmds,
+            thread,
+            beat,
+            shutdown_wait,
+            ..
+        } = self;
         drop(cmds);
+        beat.close();
         let Some(thread) = thread else { return };
-        let deadline = Instant::now() + SHUTDOWN_WAIT;
+        let deadline = Instant::now() + shutdown_wait;
         while !thread.is_finished() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(10));
         }
@@ -258,6 +320,19 @@ where
     T: Transport + 'static,
     F: FnMut() -> Result<Device<T>, Error> + Send + 'static,
 {
+    spawn_with(open, options, notify, TIMINGS)
+}
+
+fn spawn_with<T, F>(
+    open: F,
+    options: Options,
+    notify: Notify,
+    timings: Timings,
+) -> (WorkerHandle, Receiver<Event>)
+where
+    T: Transport + 'static,
+    F: FnMut() -> Result<Device<T>, Error> + Send + 'static,
+{
     let (cmd_tx, cmd_rx) = channel();
     let (event_tx, event_rx) = channel();
     let emitter = Emitter {
@@ -265,15 +340,26 @@ where
         notify,
     };
     let shared = Arc::<Shared>::default();
+    let beat = Arc::<Beat>::default();
     let thread = {
-        let (emitter, shared) = (emitter.clone(), Arc::clone(&shared));
-        thread::spawn(move || Worker::new(open, cmd_rx, options, emitter, shared).run())
+        let (emitter, shared, beat) = (emitter.clone(), Arc::clone(&shared), Arc::clone(&beat));
+        thread::spawn(move || {
+            let mut worker = Worker::new(open, cmd_rx, options, emitter, shared);
+            worker.beat = beat;
+            worker.run();
+        })
     };
+    {
+        let (emitter, beat) = (emitter.clone(), Arc::clone(&beat));
+        thread::spawn(move || watch(&beat, &emitter, timings.watch));
+    }
     let handle = WorkerHandle {
         cmds: cmd_tx,
         shared,
         emitter,
         thread: Some(thread),
+        beat,
+        shutdown_wait: timings.shutdown_wait,
     };
     (handle, event_rx)
 }
@@ -287,31 +373,8 @@ enum Link {
     Connected,
 }
 
-/// The ack latency measured over the whole session. Reconnecting doesn't lose it.
-#[derive(Default)]
-struct AckLatency {
-    count: AtomicU64,
-    total_micros: AtomicU64,
-}
-
-impl AckLatency {
-    fn record(&self, latency: Duration) {
-        let micros = u64::try_from(latency.as_micros()).unwrap_or(u64::MAX);
-        self.total_micros.fetch_add(micros, Ordering::Relaxed);
-        self.count.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn mean(&self) -> Duration {
-        let total = self.total_micros.load(Ordering::Relaxed);
-        match self.count.load(Ordering::Relaxed) {
-            0 => DEFAULT_ACK_LATENCY,
-            count => Duration::from_micros(total / count),
-        }
-    }
-}
-
-fn estimate(steps: usize, latency: Duration) -> Duration {
-    latency.saturating_mul(u32::try_from(steps).unwrap_or(u32::MAX))
+fn estimate(steps: usize, chunk_time: Duration) -> Duration {
+    chunk_time.saturating_mul(u32::try_from(steps).unwrap_or(u32::MAX))
 }
 
 /// The keyboard's thread, one [`Worker::step`] at a time.
@@ -334,13 +397,19 @@ pub struct Worker<T: Transport, F> {
     next_poll: Option<Instant>,
     /// What a slider is waiting to write, and when it last moved.
     adjusting: Option<(LightingChange, Instant)>,
-    /// The clock was asked for during an upload.
-    clock_due: bool,
-    /// Keeps a failing read from telling the same thing every few seconds.
-    poll_error: Option<Error>,
+    /// [`Cmd::SyncClock`] came during an upload.
+    clock_asked: bool,
+    /// The clock would be set, if the setting is on by then, once the keyboard is confirmed there or
+    /// an upload has ended. Connecting always sets this, so losing the keyboard needn't clear it.
+    auto_clock_due: bool,
+    /// Why the keyboard's config block can't be used, if so. Nothing gets written while this is set,
+    /// and it keeps a failing read from telling the same thing every few seconds.
+    bad_config: Option<Error>,
     errors: VecDeque<String>,
-    ack_latency: Arc<AckLatency>,
-    latest_load: Arc<AtomicU64>,
+    chunk_time: Arc<ChunkTime>,
+    loader: Loader,
+    beat: Arc<Beat>,
+    clock: Clock,
 }
 
 impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F> {
@@ -354,6 +423,7 @@ impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F
         Worker {
             open,
             cmds,
+            loader: Loader::new(emitter.clone(), Arc::new(decode_image)),
             emitter,
             shared,
             rk_app_running: options.rk_app_running,
@@ -366,24 +436,34 @@ impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F
             rk_app: None,
             next_poll: None,
             adjusting: None,
-            clock_due: false,
-            poll_error: None,
+            clock_asked: false,
+            auto_clock_due: false,
+            bad_config: None,
             errors: VecDeque::new(),
-            ack_latency: Arc::default(),
-            latest_load: Arc::default(),
+            chunk_time: Arc::default(),
+            beat: Arc::default(),
+            clock: Arc::new(Instant::now),
         }
     }
 
-    /// Ends when the handle is gone.
+    /// Ends when the handle is gone, after writing what a slider was still waiting to write.
     fn run(mut self) {
         loop {
-            let wait = self.step(Instant::now());
+            self.beat.busy();
+            let wait = self.step((self.clock)());
+            self.beat.idle();
             match self.cmds.recv_timeout(wait) {
-                Ok(cmd) => self.handle(cmd, Instant::now()),
+                Ok(cmd) => {
+                    self.beat.busy();
+                    self.handle(cmd, (self.clock)());
+                }
                 Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => return,
+                Err(RecvTimeoutError::Disconnected) => break,
             }
         }
+        self.beat.busy();
+        self.flush_adjustment((self.clock)());
+        self.beat.close();
     }
 
     /// Runs the commands waiting, then whatever is due at `now`. Returns how long until something
@@ -419,9 +499,7 @@ impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F
             Cmd::AdjustLighting(change) => self.adjust(change, now),
             Cmd::SyncClock => self.sync_clock(now),
             Cmd::Resumed => {
-                if self.auto_clock && self.device.is_some() {
-                    self.sync_clock(now);
-                }
+                self.auto_clock_due = true;
                 self.next_poll = None;
             }
             Cmd::LoadImage { path, fit, delay } => self.load_image(path, fit, delay),
@@ -497,8 +575,7 @@ impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F
         self.model = None;
         self.lighting = None;
         self.adjusting = None;
-        self.clock_due = false;
-        self.poll_error = None;
+        self.clock_asked = false;
         self.set_link(Link::Absent);
         self.schedule_poll(now);
     }
@@ -519,16 +596,15 @@ impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F
     fn connect(&mut self, now: Instant) {
         match (self.open)() {
             Ok(mut device) => {
-                let ack_latency = Arc::clone(&self.ack_latency);
+                let (chunk_time, clock, beat) = (
+                    Arc::clone(&self.chunk_time),
+                    Arc::clone(&self.clock),
+                    Arc::clone(&self.beat),
+                );
+                let mut timer = ChunkTimer::default();
                 device.on_packet = Some(Box::new(move |event| {
-                    if let PacketEvent::Ack {
-                        accepted: true,
-                        latency,
-                        ..
-                    } = event
-                    {
-                        ack_latency.record(latency);
-                    }
+                    beat.busy();
+                    timer.on_packet(event, clock(), &chunk_time);
                 }));
                 self.connected(device, now);
             }
@@ -540,7 +616,7 @@ impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F
 
     /// A keyboard that can't even be read isn't one to tell the interface about, or it would come
     /// and go at every look. One that answers with a block it can't use is there, so it's told, and
-    /// nothing will be written to it.
+    /// nothing will be written to it. Its clock waits for a good read.
     fn connected(&mut self, mut device: Device<T>, now: Instant) {
         let read = Config::read(&mut device);
         if let Err(error @ Error::Hid(_)) = read {
@@ -553,26 +629,34 @@ impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F
         self.model = Some(model);
         self.link = Link::Connected;
         self.emit(Event::Connected { model });
+        self.auto_clock_due = true;
         match read {
-            Ok(config) => self.tell_lighting(&config, true),
+            Ok(config) => self.read_was_good(&config, true, now),
             Err(error) => {
-                self.poll_error = Some(error.clone());
+                self.bad_config = Some(error.clone());
                 self.problem(Problem::Device(error));
             }
         }
-        if self.auto_clock {
-            self.sync_clock(now);
-        }
     }
 
-    fn tell_lighting(&mut self, config: &Config, always: bool) {
-        let Some(model) = self.model else { return };
-        let current = CurrentLighting::from_config(config, &model.lighting);
-        if always || self.lighting != Some(current) {
-            self.emit(Event::Lighting(current));
+    fn read_was_good(&mut self, config: &Config, tell_always: bool, now: Instant) {
+        self.bad_config = None;
+        if let Some(model) = self.model {
+            let current = CurrentLighting::from_config(config, &model.lighting);
+            if tell_always || self.lighting != Some(current) {
+                self.emit(Event::Lighting(current));
+            }
+            self.lighting = Some(current);
         }
-        self.lighting = Some(current);
-        self.poll_error = None;
+        self.set_clock_if_due(now);
+    }
+
+    fn set_clock_if_due(&mut self, now: Instant) {
+        let asked = std::mem::take(&mut self.clock_asked);
+        let automatic = std::mem::take(&mut self.auto_clock_due) && self.auto_clock;
+        if asked || automatic {
+            self.sync_clock(now);
+        }
     }
 
     fn read_config(&mut self) -> Result<Config, Error> {
@@ -585,14 +669,14 @@ impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F
     /// The timer's look at the keyboard. Unplugging isn't an error worth a message.
     fn refresh_quietly(&mut self, now: Instant) {
         match self.read_config() {
-            Ok(config) => self.tell_lighting(&config, false),
+            Ok(config) => self.read_was_good(&config, false, now),
             Err(error @ Error::Hid(_)) => {
                 self.record(&error);
                 self.lose_device(now);
             }
             Err(error) => {
-                if self.poll_error.as_ref() != Some(&error) {
-                    self.poll_error = Some(error.clone());
+                if self.bad_config.as_ref() != Some(&error) {
+                    self.bad_config = Some(error.clone());
                     self.problem(Problem::Device(error));
                 }
             }
@@ -602,8 +686,12 @@ impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F
 
     fn refresh_now(&mut self, now: Instant) {
         match self.read_config() {
-            Ok(config) => self.tell_lighting(&config, true),
-            Err(error) => self.command_failed(error, now),
+            Ok(config) => self.read_was_good(&config, true, now),
+            Err(error @ Error::Hid(_)) => self.command_failed(error, now),
+            Err(error) => {
+                self.bad_config = Some(error.clone());
+                self.problem(Problem::Device(error));
+            }
         }
         self.schedule_poll(now);
     }
@@ -626,9 +714,21 @@ impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F
         }
     }
 
+    /// Whether anything can be written to the keyboard.
+    fn writable(&self) -> Result<(), Problem> {
+        match (&self.device, &self.bad_config) {
+            (None, _) => Err(Problem::NoKeyboard),
+            (Some(_), Some(_)) => Err(Problem::UnusableConfig),
+            (Some(_), None) => Ok(()),
+        }
+    }
+
     fn apply_lighting(&mut self, change: &LightingChange, now: Instant) {
+        if let Err(problem) = self.writable() {
+            self.problem(problem);
+            return;
+        }
         let Some(device) = &mut self.device else {
-            self.problem(Problem::NoKeyboard);
             return;
         };
         let pid = device.model().pid;
@@ -654,8 +754,11 @@ impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F
     }
 
     fn sync_clock(&mut self, now: Instant) {
+        if let Err(problem) = self.writable() {
+            self.problem(problem);
+            return;
+        }
         let Some(device) = &mut self.device else {
-            self.problem(Problem::NoKeyboard);
             return;
         };
         let set = device_now().and_then(|time| set_clock(device, &time));
@@ -667,48 +770,66 @@ impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F
 
     fn load_image(&mut self, path: PathBuf, fit: Fit, delay: Option<u16>) {
         let Some(model) = self.model else {
+            self.loader.supersede();
             self.problem(Problem::NoKeyboard);
             return;
         };
-        let generation = self.latest_load.fetch_add(1, Ordering::SeqCst) + 1;
-        let latest = Arc::clone(&self.latest_load);
-        let emitter = self.emitter.clone();
-        let latency = self.ack_latency.mean();
-        thread::spawn(move || {
-            let loaded = load(&path, model, fit, delay, latency);
-            deliver_load(&emitter, &latest, generation, loaded);
+        self.loader.request(LoadRequest {
+            path,
+            fit,
+            delay,
+            model,
+            chunk_time: self.chunk_time.mean(),
         });
+    }
+
+    /// No upload is going to run. If that came with a cancel, the cancel is what gets told.
+    fn refuse_upload(&mut self, problem: Problem) {
+        if self.shared.end_upload() {
+            self.emit(Event::UploadCancelled);
+        } else {
+            self.problem(problem);
+        }
     }
 
     fn upload(&mut self, animation: &Animation, now: Instant) {
         self.flush_adjustment(now);
-        self.shared.uploading.store(true, Ordering::SeqCst);
-        let shared = Arc::clone(&self.shared);
-
+        self.shared.begin_upload();
+        if self.shared.cancelled() {
+            self.shared.end_upload();
+            self.emit(Event::UploadCancelled);
+            return;
+        }
+        if let Err(problem) = self.writable() {
+            self.refuse_upload(problem);
+            return;
+        }
         let Some(mut device) = self.device.take() else {
-            shared.end_upload();
-            self.problem(Problem::NoKeyboard);
             return;
         };
         let plan = match animation.plan(device.model()) {
             Ok(plan) => plan,
             Err(error) => {
-                shared.end_upload();
                 self.device = Some(device);
-                self.problem(Problem::Device(error));
+                self.refuse_upload(Problem::Device(error));
                 return;
             }
         };
 
         self.emit(Event::UploadStarted {
             total: plan.total_steps(),
-            estimate: estimate(plan.total_chunks(), self.ack_latency.mean()),
+            estimate: estimate(plan.total_steps(), self.chunk_time.mean()),
         });
+        let shared = Arc::clone(&self.shared);
         let uploaded = animation.upload(&mut device, &shared.cancel, |progress| {
             self.between_chunks(progress);
         });
+        // Anything that came during the pauses at the end was still during the upload.
+        self.commands_during_upload();
         shared.end_upload();
         self.device = Some(device);
+        // An upload can take many minutes.
+        let now = (self.clock)();
 
         match uploaded {
             Ok(UploadOutcome { finish_confirmed }) => {
@@ -729,12 +850,20 @@ impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F
             }
         }
         self.schedule_poll(now);
-        if std::mem::take(&mut self.clock_due) {
-            self.sync_clock(now);
-        }
+        self.set_clock_if_due(now);
     }
 
     fn between_chunks(&mut self, progress: Progress) {
+        self.commands_during_upload();
+        let steps_left = progress.total.saturating_sub(progress.done);
+        self.emit(Event::Progress {
+            done: progress.done,
+            total: progress.total,
+            remaining: estimate(steps_left, self.chunk_time.mean()),
+        });
+    }
+
+    fn commands_during_upload(&mut self) {
         loop {
             match self.cmds.try_recv() {
                 Ok(cmd) => self.during_upload(cmd),
@@ -746,12 +875,6 @@ impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F
                 }
             }
         }
-        let steps_left = progress.total.saturating_sub(progress.done);
-        self.emit(Event::Progress {
-            done: progress.done,
-            total: progress.total,
-            remaining: estimate(steps_left, self.ack_latency.mean()),
-        });
     }
 
     /// What each command means while the upload has the keyboard. See the top of this file.
@@ -760,8 +883,8 @@ impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F
             Cmd::SetLighting(_) | Cmd::AdjustLighting(_) | Cmd::UploadScreen(_) => {
                 self.problem(Problem::Busy);
             }
-            Cmd::SyncClock => self.clock_due = true,
-            Cmd::Resumed => self.clock_due |= self.auto_clock,
+            Cmd::SyncClock => self.clock_asked = true,
+            Cmd::Resumed => self.auto_clock_due = true,
             Cmd::LoadImage { path, fit, delay } => self.load_image(path, fit, delay),
             Cmd::CancelUpload => self.shared.request_cancel(&self.emitter),
             Cmd::Refresh => {}
@@ -806,46 +929,6 @@ fn merged(earlier: LightingChange, later: LightingChange) -> LightingChange {
         speed: later.speed.or(earlier.speed),
         color: later.color.or(earlier.color),
         sleep: later.sleep.or(earlier.sleep),
-    }
-}
-
-/// Decodes an image for this model's screen. This can take seconds.
-fn load(
-    path: &Path,
-    model: &'static Model,
-    fit: Fit,
-    delay_ms: Option<u16>,
-    ack_latency: Duration,
-) -> Result<LoadedImage, Error> {
-    let screen = model.screen.ok_or(Error::Unsupported(model.pid))?;
-    let options = LoadOptions {
-        fit,
-        delay_ms,
-        truncate: true,
-    };
-    let animation = Animation::from_file(path, &screen, options)?;
-    let plan = animation.plan(model)?;
-    let estimate = estimate(plan.total_chunks(), ack_latency);
-    Ok(LoadedImage {
-        path: path.to_path_buf(),
-        animation: Arc::new(animation),
-        plan,
-        estimate,
-    })
-}
-
-/// Tells of a finished load, unless another one has been asked for since.
-fn deliver_load(
-    emitter: &Emitter,
-    latest: &AtomicU64,
-    generation: u64,
-    loaded: Result<LoadedImage, Error>,
-) {
-    if latest.load(Ordering::SeqCst) == generation {
-        emitter.emit(match loaded {
-            Ok(image) => Event::ImageLoaded(image),
-            Err(error) => Event::ImageFailed(error),
-        });
     }
 }
 

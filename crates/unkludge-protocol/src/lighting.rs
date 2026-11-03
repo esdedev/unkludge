@@ -313,14 +313,10 @@ fn edit(
 /// The effect whose settings can be changed, if the lights are showing one.
 fn adjustable_effect(config: &Config) -> Result<u8, Error> {
     if config.is_custom() {
-        return Err(Error::Invalid(
-            "the keyboard is in the custom mode: choose an effect first".to_string(),
-        ));
+        return Err(Error::CustomMode);
     }
     match config.effect() {
-        0 => Err(Error::Invalid(
-            "the lights are off: choose an effect first".to_string(),
-        )),
+        0 => Err(Error::LightsOff),
         effect => Ok(effect),
     }
 }
@@ -387,7 +383,13 @@ mod tests {
     #[track_caller]
     fn assert_refused(block: &[u8; CONFIG_LEN], change: &LightingChange) {
         let (fake, result) = apply_to(block, change);
-        assert!(matches!(result, Err(Error::Invalid(_))), "{result:?}");
+        assert!(
+            matches!(
+                result,
+                Err(Error::Invalid(_) | Error::LightsOff | Error::CustomMode)
+            ),
+            "{result:?}"
+        );
         assert_eq!(commands(&fake), [0x84]);
     }
 
@@ -932,6 +934,23 @@ mod tests {
                 assert_refused(&bytes, change);
             }
         }
+    }
+
+    #[test]
+    fn with_no_effect_showing_the_refusal_says_which_case_it_is() {
+        let change = LightingChange {
+            brightness: Some(8),
+            ..LightingChange::default()
+        };
+        let mut off = block();
+        off[0x0A] = 0;
+        assert_eq!(apply_to(&off, &change).1, Err(Error::LightsOff));
+        let mut custom = block();
+        custom[0x09] = 1;
+        assert_eq!(apply_to(&custom, &change).1, Err(Error::CustomMode));
+        custom[0x09] = 0;
+        custom[0x0A] = 18;
+        assert_eq!(apply_to(&custom, &change).1, Err(Error::CustomMode));
     }
 
     // On a keyboard in the custom mode.

@@ -12,6 +12,7 @@ use unkludge_protocol::model;
 use unkludge_protocol::screen::LoadOptions;
 use unkludge_protocol::transport::fake::{AckFault, FakeTransport};
 
+use super::timing::DEFAULT_CHUNK_TIME;
 use super::*;
 
 const CONFIG_WRITE: u8 = 0x04;
@@ -93,6 +94,8 @@ struct Rig {
     worker: Worker<FakeTransport, Open>,
     opens_tried: Arc<AtomicUsize>,
     start: Instant,
+    /// What the worker's own clock says. Steps set it.
+    clock: Arc<Mutex<Instant>>,
 }
 
 impl Rig {
@@ -116,14 +119,31 @@ impl Rig {
             events: event_tx,
             notify,
         };
-        let worker = Worker::new(open, cmd_rx, options, emitter, Arc::default());
+        let mut worker = Worker::new(open, cmd_rx, options, emitter, Arc::default());
+        let start = Instant::now();
+        let clock = Arc::new(Mutex::new(start));
+        let reading = Arc::clone(&clock);
+        worker.clock = Arc::new(move || *reading.lock().unwrap());
         Rig {
             cmds: cmd_tx,
             events: event_rx,
             worker,
             opens_tried,
-            start: Instant::now(),
+            start,
+            clock,
         }
+    }
+
+    /// A keyboard that's there on the first look, with the worker's clock running on the fake's
+    /// own time, so that the pauses and waits it skips count as they would.
+    fn measuring(fake: &FakeTransport) -> Rig {
+        let mut rig = Rig::with_opens(VecDeque::from([Ok(fake.clone())]), false, Arc::new(|| {}));
+        let fake_time = fake.clone();
+        rig.worker.clock = Arc::new(move || fake_time.now());
+        fake.queue_feature_reply(&reply(&block()));
+        rig.step(0);
+        rig.drain();
+        rig
     }
 
     /// A keyboard that's there on the first look, with the clock left alone.
@@ -140,7 +160,21 @@ impl Rig {
     }
 
     fn step(&mut self, ms: u64) -> Duration {
-        self.worker.step(self.start + Duration::from_millis(ms))
+        let now = self.start + Duration::from_millis(ms);
+        *self.clock.lock().unwrap() = now;
+        self.worker.step(now)
+    }
+
+    /// As the interface would have it, sharing the rig's state but with no thread behind it.
+    fn handle(&self) -> WorkerHandle {
+        WorkerHandle {
+            cmds: self.cmds.clone(),
+            shared: Arc::clone(&self.worker.shared),
+            emitter: self.worker.emitter.clone(),
+            thread: None,
+            beat: Arc::default(),
+            shutdown_wait: Duration::ZERO,
+        }
     }
 
     fn send(&self, cmd: Cmd) {
@@ -216,6 +250,42 @@ fn without_progress(events: Vec<Event>) -> Vec<Event> {
 
 fn started(total: usize) -> impl Fn(&Event) -> bool {
     move |event| matches!(event, Event::UploadStarted { total: t, .. } if *t == total)
+}
+
+fn bad_read(fake: &FakeTransport) {
+    // Config reads try five times.
+    for _ in 0..5 {
+        fake.queue_feature_reply(&reply(&[0; CONFIG_LEN]));
+    }
+}
+
+fn is_bad_block(event: &Event) -> bool {
+    matches!(event, Event::Error(Problem::Device(Error::Invalid(_))))
+}
+
+/// A notify that pulls the plug on the keyboard after this many events.
+fn unplug_after(fake: &FakeTransport, events: usize) -> Notify {
+    let unplugged = fake.clone();
+    let seen = AtomicUsize::new(0);
+    Arc::new(move || {
+        if seen.fetch_add(1, Ordering::SeqCst) == events {
+            unplugged.disconnect();
+        }
+    })
+}
+
+/// Asks for a report and gives back what it says.
+fn report_of(rig: &mut Rig, ms: u64) -> ReportData {
+    rig.send(Cmd::Report);
+    rig.step(ms);
+    let events = rig.drain();
+    let Some(Event::ReportReady(data)) = events
+        .into_iter()
+        .rfind(|event| matches!(event, Event::ReportReady(_)))
+    else {
+        panic!("no report");
+    };
+    data
 }
 
 // Connecting
@@ -318,39 +388,130 @@ fn a_first_read_that_fails_on_the_usb_level_doesnt_connect() {
 }
 
 #[test]
-fn a_block_without_its_end_marker_connects_but_gives_no_lighting_and_writes_nothing() {
-    let fake = FakeTransport::new();
-    for _ in 0..5 {
-        fake.queue_feature_reply(&reply(&[0; CONFIG_LEN]));
-    }
-    let mut rig = Rig::with_opens(VecDeque::from([Ok(fake.clone())]), false, Arc::new(|| {}));
+fn a_block_without_its_end_marker_connects_but_gives_no_lighting_and_no_writes() {
+    let fake = FakeTransport::with_auto_ack();
+    bad_read(&fake);
+    let mut rig = Rig::with_opens(VecDeque::from([Ok(fake.clone())]), true, Arc::new(|| {}));
     rig.step(0);
     let events = rig.drain();
     assert_eq!(events[1], Event::Connected { model: s85() });
-    assert!(
-        matches!(events[2], Event::Error(Problem::Device(Error::Invalid(_)))),
-        "{events:?}"
-    );
+    assert!(is_bad_block(&events[2]), "{events:?}");
     assert_eq!(events.len(), 3);
-    assert_eq!(count(&fake, CONFIG_WRITE), 0);
+
+    // Nothing can be written, and each command says why.
+    for cmd in [
+        Cmd::SyncClock,
+        Cmd::SetLighting(brightness(4)),
+        Cmd::UploadScreen(still()),
+    ] {
+        rig.send(cmd);
+        rig.step(1);
+        assert_eq!(rig.drain(), [Event::Error(Problem::UnusableConfig)]);
+    }
+    rig.send(Cmd::AdjustLighting(brightness(4)));
+    rig.step(1);
+    rig.step(400);
+    assert_eq!(rig.drain(), [Event::Error(Problem::UnusableConfig)]);
+
+    // Only the reads went out.
+    assert!(commands(&fake).iter().all(|&c| c == CONFIG_READ));
+    assert_eq!(count(&fake, CONFIG_READ), 5);
 }
 
 #[test]
-fn an_unknown_error_while_polling_stays_connected_and_is_told_once() {
+fn a_block_that_comes_good_lets_writes_through_with_the_clock_that_was_due() {
+    let fake = FakeTransport::new();
+    bad_read(&fake);
+    let mut rig = Rig::with_opens(VecDeque::from([Ok(fake.clone())]), true, Arc::new(|| {}));
+    rig.step(0);
+    rig.drain();
+    queue_reads(&fake, 2);
+    rig.step(REFRESH_MS);
+    assert_eq!(
+        rig.drain(),
+        [Event::Lighting(current()), Event::ClockSynced]
+    );
+    assert_eq!(count(&fake, CLOCK), 1);
+
+    rig.send(Cmd::SetLighting(brightness(4)));
+    rig.step(REFRESH_MS + 1);
+    assert_eq!(config_writes(&fake).len(), 1);
+}
+
+#[test]
+fn a_block_that_comes_good_doesnt_set_the_clock_with_auto_clock_off() {
+    let fake = FakeTransport::new();
+    bad_read(&fake);
+    let mut rig = Rig::with_opens(VecDeque::from([Ok(fake.clone())]), false, Arc::new(|| {}));
+    rig.step(0);
+    rig.drain();
+    queue_reads(&fake, 1);
+    rig.step(REFRESH_MS);
+    assert_eq!(rig.drain(), [Event::Lighting(current())]);
+    assert_eq!(count(&fake, CLOCK), 0);
+}
+
+#[test]
+fn a_block_gone_bad_on_a_poll_is_told_once_and_stops_writes() {
     let fake = FakeTransport::new();
     let mut rig = Rig::connected(&fake);
-    for _ in 0..10 {
-        fake.queue_feature_reply(&reply(&[0; CONFIG_LEN]));
-    }
-    rig.step(5000);
+    bad_read(&fake);
+    bad_read(&fake);
+    rig.step(REFRESH_MS);
     let events = rig.drain();
     assert_eq!(events.len(), 1);
-    assert!(matches!(
-        events[0],
-        Event::Error(Problem::Device(Error::Invalid(_)))
-    ));
-    rig.step(10_000);
+    assert!(is_bad_block(&events[0]), "{events:?}");
+    rig.step(2 * REFRESH_MS);
     assert_eq!(rig.drain(), []);
+
+    rig.send(Cmd::SyncClock);
+    rig.step(2 * REFRESH_MS + 1);
+    assert_eq!(rig.drain(), [Event::Error(Problem::UnusableConfig)]);
+    assert_eq!(count(&fake, CLOCK), 0);
+}
+
+#[test]
+fn a_block_bad_since_connecting_isnt_told_again_at_the_next_poll() {
+    let fake = FakeTransport::new();
+    bad_read(&fake);
+    bad_read(&fake);
+    let mut rig = Rig::with_opens(VecDeque::from([Ok(fake.clone())]), false, Arc::new(|| {}));
+    rig.step(0);
+    rig.drain();
+    rig.step(REFRESH_MS);
+    assert_eq!(rig.drain(), []);
+}
+
+#[test]
+fn a_block_that_goes_bad_again_after_coming_good_is_told_again() {
+    let fake = FakeTransport::new();
+    let mut rig = Rig::connected(&fake);
+    bad_read(&fake);
+    rig.step(REFRESH_MS);
+    rig.drain();
+    queue_reads(&fake, 1);
+    rig.step(2 * REFRESH_MS);
+    assert_eq!(rig.drain(), []);
+    bad_read(&fake);
+    rig.step(3 * REFRESH_MS);
+    let events = rig.drain();
+    assert_eq!(events.len(), 1);
+    assert!(is_bad_block(&events[0]), "{events:?}");
+}
+
+#[test]
+fn refresh_finding_a_bad_block_stops_writes_too() {
+    let fake = FakeTransport::new();
+    let mut rig = Rig::connected(&fake);
+    bad_read(&fake);
+    rig.send(Cmd::Refresh);
+    rig.step(1);
+    let events = rig.drain();
+    assert!(is_bad_block(&events[0]), "{events:?}");
+    assert_eq!(events.len(), 1, "it stays connected");
+    rig.send(Cmd::SyncClock);
+    rig.step(2);
+    assert_eq!(rig.drain(), [Event::Error(Problem::UnusableConfig)]);
 }
 
 #[test]
@@ -416,6 +577,75 @@ fn an_io_error_gives_disconnected_and_it_comes_back() {
 const REFRESH_MS: u64 = 5000;
 
 #[test]
+fn losing_the_keyboard_forgets_what_was_waiting_for_it() {
+    let first = FakeTransport::new();
+    queue_reads(&first, 1);
+    let second = FakeTransport::new();
+    queue_reads(&second, 1);
+    let opens = VecDeque::from([Ok(first.clone()), Ok(second.clone())]);
+    let mut rig = Rig::with_opens(opens, false, Arc::new(|| {}));
+    rig.step(0);
+    rig.drain();
+
+    rig.send(Cmd::AdjustLighting(brightness(4)));
+    rig.step(1);
+    first.disconnect();
+    rig.send(Cmd::SyncClock);
+    rig.step(2);
+    rig.drain();
+
+    // Past the time the slider would have been written, on the keyboard that came next.
+    rig.step(2002);
+    rig.step(2500);
+    assert_eq!(
+        rig.drain(),
+        [
+            Event::Connected { model: s85() },
+            Event::Lighting(current())
+        ]
+    );
+    assert!(config_writes(&second).is_empty());
+}
+
+#[test]
+fn with_the_keyboard_gone_its_model_is_gone_too() {
+    let fake = FakeTransport::new();
+    let mut rig = Rig::connected(&fake);
+    fake.disconnect();
+    rig.step(REFRESH_MS);
+    rig.drain();
+
+    assert_eq!(report_of(&mut rig, REFRESH_MS + 1).model, None);
+    rig.send(Cmd::LoadImage {
+        path: PathBuf::from("nothing.gif"),
+        fit: Fit::Cover,
+        delay: None,
+    });
+    rig.step(REFRESH_MS + 2);
+    assert_eq!(rig.drain(), [Event::Error(Problem::NoKeyboard)]);
+}
+
+#[test]
+fn a_keyboard_that_comes_back_after_a_bad_read_has_its_lighting_told() {
+    // Connected with this lighting, lost, back with a bad block, then the same lighting again: the
+    // interface has been told nothing since it came back, so that isn't "no change".
+    let first = FakeTransport::new();
+    queue_reads(&first, 1);
+    let second = FakeTransport::new();
+    bad_read(&second);
+    queue_reads(&second, 1);
+    let opens = VecDeque::from([Ok(first.clone()), Ok(second.clone())]);
+    let mut rig = Rig::with_opens(opens, false, Arc::new(|| {}));
+    rig.step(0);
+    first.disconnect();
+    rig.step(REFRESH_MS);
+    rig.step(REFRESH_MS + 2000);
+    rig.drain();
+    rig.step(REFRESH_MS + 7000);
+    assert_eq!(rig.drain(), [Event::Lighting(current())]);
+}
+
+#[test]
 fn a_command_that_finds_the_keyboard_gone_says_so_and_disconnects() {
     let fake = FakeTransport::new();
     let mut rig = Rig::connected(&fake);
@@ -450,6 +680,17 @@ fn commands_with_no_keyboard_are_refused() {
         rig.step(1);
         assert_eq!(rig.drain(), [Event::Error(Problem::NoKeyboard)]);
     }
+    assert_eq!(rig.opens_tried(), 1, "they don't look for one either");
+}
+
+#[test]
+fn refresh_with_no_keyboard_looks_for_one_now() {
+    let mut rig = Rig::with_opens(VecDeque::new(), false, Arc::new(|| {}));
+    rig.step(0);
+    assert_eq!(rig.opens_tried(), 1);
+    rig.send(Cmd::Refresh);
+    rig.step(1);
+    assert_eq!(rig.opens_tried(), 2);
 }
 
 // Polling
@@ -483,8 +724,23 @@ fn refresh_reads_now_and_always_tells() {
     let mut rig = Rig::connected(&fake);
     queue_reads(&fake, 1);
     rig.send(Cmd::Refresh);
-    rig.step(1);
+    // It also puts off the next poll.
+    assert_eq!(rig.step(4000), REFRESH_INTERVAL);
     assert_eq!(rig.drain(), [Event::Lighting(current())]);
+}
+
+#[test]
+fn refresh_writes_a_waiting_slider_first_so_that_what_it_reads_is_current() {
+    let fake = FakeTransport::new();
+    let mut rig = Rig::connected(&fake);
+    queue_reads(&fake, 2);
+    rig.send(Cmd::AdjustLighting(brightness(4)));
+    rig.send(Cmd::Refresh);
+    rig.step(1);
+    assert_eq!(
+        commands(&fake),
+        [CONFIG_READ, CONFIG_READ, CONFIG_WRITE, CONFIG_READ]
+    );
 }
 
 // Lighting
@@ -504,6 +760,51 @@ fn set_lighting_writes_at_once() {
     let writes = config_writes(&fake);
     assert_eq!(writes.len(), 1);
     assert_eq!(written_block(&writes[0])[EFFECT_5_BRIGHTNESS], 4);
+}
+
+#[test]
+fn a_write_puts_off_the_next_poll() {
+    let fake = FakeTransport::new();
+    let mut rig = Rig::connected(&fake);
+    queue_reads(&fake, 1);
+    rig.send(Cmd::SetLighting(brightness(4)));
+    assert_eq!(rig.step(4000), REFRESH_INTERVAL);
+}
+
+#[test]
+fn a_poll_that_reads_what_was_just_written_doesnt_tell_it_again() {
+    let fake = FakeTransport::new();
+    let mut rig = Rig::connected(&fake);
+    queue_reads(&fake, 1);
+    rig.send(Cmd::SetLighting(brightness(4)));
+    rig.step(1);
+    rig.drain();
+    let mut written = block();
+    written[EFFECT_5_BRIGHTNESS] = 4;
+    fake.queue_feature_reply(&reply(&written));
+    rig.step(REFRESH_MS + 1);
+    assert_eq!(rig.drain(), []);
+}
+
+#[test]
+fn merging_keeps_each_field_and_the_later_value_wins() {
+    let earlier = LightingChange {
+        mode: Some(ModeChoice::Off),
+        brightness: Some(1),
+        speed: Some(1),
+        color: Some(ColorChoice::Rainbow),
+        sleep: Some(SleepTime::Min5),
+    };
+    let later = LightingChange {
+        mode: Some(ModeChoice::Effect(2)),
+        brightness: Some(2),
+        speed: Some(2),
+        color: Some(ColorChoice::Slot(2)),
+        sleep: Some(SleepTime::Min10),
+    };
+    assert_eq!(merged(earlier, later), later);
+    assert_eq!(merged(earlier, LightingChange::default()), earlier);
+    assert_eq!(merged(LightingChange::default(), later), later);
 }
 
 #[test]
@@ -682,7 +983,7 @@ fn sync_clock_works_whatever_the_setting() {
 }
 
 #[test]
-fn resuming_sets_the_clock_only_with_auto_clock_on() {
+fn resuming_sets_the_clock_only_with_auto_clock_on_and_after_looking_at_the_keyboard() {
     let fake = FakeTransport::new();
     let mut rig = Rig::connected(&fake);
     queue_reads(&fake, 1);
@@ -697,16 +998,62 @@ fn resuming_sets_the_clock_only_with_auto_clock_on() {
     rig.step(2);
     assert_eq!(count(&fake, CLOCK), 1);
     assert_eq!(rig.drain(), [Event::ClockSynced]);
+    assert_eq!(
+        commands(&fake),
+        [CONFIG_READ, CONFIG_READ, CONFIG_READ, CLOCK]
+    );
 }
 
 #[test]
-fn resuming_checks_the_keyboard_is_still_there_right_away() {
+fn waking_with_the_keyboard_gone_is_no_usb_error() {
     let fake = FakeTransport::new();
-    let mut rig = Rig::connected(&fake);
+    let mut rig = Rig::connected_with(&fake, true, Arc::new(|| {}));
+    rig.drain();
+    let clocks = count(&fake, CLOCK);
     fake.disconnect();
     rig.send(Cmd::Resumed);
     rig.step(1);
     assert_eq!(rig.drain(), [Event::Disconnected]);
+    assert_eq!(count(&fake, CLOCK), clocks);
+}
+
+#[test]
+fn waking_with_no_keyboard_leaves_the_clock_to_connecting() {
+    let fake = FakeTransport::new();
+    queue_reads(&fake, 1);
+    let opens = VecDeque::from([Err(Error::NotFound), Ok(fake.clone())]);
+    let mut rig = Rig::with_opens(opens, true, Arc::new(|| {}));
+    rig.step(0);
+    rig.drain();
+    rig.send(Cmd::Resumed);
+    rig.step(1);
+    assert_eq!(
+        rig.drain(),
+        [
+            Event::Connected { model: s85() },
+            Event::Lighting(current()),
+            Event::ClockSynced
+        ]
+    );
+    assert_eq!(count(&fake, CLOCK), 1);
+}
+
+#[test]
+fn waking_while_a_slider_settles_looks_at_the_keyboard_after_it() {
+    let fake = FakeTransport::new();
+    let mut rig = Rig::connected_with(&fake, true, Arc::new(|| {}));
+    rig.drain();
+    queue_reads(&fake, 2);
+    rig.send(Cmd::AdjustLighting(brightness(4)));
+    rig.send(Cmd::Resumed);
+    rig.step(1);
+    assert_eq!(rig.drain(), []);
+    // The write puts off the look at the keyboard, and the clock with it.
+    rig.step(301);
+    assert_eq!(count(&fake, CLOCK), 1);
+    rig.step(5301);
+    assert_eq!(rig.drain().last(), Some(&Event::ClockSynced));
+    assert_eq!(count(&fake, CLOCK), 2);
 }
 
 // Uploads
@@ -740,16 +1087,20 @@ fn an_upload_tells_how_it_goes_and_leaves_the_keyboard_usable() {
     assert_eq!(count(&fake, SCREEN_DATA), 215);
     fake.assert_allowed_commands_only();
 
+    // Over, so a cancel has nothing to act on.
+    rig.handle().send(Cmd::CancelUpload);
+    assert_eq!(rig.drain(), []);
+
     rig.send(Cmd::SyncClock);
     rig.step(2);
     assert_eq!(rig.drain(), [Event::ClockSynced]);
 }
 
 #[test]
-fn the_estimate_comes_from_the_measured_ack_latency() {
+fn the_estimate_is_the_steps_times_the_measured_chunk_time() {
     let fake = FakeTransport::with_auto_ack();
     fake.set_input_latency(Duration::from_millis(10));
-    let mut rig = Rig::connected(&fake);
+    let mut rig = Rig::measuring(&fake);
 
     // Nothing measured yet, so the first upload goes by the usual figure.
     rig.send(Cmd::UploadScreen(still()));
@@ -759,14 +1110,23 @@ fn the_estimate_comes_from_the_measured_ack_latency() {
         events[0],
         Event::UploadStarted {
             total: S85_STEPS,
-            estimate: 215 * DEFAULT_ACK_LATENCY,
+            estimate: 217 * DEFAULT_CHUNK_TIME,
         }
     );
-    // Every ack took the same, and one step is left after the last chunk.
+    // The step after the first has the start behind it and nothing measured yet.
+    let Event::Progress { remaining, .. } = events[1] else {
+        panic!("{:?}", events[1]);
+    };
+    assert_eq!(remaining, 216 * DEFAULT_CHUNK_TIME);
+    // By the last chunk every gap has been 10 ms, with one step left.
     let Event::Progress { remaining, .. } = events[S85_STEPS - 1] else {
         panic!("{:?}", events[S85_STEPS - 1]);
     };
     assert_eq!(remaining, Duration::from_millis(10));
+    let Event::Progress { remaining, .. } = events[S85_STEPS] else {
+        panic!("{:?}", events[S85_STEPS]);
+    };
+    assert_eq!(remaining, Duration::ZERO);
 
     rig.send(Cmd::UploadScreen(still()));
     rig.step(2);
@@ -774,9 +1134,51 @@ fn the_estimate_comes_from_the_measured_ack_latency() {
         rig.drain()[0],
         Event::UploadStarted {
             total: S85_STEPS,
-            estimate: Duration::from_millis(2150),
+            estimate: Duration::from_millis(2170),
         }
     );
+}
+
+#[test]
+fn a_chunk_sent_twice_takes_as_long_as_both_sends_took() {
+    let fake = FakeTransport::with_auto_ack();
+    fake.set_input_latency(Duration::from_millis(10));
+    // The start, then the first two chunks. The second has to go again.
+    fake.ack_fault(2, AckFault::WrongIdx);
+    let mut rig = Rig::measuring(&fake);
+    rig.send(Cmd::UploadScreen(still()));
+    rig.step(1);
+    rig.drain();
+    // 214 gaps between 215 chunks: 213 of 10 ms and one of 20 ms.
+    assert_eq!(rig.worker.chunk_time.mean(), Duration::from_micros(10_046));
+}
+
+#[test]
+fn the_time_after_an_upload_counts_from_when_it_ended() {
+    let fake = FakeTransport::with_auto_ack();
+    let hour_later = Arc::new(Mutex::new(None::<Arc<Mutex<Instant>>>));
+    let advance = Arc::clone(&hour_later);
+    let seen = AtomicUsize::new(0);
+    let notify: Notify = Arc::new(move || {
+        // Partway through the upload, an hour goes by.
+        if seen.fetch_add(1, Ordering::SeqCst) == 50
+            && let Some(clock) = advance.lock().unwrap().as_ref()
+        {
+            let mut now = clock.lock().unwrap();
+            *now += Duration::from_secs(3600);
+        }
+    });
+    let mut rig = Rig::connected_with(&fake, false, notify);
+    *hour_later.lock().unwrap() = Some(Arc::clone(&rig.clock));
+
+    rig.send(Cmd::UploadScreen(still()));
+    // The step started an hour ago as far as the worker's clock can now tell.
+    rig.step(1);
+    rig.drain();
+    // A poll is due five seconds after the upload's end, and no sooner.
+    let reads = count(&fake, CONFIG_READ);
+    assert_eq!(rig.step(3_600_000), Duration::from_millis(5001));
+    assert_eq!(count(&fake, CONFIG_READ), reads);
 }
 
 #[test]
@@ -810,12 +1212,7 @@ fn cancelling_says_so_at_once_then_stops_with_an_abort() {
 fn the_handle_cancels_without_waiting_for_the_worker() {
     let fake = FakeTransport::with_auto_ack();
     let mut rig = Rig::connected(&fake);
-    let handle = WorkerHandle {
-        cmds: rig.cmds.clone(),
-        shared: Arc::clone(&rig.worker.shared),
-        emitter: rig.worker.emitter.clone(),
-        thread: None,
-    };
+    let handle = rig.handle();
 
     // Nothing is going on, so this does nothing. Later uploads don't see it.
     handle.send(Cmd::CancelUpload);
@@ -828,9 +1225,8 @@ fn the_handle_cancels_without_waiting_for_the_worker() {
     assert_eq!(rig.drain(), [Event::Cancelling]);
 
     rig.step(1);
-    let events = rig.drain();
-    assert_eq!(events.last(), Some(&Event::UploadCancelled));
-    // A cancel that's already set stops it before anything is sent.
+    // A cancel that's already set stops it before anything starts.
+    assert_eq!(rig.drain(), [Event::UploadCancelled]);
     assert_eq!(count(&fake, SCREEN_CONTROL), 0);
 
     handle.send(Cmd::UploadScreen(still()));
@@ -848,6 +1244,94 @@ fn a_cancel_with_no_upload_does_nothing() {
     rig.send(Cmd::UploadScreen(still()));
     rig.step(2);
     assert_eq!(rig.drain().last(), Some(&Event::UploadDone));
+}
+
+#[test]
+fn a_cancel_of_an_upload_that_wont_run_still_gets_its_end() {
+    // No keyboard.
+    let mut rig = Rig::with_opens(VecDeque::new(), false, Arc::new(|| {}));
+    rig.step(0);
+    rig.drain();
+    let handle = rig.handle();
+    handle.send(Cmd::UploadScreen(still()));
+    handle.send(Cmd::CancelUpload);
+    rig.step(1);
+    assert_eq!(rig.drain(), [Event::Cancelling, Event::UploadCancelled]);
+
+    // A bad block.
+    let fake = FakeTransport::new();
+    bad_read(&fake);
+    let mut rig = Rig::with_opens(VecDeque::from([Ok(fake)]), false, Arc::new(|| {}));
+    rig.step(0);
+    rig.drain();
+    let handle = rig.handle();
+    handle.send(Cmd::UploadScreen(still()));
+    handle.send(Cmd::CancelUpload);
+    rig.step(1);
+    assert_eq!(rig.drain(), [Event::Cancelling, Event::UploadCancelled]);
+}
+
+#[test]
+fn a_refused_upload_leaves_nothing_to_cancel() {
+    let mut rig = Rig::with_opens(VecDeque::new(), false, Arc::new(|| {}));
+    rig.step(0);
+    rig.drain();
+    let handle = rig.handle();
+    handle.send(Cmd::UploadScreen(still()));
+    rig.step(1);
+    assert_eq!(rig.drain(), [Event::Error(Problem::NoKeyboard)]);
+    handle.send(Cmd::CancelUpload);
+    assert_eq!(rig.drain(), []);
+
+    // An image that doesn't fit the keyboard.
+    let fake = FakeTransport::with_auto_ack();
+    let mut rig = Rig::connected(&fake);
+    let other = model::find(0x01A2).unwrap().screen.unwrap();
+    let wrong = Animation::from_bytes(&png(), &other, LoadOptions::default()).unwrap();
+    let handle = rig.handle();
+    handle.send(Cmd::UploadScreen(Arc::new(wrong)));
+    rig.step(1);
+    rig.drain();
+    handle.send(Cmd::CancelUpload);
+    assert_eq!(rig.drain(), []);
+}
+
+#[test]
+fn a_cancel_just_as_an_upload_gets_refused_is_what_gets_told() {
+    // Between the worker's check for a cancel and its refusal, which no test can get in between.
+    let mut rig = Rig::with_opens(VecDeque::new(), false, Arc::new(|| {}));
+    rig.step(0);
+    rig.drain();
+    let shared = Arc::clone(&rig.worker.shared);
+    shared.begin_upload();
+    shared.request_cancel(&rig.worker.emitter);
+    rig.worker.refuse_upload(Problem::NoKeyboard);
+    assert_eq!(rig.drain(), [Event::Cancelling, Event::UploadCancelled]);
+}
+
+#[test]
+fn a_cancel_that_loses_the_race_with_the_end_still_has_one_end() {
+    // Asked for after the last step: the upload completes, and that's the end event.
+    let fake = FakeTransport::with_auto_ack();
+    let handle_slot = Arc::new(Mutex::new(None::<WorkerHandle>));
+    let cancel_from = Arc::clone(&handle_slot);
+    let seen = AtomicUsize::new(0);
+    let notify: Notify = Arc::new(move || {
+        if seen.fetch_add(1, Ordering::SeqCst) == 3 + S85_STEPS
+            && let Some(handle) = cancel_from.lock().unwrap().as_ref()
+        {
+            handle.send(Cmd::CancelUpload);
+        }
+    });
+    let mut rig = Rig::connected_with(&fake, false, notify);
+    *handle_slot.lock().unwrap() = Some(rig.handle());
+    rig.send(Cmd::UploadScreen(still()));
+    rig.step(1);
+    assert_eq!(
+        without_progress(rig.drain())[1..],
+        [Event::Cancelling, Event::UploadDone]
+    );
+    handle_slot.lock().unwrap().take();
 }
 
 #[test]
@@ -883,14 +1367,7 @@ fn an_upload_the_keyboard_stops_answering_fails_but_stays_connected() {
 #[test]
 fn a_keyboard_that_disappears_during_an_upload_gives_an_error_and_disconnected() {
     let fake = FakeTransport::with_auto_ack();
-    let unplugged = fake.clone();
-    let events_seen = Arc::new(AtomicUsize::new(0));
-    let notify: Notify = Arc::new(move || {
-        if events_seen.fetch_add(1, Ordering::SeqCst) == 20 {
-            unplugged.disconnect();
-        }
-    });
-    let mut rig = Rig::connected_with(&fake, false, notify);
+    let mut rig = Rig::connected_with(&fake, false, unplug_after(&fake, 20));
     rig.send(Cmd::UploadScreen(still()));
     assert_eq!(rig.step(1), RECONNECT_INTERVAL);
     let events = without_progress(rig.drain());
@@ -922,6 +1399,83 @@ fn the_clock_waits_for_an_upload_and_runs_once_after_it() {
     let clock = sent.iter().position(|&c| c == CLOCK).unwrap();
     assert!(clock > last_control, "{sent:?}");
     assert_eq!(count(&fake, CLOCK), 1);
+
+    // It isn't still waiting for the next one.
+    rig.send(Cmd::UploadScreen(still()));
+    rig.step(2);
+    assert_eq!(rig.drain().last(), Some(&Event::UploadDone));
+    assert_eq!(count(&fake, CLOCK), 1);
+}
+
+#[test]
+fn waking_during_an_upload_sets_the_clock_after_it_only_with_auto_clock_on() {
+    let fake = FakeTransport::with_auto_ack();
+    let mut rig = Rig::connected(&fake);
+    rig.send(Cmd::UploadScreen(still()));
+    rig.send(Cmd::Resumed);
+    rig.step(1);
+    assert_eq!(rig.drain().last(), Some(&Event::UploadDone));
+    assert_eq!(count(&fake, CLOCK), 0);
+
+    rig.send(Cmd::SetAutoClock(true));
+    rig.send(Cmd::UploadScreen(still()));
+    rig.send(Cmd::Resumed);
+    rig.step(2);
+    assert_eq!(rig.drain().last(), Some(&Event::ClockSynced));
+    assert_eq!(count(&fake, CLOCK), 1);
+}
+
+#[test]
+fn an_explicit_clock_during_an_upload_counts_whatever_the_setting() {
+    let fake = FakeTransport::with_auto_ack();
+    let mut rig = Rig::connected(&fake);
+    rig.send(Cmd::UploadScreen(still()));
+    rig.send(Cmd::SyncClock);
+    // Waking with the setting off doesn't cancel what was asked for.
+    rig.send(Cmd::Resumed);
+    rig.step(1);
+    assert_eq!(rig.drain().last(), Some(&Event::ClockSynced));
+    assert_eq!(count(&fake, CLOCK), 1);
+}
+
+#[test]
+fn turning_the_automatic_clock_off_during_an_upload_is_respected() {
+    let fake = FakeTransport::with_auto_ack();
+    let mut rig = Rig::connected_with(&fake, true, Arc::new(|| {}));
+    rig.drain();
+    let clocks = count(&fake, CLOCK);
+    rig.send(Cmd::UploadScreen(still()));
+    rig.send(Cmd::Resumed);
+    rig.send(Cmd::SetAutoClock(false));
+    rig.step(1);
+    assert_eq!(count(&fake, CLOCK), clocks);
+
+    // It stays off.
+    queue_reads(&fake, 1);
+    rig.send(Cmd::Resumed);
+    rig.step(2);
+    assert_eq!(count(&fake, CLOCK), clocks);
+}
+
+#[test]
+fn turning_the_automatic_clock_on_during_an_upload_counts_for_the_next_wake() {
+    let fake = FakeTransport::with_auto_ack();
+    let mut rig = Rig::connected(&fake);
+    rig.send(Cmd::UploadScreen(still()));
+    rig.send(Cmd::SetAutoClock(true));
+    rig.send(Cmd::Resumed);
+    rig.step(1);
+    assert_eq!(rig.drain().last(), Some(&Event::ClockSynced));
+}
+
+#[test]
+fn a_clock_with_the_automatic_setting_off_and_no_wake_isnt_set_after_an_upload() {
+    let fake = FakeTransport::with_auto_ack();
+    let mut rig = Rig::connected(&fake);
+    rig.send(Cmd::UploadScreen(still()));
+    rig.step(1);
+    assert_eq!(rig.drain().last(), Some(&Event::UploadDone));
+    assert_eq!(count(&fake, CLOCK), 0);
 }
 
 #[test]
@@ -947,19 +1501,25 @@ fn fake_acks_so_far(fake: &FakeTransport) -> usize {
 
 #[test]
 fn a_clock_waiting_on_an_upload_is_forgotten_with_the_keyboard() {
-    let fake = FakeTransport::with_auto_ack();
-    let unplugged = fake.clone();
-    let events_seen = Arc::new(AtomicUsize::new(0));
-    let notify: Notify = Arc::new(move || {
-        if events_seen.fetch_add(1, Ordering::SeqCst) == 20 {
-            unplugged.disconnect();
-        }
-    });
-    let mut rig = Rig::connected_with(&fake, false, notify);
+    let first = FakeTransport::with_auto_ack();
+    let second = FakeTransport::with_auto_ack();
+    queue_reads(&first, 1);
+    queue_reads(&second, 2);
+    let opens = VecDeque::from([Ok(first.clone()), Ok(second.clone())]);
+    let mut rig = Rig::with_opens(opens, false, unplug_after(&first, 20));
+    rig.step(0);
     rig.send(Cmd::UploadScreen(still()));
     rig.send(Cmd::SyncClock);
     rig.step(1);
     assert_eq!(rig.drain().last(), Some(&Event::Disconnected));
+
+    // The next keyboard connects, gets looked at, and uploads, with no clock from the old request.
+    rig.step(2001);
+    rig.step(7001);
+    rig.send(Cmd::UploadScreen(still()));
+    rig.step(7002);
+    assert_eq!(rig.drain().last(), Some(&Event::UploadDone));
+    assert_eq!(count(&second, CLOCK), 0);
 }
 
 #[test]
@@ -988,6 +1548,33 @@ fn lighting_and_a_second_upload_are_refused_during_an_upload() {
     // And nothing was held back for later.
     rig.step(100);
     assert!(config_writes(&fake).is_empty());
+}
+
+#[test]
+fn a_second_upload_in_the_last_pauses_of_one_is_refused_too() {
+    let fake = FakeTransport::with_auto_ack();
+    let image = still();
+    let cmds_slot = Arc::new(Mutex::new(None::<Sender<Cmd>>));
+    let cmds = Arc::clone(&cmds_slot);
+    let again = Arc::clone(&image);
+    let seen = AtomicUsize::new(0);
+    let notify: Notify = Arc::new(move || {
+        // The upload's last progress, after which only its pauses are left.
+        if seen.fetch_add(1, Ordering::SeqCst) == 3 + S85_STEPS
+            && let Some(cmds) = cmds.lock().unwrap().as_ref()
+        {
+            cmds.send(Cmd::UploadScreen(Arc::clone(&again))).unwrap();
+        }
+    });
+    let mut rig = Rig::connected_with(&fake, false, notify);
+    *cmds_slot.lock().unwrap() = Some(rig.cmds.clone());
+    rig.send(Cmd::UploadScreen(image));
+    rig.step(1);
+    assert_eq!(
+        without_progress(rig.drain())[1..],
+        [Event::Error(Problem::Busy), Event::UploadDone]
+    );
+    assert_eq!(count(&fake, SCREEN_DATA), 215);
 }
 
 #[test]
@@ -1070,7 +1657,7 @@ fn an_image_loads_off_the_worker_and_comes_with_its_plan_and_estimate() {
     assert_eq!(image.animation.frames().len(), 3);
     assert_eq!(image.animation.delay_ms(), 250);
     assert_eq!(image.plan.frame_count(), 3);
-    assert_eq!(image.estimate, 3 * 215 * DEFAULT_ACK_LATENCY);
+    assert_eq!(image.estimate, (3 * 215 + 2) * DEFAULT_CHUNK_TIME);
     assert_eq!(image.animation.width(), s85().screen.unwrap().width);
     assert!(!image.animation.truncated());
     assert!(commands(&fake).len() == 1, "loading sends nothing");
@@ -1144,17 +1731,54 @@ fn an_image_can_load_during_an_upload_of_another() {
 }
 
 #[test]
-fn only_the_latest_load_gets_told() {
-    let (tx, rx) = channel();
-    let emitter = Emitter {
-        events: tx,
-        notify: Arc::new(|| {}),
-    };
-    let latest = AtomicU64::new(2);
-    deliver_load(&emitter, &latest, 1, Err(Error::NotFound));
-    assert!(rx.try_recv().is_err());
-    deliver_load(&emitter, &latest, 2, Err(Error::NotFound));
-    assert_eq!(rx.try_recv(), Ok(Event::ImageFailed(Error::NotFound)));
+fn a_load_refused_with_no_keyboard_replaces_one_still_running() {
+    let fake = FakeTransport::new();
+    let mut rig = Rig::connected(&fake);
+    let (started_tx, started) = channel();
+    let (release, release_rx) = channel::<()>();
+    let release_rx = Mutex::new(release_rx);
+    rig.worker.loader = Loader::new(
+        rig.worker.emitter.clone(),
+        Arc::new(move |request: &LoadRequest| {
+            started_tx.send(()).unwrap();
+            let wait = Duration::from_secs(30);
+            release_rx.lock().unwrap().recv_timeout(wait).unwrap();
+            Err(Error::Image(request.path.display().to_string()))
+        }),
+    );
+    rig.send(Cmd::LoadImage {
+        path: PathBuf::from("running.gif"),
+        fit: Fit::Cover,
+        delay: None,
+    });
+    rig.step(1);
+    started.recv_timeout(Duration::from_secs(30)).unwrap();
+
+    fake.disconnect();
+    rig.step(REFRESH_MS);
+    rig.send(Cmd::LoadImage {
+        path: PathBuf::from("refused.gif"),
+        fit: Fit::Cover,
+        delay: None,
+    });
+    rig.step(REFRESH_MS + 1);
+    release.send(()).unwrap();
+
+    // Dropping the worker ends the loader's thread once it has nothing left to do, and with that
+    // the channel closes: everything it was going to tell has been told.
+    let Rig {
+        events,
+        worker,
+        cmds,
+        ..
+    } = rig;
+    drop(worker);
+    drop(cmds);
+    let told: Vec<Event> = events.iter().collect();
+    assert_eq!(
+        told,
+        [Event::Disconnected, Event::Error(Problem::NoKeyboard)]
+    );
 }
 
 #[test]
@@ -1201,6 +1825,74 @@ fn a_report_reads_the_config_and_has_the_last_errors() {
     assert_eq!(data.config, Ok(block().to_vec()));
     assert_eq!(data.errors.len(), 1);
     assert!(data.errors[0].contains("brightness 5"), "{:?}", data.errors);
+}
+
+#[test]
+fn the_errors_in_a_report_include_every_kind_of_failure() {
+    // A keyboard that wouldn't open, then one that goes away while being polled.
+    let first = FakeTransport::new();
+    queue_reads(&first, 1);
+    let opens = VecDeque::from([Err(Error::Hid("denied".to_string())), Ok(first.clone())]);
+    let mut rig = Rig::with_opens(opens, false, Arc::new(|| {}));
+    rig.step(0);
+    assert_eq!(report_of(&mut rig, 1).errors, ["USB error: denied"]);
+
+    rig.step(2000);
+    first.disconnect();
+    rig.step(7000);
+    let errors = report_of(&mut rig, 7001).errors;
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    assert!(errors[1].starts_with("USB error: "), "{errors:?}");
+}
+
+#[test]
+fn a_failed_upload_is_in_the_report() {
+    let fake = FakeTransport::with_auto_ack();
+    fake.ack_fault(3, AckFault::Drop);
+    let mut rig = Rig::connected(&fake);
+    rig.send(Cmd::UploadScreen(still()));
+    rig.step(1);
+    rig.drain();
+    queue_reads(&fake, 1);
+    assert_eq!(
+        report_of(&mut rig, 2).errors,
+        [Error::NoAck { frame: 0, idx: 2 }.to_string()]
+    );
+}
+
+#[test]
+fn a_report_whose_read_fails_says_why_and_a_gone_keyboard_is_lost() {
+    let fake = FakeTransport::new();
+    let mut rig = Rig::connected(&fake);
+    fake.disconnect();
+    rig.send(Cmd::Report);
+    rig.step(1);
+    let events = rig.drain();
+    let Event::ReportReady(data) = &events[0] else {
+        panic!("{events:?}");
+    };
+    assert_eq!(data.model, Some(s85()));
+    let why = data.config.clone().unwrap_err();
+    assert!(why.starts_with("USB error: "), "{why}");
+    assert_eq!(data.errors, [why]);
+    assert_eq!(events[1], Event::Disconnected);
+    assert_eq!(events.len(), 2);
+}
+
+#[test]
+fn a_report_that_reads_a_bad_block_stays_connected() {
+    let fake = FakeTransport::new();
+    let mut rig = Rig::connected(&fake);
+    bad_read(&fake);
+    rig.send(Cmd::Report);
+    rig.step(1);
+    let events = rig.drain();
+    assert_eq!(events.len(), 1, "{events:?}");
+    let Event::ReportReady(data) = &events[0] else {
+        panic!("{events:?}");
+    };
+    assert!(data.config.is_err());
+    assert_eq!(data.errors.len(), 1);
 }
 
 #[test]
@@ -1267,6 +1959,251 @@ fn the_error_list_keeps_only_the_newest() {
 
 // The real thread, with the same factory seam that a demo build would use.
 
+const WAIT: Duration = Duration::from_secs(30);
+
+fn plain_options(auto_clock: bool) -> Options {
+    Options {
+        auto_clock,
+        palettes: BTreeMap::new(),
+        rk_app_running: Box::new(|| false),
+    }
+}
+
+fn wait_for(events: &Receiver<Event>, wanted: fn(&Event) -> bool) -> Event {
+    loop {
+        let event = events.recv_timeout(WAIT).unwrap();
+        if wanted(&event) {
+            return event;
+        }
+    }
+}
+
+/// Fast enough for the watchdog to show within a test, and a shutdown that doesn't wait for long.
+const QUICK: Timings = Timings {
+    watch: WatchTimes {
+        hung_after: Duration::from_millis(250),
+        check_every: Duration::from_millis(5),
+    },
+    shutdown_wait: Duration::from_millis(300),
+};
+
+/// Sets the flag when the last copy goes, taking its time, so that a test can see whether something
+/// waited for that.
+struct SlowDrop(Arc<AtomicBool>);
+
+impl Drop for SlowDrop {
+    fn drop(&mut self) {
+        thread::sleep(Duration::from_millis(100));
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+/// A keyboard whose config reads wait for as long as the test wants.
+#[derive(Clone)]
+struct HeldUp {
+    fake: FakeTransport,
+    /// Config reads wait while this is set.
+    hold: Arc<AtomicBool>,
+    /// Each input report takes this long to arrive, in real time.
+    read_delay: Duration,
+    gone: Arc<SlowDrop>,
+}
+
+impl HeldUp {
+    fn new(fake: &FakeTransport) -> HeldUp {
+        HeldUp {
+            fake: fake.clone(),
+            hold: Arc::default(),
+            read_delay: Duration::ZERO,
+            gone: Arc::new(SlowDrop(Arc::default())),
+        }
+    }
+}
+
+impl Transport for HeldUp {
+    fn send_feature(&self, report: &[u8]) -> Result<(), Error> {
+        self.fake.send_feature(report)
+    }
+
+    fn get_feature(&self, buf: &mut [u8]) -> Result<usize, Error> {
+        while self.hold.load(Ordering::SeqCst) {
+            thread::sleep(Duration::from_millis(1));
+        }
+        self.fake.get_feature(buf)
+    }
+
+    fn read_timeout(&self, buf: &mut [u8], ms: i32) -> Result<usize, Error> {
+        thread::sleep(self.read_delay);
+        self.fake.read_timeout(buf, ms)
+    }
+
+    fn sleep(&self, duration: Duration) {
+        self.fake.sleep(duration);
+    }
+
+    fn now(&self) -> Instant {
+        self.fake.now()
+    }
+}
+
+#[test]
+fn a_stuck_read_is_told_as_hung_once_and_the_end_of_it_too() {
+    let fake = FakeTransport::new();
+    queue_reads(&fake, 50);
+    let held = HeldUp::new(&fake);
+    let handing = held.clone();
+    let open = move || Device::new(handing.clone(), None, s85());
+    let (handle, events) = spawn_with(open, plain_options(false), Arc::new(|| {}), QUICK);
+    wait_for(&events, |event| matches!(event, Event::Lighting(_)));
+
+    held.hold.store(true, Ordering::SeqCst);
+    handle.send(Cmd::Refresh);
+    assert_eq!(events.recv_timeout(WAIT), Ok(Event::Hung));
+    // Over twice as long as it took to say so: it doesn't say it again.
+    thread::sleep(Duration::from_millis(600));
+    assert!(events.try_recv().is_err());
+
+    held.hold.store(false, Ordering::SeqCst);
+    wait_for(&events, |event| matches!(event, Event::Lighting(_)));
+    assert_eq!(events.recv_timeout(WAIT), Ok(Event::Responding));
+
+    // It can happen again.
+    held.hold.store(true, Ordering::SeqCst);
+    handle.send(Cmd::Refresh);
+    assert_eq!(events.recv_timeout(WAIT), Ok(Event::Hung));
+    held.hold.store(false, Ordering::SeqCst);
+    handle.shutdown();
+}
+
+#[test]
+fn a_worker_waiting_for_commands_isnt_hung() {
+    let fake = FakeTransport::new();
+    queue_reads(&fake, 50);
+    let handing = fake.clone();
+    let open = move || Device::new(handing.clone(), None, s85());
+    let (handle, events) = spawn_with(open, plain_options(false), Arc::new(|| {}), QUICK);
+    wait_for(&events, |event| matches!(event, Event::Lighting(_)));
+    // Over twice as long as it takes to count as stuck.
+    thread::sleep(Duration::from_millis(600));
+    assert!(events.try_recv().is_err());
+    handle.shutdown();
+}
+
+#[test]
+fn a_long_upload_that_keeps_moving_isnt_hung() {
+    let fake = FakeTransport::with_auto_ack();
+    queue_reads(&fake, 50);
+    let mut held = HeldUp::new(&fake);
+    held.read_delay = Duration::from_millis(20);
+    let open = move || Device::new(held.clone(), None, s85());
+    let (handle, events) = spawn_with(open, plain_options(false), Arc::new(|| {}), QUICK);
+    wait_for(&events, |event| matches!(event, Event::Lighting(_)));
+    handle.send(Cmd::UploadScreen(still()));
+    // Well past the limit, spent in the upload.
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_millis(600) {
+        let event = events.recv_timeout(WAIT).unwrap();
+        assert_ne!(event, Event::Hung);
+        assert!(!matches!(event, Event::UploadDone));
+    }
+    handle.shutdown();
+}
+
+#[test]
+fn shutting_down_waits_for_the_thread_to_finish() {
+    let fake = FakeTransport::new();
+    queue_reads(&fake, 50);
+    let held = HeldUp::new(&fake);
+    let dropped = Arc::clone(&held.gone.0);
+    let open = move || Device::new(held.clone(), None, s85());
+    let timings = Timings {
+        shutdown_wait: Duration::from_secs(10),
+        ..QUICK
+    };
+    let (handle, events) = spawn_with(open, plain_options(false), Arc::new(|| {}), timings);
+    wait_for(&events, |event| matches!(event, Event::Lighting(_)));
+    handle.shutdown();
+    assert!(dropped.load(Ordering::SeqCst));
+}
+
+#[test]
+fn shutting_down_doesnt_wait_for_a_stuck_keyboard() {
+    let fake = FakeTransport::new();
+    queue_reads(&fake, 50);
+    let held = HeldUp::new(&fake);
+    let handing = held.clone();
+    let open = move || Device::new(handing.clone(), None, s85());
+    let (handle, events) = spawn_with(open, plain_options(false), Arc::new(|| {}), QUICK);
+    wait_for(&events, |event| matches!(event, Event::Lighting(_)));
+
+    held.hold.store(true, Ordering::SeqCst);
+    handle.send(Cmd::Refresh);
+    let started = Instant::now();
+    handle.shutdown();
+    let took = started.elapsed();
+    assert!(took >= QUICK.shutdown_wait, "{took:?}");
+    assert!(took < Duration::from_secs(10), "{took:?}");
+    held.hold.store(false, Ordering::SeqCst);
+}
+
+#[test]
+fn the_thread_ends_when_the_handle_is_gone() {
+    let fake = FakeTransport::new();
+    queue_reads(&fake, 50);
+    let handing = fake.clone();
+    let open = move || Device::new(handing.clone(), None, s85());
+    let (mut handle, events) = spawn_with(open, plain_options(false), Arc::new(|| {}), QUICK);
+    wait_for(&events, |event| matches!(event, Event::Lighting(_)));
+    let thread = handle.thread.take().unwrap();
+    drop(handle);
+    let started = Instant::now();
+    while !thread.is_finished() {
+        assert!(started.elapsed() < Duration::from_secs(10), "still running");
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn a_handle_that_goes_away_during_an_upload_aborts_it() {
+    let fake = FakeTransport::with_auto_ack();
+    queue_reads(&fake, 50);
+    let handing = fake.clone();
+    let open = move || Device::new(handing.clone(), None, s85());
+    let (handle, events) = spawn(open, plain_options(false), Arc::new(|| {}));
+    wait_for(&events, |event| matches!(event, Event::Lighting(_)));
+    let spec = s85().screen.unwrap();
+    let long = Animation::from_bytes(&gif(60), &spec, LoadOptions::default()).unwrap();
+    handle.send(Cmd::UploadScreen(Arc::new(long)));
+    wait_for(&events, |event| matches!(event, Event::Progress { .. }));
+    drop(handle);
+    let end = wait_for(&events, |event| {
+        matches!(
+            event,
+            Event::UploadCancelled | Event::UploadDone | Event::UploadFailed(_)
+        )
+    });
+    assert_eq!(end, Event::UploadCancelled);
+    let controls: Vec<Vec<u8>> = fake
+        .sent()
+        .into_iter()
+        .filter(|report| report[1] == SCREEN_CONTROL)
+        .collect();
+    assert_eq!(controls.last().unwrap()[HEADER], 2 << 6);
+}
+
+#[test]
+fn a_waiting_slider_is_written_on_a_clean_quit() {
+    let fake = FakeTransport::new();
+    queue_reads(&fake, 50);
+    let handing = fake.clone();
+    let open = move || Device::new(handing.clone(), None, s85());
+    let (handle, events) = spawn(open, plain_options(false), Arc::new(|| {}));
+    wait_for(&events, |event| matches!(event, Event::Lighting(_)));
+    handle.send(Cmd::AdjustLighting(brightness(4)));
+    handle.shutdown();
+    assert_eq!(config_writes(&fake).len(), 1);
+}
+
 #[test]
 fn the_thread_runs_commands_and_tells_the_ui_through_notify() {
     let fake = FakeTransport::with_auto_ack();
@@ -1305,34 +2242,22 @@ fn the_thread_runs_commands_and_tells_the_ui_through_notify() {
 }
 
 #[test]
-fn shutting_down_stops_an_upload_with_an_abort() {
+fn shutting_down_stops_an_upload_saying_so_with_an_abort() {
     let fake = FakeTransport::with_auto_ack();
     queue_reads(&fake, 50);
     let handed_out = fake.clone();
     let open = move || Device::new(handed_out.clone(), None, s85());
-    let options = Options {
-        auto_clock: false,
-        palettes: BTreeMap::new(),
-        rk_app_running: Box::new(|| false),
-    };
-    let (handle, events) = spawn(open, options, Arc::new(|| {}));
-    loop {
-        let event = events.recv_timeout(Duration::from_secs(30)).unwrap();
-        if matches!(event, Event::Connected { .. }) {
-            break;
-        }
-    }
+    let (handle, events) = spawn(open, plain_options(false), Arc::new(|| {}));
+    wait_for(&events, |event| matches!(event, Event::Connected { .. }));
     // Enough frames that it can't be over before the next line.
     let spec = s85().screen.unwrap();
     let long = Animation::from_bytes(&gif(60), &spec, LoadOptions::default()).unwrap();
     handle.send(Cmd::UploadScreen(Arc::new(long)));
-    loop {
-        let event = events.recv_timeout(Duration::from_secs(30)).unwrap();
-        if matches!(event, Event::Progress { .. }) {
-            break;
-        }
-    }
+    wait_for(&events, |event| matches!(event, Event::Progress { .. }));
     handle.shutdown();
+
+    let told = without_progress(events.try_iter().collect());
+    assert_eq!(told, [Event::Cancelling, Event::UploadCancelled]);
     let controls: Vec<Vec<u8>> = fake
         .sent()
         .into_iter()

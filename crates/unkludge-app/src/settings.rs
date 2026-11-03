@@ -5,13 +5,17 @@
 //! can also change it from outside the app.
 
 use std::collections::BTreeMap;
-use std::io::{self, Write};
+use std::fs::File;
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use unkludge_protocol::lighting::Palettes;
 
 const AUTO_CLOCK: &str = "auto_clock";
 const PALETTES_PREFIX: &str = "palettes.";
+/// Far more than these settings can ever take, for all the models there are. A larger file isn't one
+/// of ours, and gets treated like any other damaged one.
+const MAX_FILE_BYTES: u64 = 1 << 20;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Settings {
@@ -21,6 +25,9 @@ pub struct Settings {
     pub palettes: BTreeMap<u16, Palettes>,
     /// Whether a file was there. If not, this is the first launch.
     pub existed: bool,
+    /// Why the file that's there couldn't be read. It may be fine, with these settings being only
+    /// the defaults, so while this is set saving refuses rather than replace it.
+    pub read_error: Option<String>,
 }
 
 impl Default for Settings {
@@ -29,6 +36,7 @@ impl Default for Settings {
             auto_clock: true,
             palettes: BTreeMap::new(),
             existed: false,
+            read_error: None,
         }
     }
 }
@@ -43,11 +51,15 @@ pub fn path(file_name: &str) -> Option<PathBuf> {
 }
 
 impl Settings {
-    /// The real settings. With no data folder there's nowhere to remember a first launch, so this
-    /// doesn't count as one.
+    /// The real settings.
     pub fn load() -> Settings {
-        match path(FILE_NAME) {
-            Some(file) => Settings::load_from(&file),
+        Settings::load_at(path(FILE_NAME).as_deref())
+    }
+
+    /// With no data folder there's nowhere to remember a first launch, so this doesn't count as one.
+    fn load_at(file: Option<&Path>) -> Settings {
+        match file {
+            Some(file) => Settings::load_from(file),
             None => Settings {
                 existed: true,
                 ..Settings::default()
@@ -59,17 +71,33 @@ impl Settings {
         self.save_to(&path(FILE_NAME).ok_or(io::ErrorKind::NotFound)?)
     }
 
-    /// Never fails. A file that's there but can't be read still counts as having existed, so that
-    /// a damaged file doesn't look like a first launch and turn autostart on again.
+    /// Never fails. A damaged file gives the defaults and gets replaced at the next save. One that
+    /// can't be read, or a folder that can't be made for it, gives the defaults and keeps the reason
+    /// in [`Settings::read_error`]. All of those count as having existed, so that they don't look
+    /// like a first launch and turn autostart on again.
     pub fn load_from(path: &Path) -> Settings {
-        let bytes = match std::fs::read(path) {
+        let bytes = match read_limited(path) {
             Ok(bytes) => bytes,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Settings::default(),
-            Err(_) => Vec::new(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return match path.parent().map(std::fs::create_dir_all) {
+                    Some(Err(error)) => Settings::unreadable(&error),
+                    _ => Settings::default(),
+                };
+            }
+            Err(error) => return Settings::unreadable(&error),
         };
         Settings {
             existed: true,
             ..Settings::from_text(&String::from_utf8_lossy(&bytes))
+        }
+    }
+
+    fn unreadable(error: &io::Error) -> Settings {
+        crate::log::error(&format!("the settings can't be read: {error}"));
+        Settings {
+            existed: true,
+            read_error: Some(error.to_string()),
+            ..Settings::default()
         }
     }
 
@@ -106,18 +134,43 @@ impl Settings {
     }
 
     /// Replaces the file in one go, so that a crash or a full disk leaves either the old file or
-    /// the new one, whole.
+    /// the new one, whole. Refuses if the old file couldn't be read when loading.
     pub fn save_to(&self, path: &Path) -> io::Result<()> {
+        if let Some(why) = &self.read_error {
+            return Err(io::Error::other(format!(
+                "the settings file couldn't be read, so it stays as it is: {why}"
+            )));
+        }
         if let Some(folder) = path.parent() {
             std::fs::create_dir_all(folder)?;
         }
         let temp = temp_path(path);
-        let mut file = std::fs::File::create(&temp)?;
-        file.write_all(self.to_text().as_bytes())?;
-        file.sync_all()?;
-        drop(file);
-        std::fs::rename(&temp, path)
+        let saved = self
+            .write_file(&temp)
+            .and_then(|()| std::fs::rename(&temp, path));
+        if saved.is_err() {
+            let _ = std::fs::remove_file(&temp);
+        }
+        saved
     }
+
+    fn write_file(&self, path: &Path) -> io::Result<()> {
+        let mut file = File::create(path)?;
+        file.write_all(self.to_text().as_bytes())?;
+        file.sync_all()
+    }
+}
+
+/// The file's contents, or nothing at all if it's past the limit.
+fn read_limited(path: &Path) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    File::open(path)?
+        .take(MAX_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        bytes.clear();
+    }
+    Ok(bytes)
 }
 
 fn temp_path(path: &Path) -> PathBuf {
@@ -126,8 +179,12 @@ fn temp_path(path: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
+fn all_hex(text: &str) -> bool {
+    text.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 fn parse_pid(text: &str) -> Option<u16> {
-    (text.len() == 4)
+    (text.len() == 4 && all_hex(text))
         .then(|| u16::from_str_radix(text, 16).ok())
         .flatten()
 }
@@ -137,7 +194,7 @@ fn encode_hex(bytes: &[u8]) -> String {
 }
 
 fn decode_hex(text: &str) -> Option<Vec<u8>> {
-    if !text.is_ascii() || !text.len().is_multiple_of(2) {
+    if !all_hex(text) || !text.len().is_multiple_of(2) {
         return None;
     }
     (0..text.len())
@@ -149,8 +206,7 @@ fn decode_hex(text: &str) -> Option<Vec<u8>> {
 /// Whether the first launch of this program should make it start with the system. A copy run from
 /// a build folder isn't installed, so it shouldn't.
 pub fn starts_with_system_on_first_launch(exe: &Path) -> bool {
-    !exe.components()
-        .any(|part| part.as_os_str().to_string_lossy().ends_with("target"))
+    !exe.components().any(|part| part.as_os_str() == "target")
 }
 
 #[cfg(test)]
@@ -255,6 +311,116 @@ mod tests {
         let loaded = Settings::load_from(&dir.file());
         assert!(loaded.existed);
         assert!(loaded.auto_clock);
+        assert!(loaded.read_error.is_some());
+    }
+
+    #[test]
+    fn a_file_that_cant_be_read_isnt_replaced_by_a_later_save() {
+        let dir = TempDir::new("no-overwrite");
+        // A folder stands in for a file with no read permission, which tests can't make everywhere.
+        std::fs::create_dir(dir.file()).unwrap();
+        std::fs::write(dir.file().join("what-was-there"), "kept").unwrap();
+        let loaded = Settings::load_from(&dir.file());
+        let error = loaded.save_to(&dir.file()).unwrap_err();
+        assert!(error.to_string().contains("stays as it is"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(dir.file().join("what-was-there")).unwrap(),
+            "kept"
+        );
+        // It doesn't leave a temporary file, either.
+        assert!(!dir.0.join("settings.txt.tmp").exists());
+    }
+
+    #[test]
+    fn a_refusal_to_save_applies_to_any_path() {
+        let dir = TempDir::new("refuses");
+        let settings = Settings {
+            read_error: Some("no access".to_string()),
+            ..Settings::default()
+        };
+        let elsewhere = dir.0.join("other.txt");
+        assert!(settings.save_to(&elsewhere).is_err());
+        assert!(!elsewhere.exists());
+    }
+
+    #[test]
+    fn a_folder_that_cant_be_made_isnt_a_first_launch() {
+        let dir = TempDir::new("no-folder");
+        let not_a_folder = dir.0.join("file");
+        std::fs::write(&not_a_folder, "").unwrap();
+        let loaded = Settings::load_from(&not_a_folder.join("settings.txt"));
+        assert!(loaded.existed);
+        assert!(loaded.read_error.is_some());
+    }
+
+    /// Here the file is simply missing, and it's making the folder that fails. Elsewhere the read
+    /// itself says so, as the test above has it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_folder_that_the_system_wont_make_isnt_a_first_launch() {
+        let loaded = Settings::load_from(Path::new("/proc/unkludge-test/settings.txt"));
+        assert!(loaded.existed);
+        assert!(loaded.read_error.is_some());
+    }
+
+    #[test]
+    fn with_no_data_folder_it_isnt_a_first_launch() {
+        let loaded = Settings::load_at(None);
+        assert!(loaded.existed);
+        assert!(loaded.auto_clock);
+        assert!(loaded.read_error.is_none());
+    }
+
+    #[test]
+    fn a_path_is_loaded_from_when_there_is_one() {
+        let dir = TempDir::new("load-at");
+        std::fs::write(dir.file(), "auto_clock=0\n").unwrap();
+        assert!(!Settings::load_at(Some(&dir.file())).auto_clock);
+    }
+
+    #[test]
+    fn a_file_past_the_limit_is_damaged_and_gets_replaced() {
+        let dir = TempDir::new("too-big");
+        let mut text = String::from("auto_clock=0\n");
+        text.push_str(&"#".repeat(MAX_FILE_BYTES as usize));
+        std::fs::write(dir.file(), text).unwrap();
+        let loaded = Settings::load_from(&dir.file());
+        assert!(loaded.existed);
+        assert!(loaded.auto_clock, "none of it counts");
+        assert!(loaded.read_error.is_none());
+        loaded.save_to(&dir.file()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.file()).unwrap(),
+            "auto_clock=1\n"
+        );
+    }
+
+    #[test]
+    fn a_file_right_at_the_limit_is_read() {
+        let dir = TempDir::new("at-limit");
+        let mut text = String::from("auto_clock=0\n");
+        text.push_str(&"#".repeat(MAX_FILE_BYTES as usize - text.len()));
+        std::fs::write(dir.file(), text).unwrap();
+        assert!(!Settings::load_from(&dir.file()).auto_clock);
+    }
+
+    #[test]
+    fn a_failed_save_leaves_no_temporary_file() {
+        let dir = TempDir::new("no-temp");
+        // Writing the temporary file works, and renaming it over a folder doesn't.
+        std::fs::create_dir(dir.file()).unwrap();
+        assert!(Settings::default().save_to(&dir.file()).is_err());
+        assert!(!dir.0.join("settings.txt.tmp").exists());
+    }
+
+    #[test]
+    fn a_plus_isnt_a_hex_digit() {
+        let good = "00".repeat(PALETTES_LEN);
+        let settings = Settings::from_text(&format!("palettes.+265={good}\n"));
+        assert!(settings.palettes.is_empty());
+        let plus_in_value = format!("+0{}", "00".repeat(PALETTES_LEN - 1));
+        let settings = Settings::from_text(&format!("palettes.0265={plus_in_value}\n"));
+        assert!(settings.palettes.is_empty());
     }
 
     #[test]
@@ -288,7 +454,8 @@ mod tests {
 
     #[test]
     fn non_ascii_in_a_hex_value_is_only_a_bad_value() {
-        let settings = Settings::from_text("palettes.0265=é0\n");
+        // Four bytes, the second pair of them starting partway through the `é`.
+        let settings = Settings::from_text("palettes.0265=aé0\n");
         assert!(settings.palettes.is_empty());
     }
 
@@ -335,6 +502,8 @@ mod tests {
         for path in [
             "/opt/unkludge/unkludge-app",
             "C:/Program Files/Unkludge/unkludge-app.exe",
+            "/home/a/kl-target/debug/unkludge-app",
+            "/home/a/my-target-practice/unkludge-app",
         ] {
             assert!(
                 starts_with_system_on_first_launch(Path::new(path)),
@@ -343,7 +512,7 @@ mod tests {
         }
         for path in [
             "/home/a/unkludge/target/release/unkludge-app",
-            "/home/a/kl-target/debug/unkludge-app",
+            "C:/unkludge/target/debug/unkludge-app.exe",
         ] {
             assert!(
                 !starts_with_system_on_first_launch(Path::new(path)),

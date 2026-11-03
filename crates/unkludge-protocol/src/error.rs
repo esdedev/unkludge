@@ -25,6 +25,13 @@ pub enum Error {
     Cancelled,
     #[error("{0}")]
     Image(String),
+    /// A setting of the current effect was changed with no effect showing.
+    #[error("the lights are off: choose an effect first")]
+    LightsOff,
+    /// A setting of the current effect was changed in the custom mode, which this version can't
+    /// change, only leave.
+    #[error("the keyboard is in the custom mode: choose an effect first")]
+    CustomMode,
     /// `got` may be less than the whole count, as decoding stops soon after the limit.
     #[error("too many frames: at least {got}, this keyboard's limit is {max}")]
     TooManyFrames { got: usize, max: usize },
@@ -63,6 +70,14 @@ mod tests {
         assert_eq!(
             Error::Image("not a known image format".to_string()).to_string(),
             "not a known image format"
+        );
+        assert_eq!(
+            Error::LightsOff.to_string(),
+            "the lights are off: choose an effect first"
+        );
+        assert_eq!(
+            Error::CustomMode.to_string(),
+            "the keyboard is in the custom mode: choose an effect first"
         );
         assert_eq!(
             Error::TooManyFrames { got: 61, max: 60 }.to_string(),

@@ -1,6 +1,7 @@
 //! Windows: where files go, the language, starting with Windows, and one copy at a time.
 
-use std::ffi::{OsStr, c_void};
+use std::ffi::{OsStr, OsString, c_void};
+use std::io;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
@@ -35,13 +36,23 @@ fn wide(text: &OsStr) -> Vec<u16> {
 
 /// `%APPDATA%\Unkludge`
 pub fn data_dir() -> Option<PathBuf> {
-    Some(PathBuf::from(std::env::var_os("APPDATA")?).join("Unkludge"))
+    data_dir_in(std::env::var_os("APPDATA"))
+}
+
+fn data_dir_in(appdata: Option<OsString>) -> Option<PathBuf> {
+    let appdata = appdata.filter(|value| !value.is_empty())?;
+    Some(PathBuf::from(appdata).join("Unkludge"))
 }
 
 pub fn is_spanish() -> bool {
-    const LANG_SPANISH: u16 = 0x0A;
     // SAFETY: no arguments, and it can't fail.
-    (unsafe { GetUserDefaultUILanguage() } & 0x3FF) == LANG_SPANISH
+    language_is_spanish(unsafe { GetUserDefaultUILanguage() })
+}
+
+/// The low bits of a language ID are the language, whatever the country in the high bits.
+fn language_is_spanish(language: u16) -> bool {
+    const LANG_SPANISH: u16 = 0x0A;
+    language & 0x3FF == LANG_SPANISH
 }
 
 /// By the program's name, so a warning is all this is good for.
@@ -50,10 +61,10 @@ pub fn rk_app_running() -> bool {
 }
 
 /// Opens a URL, a file or a folder with its default program.
-pub fn open(target: &Path) {
+pub fn open(target: &Path) -> io::Result<()> {
     let target = wide(target.as_os_str());
     // SAFETY: the strings are NUL-terminated and outlive the call, which doesn't keep them.
-    unsafe {
+    let result = unsafe {
         ShellExecuteW(
             null_mut(),
             w!("open"),
@@ -61,7 +72,19 @@ pub fn open(target: &Path) {
             null(),
             null(),
             SW_SHOWNORMAL,
-        );
+        )
+    };
+    shell_result(result as isize)
+}
+
+/// The system says anything above 32 is success, and the rest are error codes.
+fn shell_result(code: isize) -> io::Result<()> {
+    if code > 32 {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "the system couldn't open it: error {code}"
+        )))
     }
 }
 
@@ -99,7 +122,7 @@ fn approval_disabled(value: &[u8]) -> bool {
     value.first().is_some_and(|byte| byte & 1 == 1)
 }
 
-fn run_value() -> Option<String> {
+fn read_string(key: PCWSTR, value: PCWSTR) -> Option<String> {
     let mut buf = [0u16; 1024];
     let mut size = size_of_val(&buf) as u32;
     // SAFETY: the strings are NUL-terminated, the buffer and its size in bytes go together, and the
@@ -107,8 +130,8 @@ fn run_value() -> Option<String> {
     let result = unsafe {
         RegGetValueW(
             HKEY_CURRENT_USER,
-            RUN_KEY,
-            RUN_VALUE,
+            key,
+            value,
             RRF_RT_REG_SZ,
             null_mut(),
             buf.as_mut_ptr().cast::<c_void>(),
@@ -121,15 +144,15 @@ fn run_value() -> Option<String> {
     })
 }
 
-fn approved_value() -> Option<Vec<u8>> {
+fn read_binary(key: PCWSTR, value: PCWSTR) -> Option<Vec<u8>> {
     let mut buf = [0u8; 64];
     let mut size = buf.len() as u32;
-    // SAFETY: as in `run_value`.
+    // SAFETY: as in `read_string`.
     let result = unsafe {
         RegGetValueW(
             HKEY_CURRENT_USER,
-            APPROVED_KEY,
-            RUN_VALUE,
+            key,
+            value,
             RRF_RT_REG_BINARY,
             null_mut(),
             buf.as_mut_ptr().cast::<c_void>(),
@@ -139,45 +162,69 @@ fn approved_value() -> Option<Vec<u8>> {
     (result == ERROR_SUCCESS).then(|| buf[..size as usize].to_vec())
 }
 
-fn write_run_value() {
-    let Ok(exe) = std::env::current_exe() else {
-        return;
-    };
-    let value = wide(OsStr::new(&startup_command(&exe)));
-    // SAFETY: the strings are NUL-terminated, and the size in bytes includes the NUL, as it should.
-    unsafe {
-        RegSetKeyValueW(
-            HKEY_CURRENT_USER,
-            RUN_KEY,
-            RUN_VALUE,
-            REG_SZ,
-            value.as_ptr().cast::<c_void>(),
-            size_of_val(value.as_slice()) as u32,
-        );
-    }
+/// How much of a string to hand to the registry: all of it in bytes, with its NUL.
+fn string_size(text: &[u16]) -> u32 {
+    size_of_val(text) as u32
 }
 
-fn write_approved() {
+fn write_string(key: PCWSTR, value: PCWSTR, text: &str) {
+    let text = wide(OsStr::new(text));
     // SAFETY: the strings are NUL-terminated, and the data and its size go together.
     unsafe {
         RegSetKeyValueW(
             HKEY_CURRENT_USER,
-            APPROVED_KEY,
-            RUN_VALUE,
-            REG_BINARY,
-            APPROVED_ON.as_ptr().cast::<c_void>(),
-            APPROVED_ON.len() as u32,
+            key,
+            value,
+            REG_SZ,
+            text.as_ptr().cast::<c_void>(),
+            string_size(&text),
         );
     }
 }
 
+fn write_binary(key: PCWSTR, value: PCWSTR, data: &[u8]) {
+    // SAFETY: the strings are NUL-terminated, and the data and its size go together.
+    unsafe {
+        RegSetKeyValueW(
+            HKEY_CURRENT_USER,
+            key,
+            value,
+            REG_BINARY,
+            data.as_ptr().cast::<c_void>(),
+            data.len() as u32,
+        );
+    }
+}
+
+fn run_value() -> Option<String> {
+    read_string(RUN_KEY, RUN_VALUE)
+}
+
+fn approved_value() -> Option<Vec<u8>> {
+    read_binary(APPROVED_KEY, RUN_VALUE)
+}
+
+fn write_run_value() {
+    if let Ok(exe) = std::env::current_exe() {
+        write_string(RUN_KEY, RUN_VALUE, &startup_command(&exe));
+    }
+}
+
+fn write_approved() {
+    write_binary(APPROVED_KEY, RUN_VALUE, &APPROVED_ON);
+}
+
 /// Whether the app starts with Windows: this copy, and not disabled in Task Manager.
 pub fn autostart_enabled() -> bool {
-    let this_copy = match (run_value(), std::env::current_exe()) {
-        (Some(command), Ok(exe)) => command == startup_command(&exe),
-        _ => false,
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
     };
-    this_copy && !approved_value().is_some_and(|value| approval_disabled(&value))
+    enabled_by(run_value().as_deref(), &exe, approved_value().as_deref())
+}
+
+fn enabled_by(command: Option<&str>, exe: &Path, approved: Option<&[u8]>) -> bool {
+    let this_copy = command.is_some_and(|command| command == startup_command(exe));
+    this_copy && !approved.is_some_and(approval_disabled)
 }
 
 pub fn set_autostart(on: bool) {
@@ -238,6 +285,7 @@ fn claim_mutex(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows_sys::Win32::System::Registry::RegDeleteTreeW;
 
     #[test]
     fn the_startup_command_quotes_the_program_and_starts_in_the_tray() {
@@ -281,8 +329,97 @@ mod tests {
 
     #[test]
     fn the_data_folder_is_the_apps_own() {
-        let dir = data_dir().unwrap();
-        assert_eq!(dir.file_name().unwrap(), "Unkludge");
+        assert_eq!(
+            data_dir_in(Some(OsString::from(r"C:\Users\a\AppData\Roaming"))),
+            Some(PathBuf::from(r"C:\Users\a\AppData\Roaming\Unkludge"))
+        );
+    }
+
+    #[test]
+    fn an_empty_or_missing_appdata_means_no_data_folder() {
+        assert_eq!(data_dir_in(None), None);
+        assert_eq!(data_dir_in(Some(OsString::new())), None);
+    }
+
+    #[test]
+    fn spanish_is_recognised_whatever_the_country() {
+        // Spain, Mexico, Argentina.
+        for language in [0x0C0A, 0x080A, 0x2C0A] {
+            assert!(language_is_spanish(language), "{language:04X}");
+        }
+        // English, French, and one with the same low byte but a different language.
+        for language in [0x0409, 0x040C, 0x010A] {
+            assert!(!language_is_spanish(language), "{language:04X}");
+        }
+    }
+
+    #[test]
+    fn opening_succeeds_only_above_the_error_codes() {
+        assert!(shell_result(42).is_ok());
+        assert!(shell_result(33).is_ok());
+        assert!(shell_result(32).is_err());
+        let error = shell_result(2).unwrap_err();
+        assert_eq!(error.to_string(), "the system couldn't open it: error 2");
+        assert!(shell_result(0).is_err());
+    }
+
+    #[test]
+    fn it_is_enabled_only_for_this_copy_and_not_disabled_in_task_manager() {
+        let here = Path::new(r"C:\here\unkludge-app.exe");
+        let this_copy = startup_command(here);
+        let other = startup_command(Path::new(r"C:\there\unkludge-app.exe"));
+        assert!(enabled_by(Some(&this_copy), here, None));
+        assert!(enabled_by(Some(&this_copy), here, Some(&APPROVED_ON)));
+        assert!(!enabled_by(Some(&this_copy), here, Some(&[3, 0])));
+        assert!(!enabled_by(Some(&other), here, Some(&APPROVED_ON)));
+        assert!(!enabled_by(None, here, Some(&APPROVED_ON)));
+    }
+
+    /// A key of the test's own, far from anything that starts programs, gone at the end.
+    struct ScratchKey(Vec<u16>);
+
+    impl ScratchKey {
+        fn new(name: &str) -> ScratchKey {
+            let path = format!("Software\\Unkludge-Test-{}-{name}", std::process::id());
+            ScratchKey(wide(OsStr::new(&path)))
+        }
+    }
+
+    impl Drop for ScratchKey {
+        fn drop(&mut self) {
+            // SAFETY: the name is NUL-terminated.
+            unsafe {
+                RegDeleteTreeW(HKEY_CURRENT_USER, self.0.as_ptr());
+            }
+        }
+    }
+
+    #[test]
+    fn a_string_size_is_in_bytes_with_the_nul() {
+        assert_eq!(string_size(&wide(OsStr::new("ab"))), 6);
+    }
+
+    #[test]
+    fn a_long_string_comes_back_from_the_registry_whole() {
+        let key = ScratchKey::new("string");
+        let value = w!("Some value");
+        // Longer than half the buffer, in characters that take more than a byte.
+        let text = format!("\"C:\\Usuarios\\José\\{}\" --tray", "ñ".repeat(600));
+        assert_eq!(read_string(key.0.as_ptr(), value), None);
+        write_string(key.0.as_ptr(), value, &text);
+        assert_eq!(read_string(key.0.as_ptr(), value), Some(text));
+    }
+
+    #[test]
+    fn binary_values_come_back_from_the_registry_whole() {
+        let key = ScratchKey::new("binary");
+        let value = w!("Some value");
+        assert_eq!(read_binary(key.0.as_ptr(), value), None);
+        write_binary(key.0.as_ptr(), value, &APPROVED_ON);
+        assert_eq!(
+            read_binary(key.0.as_ptr(), value).as_deref(),
+            Some(&APPROVED_ON[..])
+        );
     }
 
     #[test]

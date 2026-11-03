@@ -5,6 +5,8 @@ mod crash;
 #[allow(dead_code)]
 mod i18n;
 #[allow(dead_code)]
+mod log;
+#[allow(dead_code)]
 mod report;
 #[allow(dead_code)]
 mod settings;

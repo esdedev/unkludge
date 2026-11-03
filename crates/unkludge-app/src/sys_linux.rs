@@ -2,17 +2,22 @@
 //! rule that gives access to keyboards.
 
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::time::Duration;
 
 const APP_NAME: &str = "unkludge";
 
 /// In the binary, so that it can be installed from the plain binary or an AppImage too.
 const UDEV_RULE: &str = include_str!("../../../packaging/linux/70-unkludge.rules");
 const UDEV_RULE_PATH: &str = "/etc/udev/rules.d/70-unkludge.rules";
+
+const SHOW_READ_TIMEOUT: Duration = Duration::from_millis(500);
+const ACCEPT_ERROR_PAUSE: Duration = Duration::from_millis(200);
+const ACCEPT_ERRORS_LIMIT: u32 = 50;
 
 /// Why [`grant_access`] didn't work.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,8 +88,21 @@ pub fn rk_app_running() -> bool {
 }
 
 /// Opens a URL, a file or a folder with its default program.
-pub fn open(target: &Path) {
-    let _ = std::process::Command::new("xdg-open").arg(target).spawn();
+pub fn open(target: &Path) -> io::Result<()> {
+    let mut command = std::process::Command::new("xdg-open");
+    command.arg(target);
+    start_and_reap(command).map(|_| ())
+}
+
+/// Starts a program that takes its time, returning its process ID. A short thread waits for it, for
+/// it not to stay around as a zombie.
+fn start_and_reap(mut command: std::process::Command) -> io::Result<u32> {
+    let mut child = command.spawn()?;
+    let id = child.id();
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(id)
 }
 
 // Starting with the session
@@ -99,7 +117,8 @@ fn autostart_file() -> Option<PathBuf> {
 }
 
 /// A path quoted for a `.desktop` file's `Exec` key. Within the quotes `"`, `` ` ``, `$` and `\` take
-/// a backslash, and as the value is also a string, those backslashes are written twice.
+/// a backslash, and as the value is also a string, those backslashes are written twice. `%` starts a
+/// field code anywhere in the key, so it's doubled.
 fn exec_quote(path: &Path) -> String {
     let mut quoted = String::from("\"");
     for c in path.to_string_lossy().chars() {
@@ -109,6 +128,7 @@ fn exec_quote(path: &Path) -> String {
                 quoted.push(c);
             }
             '\\' => quoted.push_str("\\\\\\\\"),
+            '%' => quoted.push_str("%%"),
             _ => quoted.push(c),
         }
     }
@@ -118,7 +138,7 @@ fn exec_quote(path: &Path) -> String {
 
 /// The program that an `Exec=` line starts: its first argument, quoted or not.
 fn exec_program(line: &str) -> Option<PathBuf> {
-    let value = line.strip_prefix("Exec=")?;
+    let value = line.strip_prefix("Exec=")?.replace("%%", "%");
     let Some(quoted) = value.strip_prefix('"') else {
         return value.split_whitespace().next().map(PathBuf::from);
     };
@@ -143,13 +163,16 @@ fn exec_program(line: &str) -> Option<PathBuf> {
     None
 }
 
-fn exec_line(exe: &Path) -> String {
-    format!("Exec={} --tray", exec_quote(exe))
+/// A `.desktop` file is lines of text, so a path with a line break in it can't go in one, and neither
+/// can a program that needs it be started from one.
+fn exec_line(exe: &Path) -> Option<String> {
+    let has_line_break = exe.to_string_lossy().contains(['\n', '\r']);
+    (!has_line_break).then(|| format!("Exec={} --tray", exec_quote(exe)))
 }
 
-/// What goes in the session's startup entry for this program.
-fn autostart_entry(exe: &Path) -> String {
-    format!(
+/// What goes in the session's startup entry for this program, if it can have one.
+fn autostart_entry(exe: &Path) -> Option<String> {
+    Some(format!(
         "[Desktop Entry]\n\
          Type=Application\n\
          Name=Unkludge\n\
@@ -158,8 +181,8 @@ fn autostart_entry(exe: &Path) -> String {
          {}\n\
          Terminal=false\n\
          X-GNOME-Autostart-enabled=true\n",
-        exec_line(exe)
-    )
+        exec_line(exe)?
+    ))
 }
 
 /// What to start to get this copy: the AppImage when running from one, as the program itself is in
@@ -191,9 +214,17 @@ fn entry_program(file: &Path) -> Option<PathBuf> {
     text.lines().find_map(exec_program)
 }
 
+/// Whether an entry turns itself off, as session settings do when the user unticks it there.
+fn entry_is_disabled(text: &str) -> bool {
+    text.lines()
+        .any(|line| line == "Hidden=true" || line == "X-GNOME-Autostart-enabled=false")
+}
+
 fn enabled_in(file: &Path, exe: &Path) -> bool {
-    let line = exec_line(exe);
-    std::fs::read_to_string(file).is_ok_and(|text| text.lines().any(|l| l == line))
+    let (Ok(text), Some(line)) = (std::fs::read_to_string(file), exec_line(exe)) else {
+        return false;
+    };
+    text.lines().any(|l| l == line) && !entry_is_disabled(&text)
 }
 
 fn set_in(file: &Path, on: bool, exe: &Path) {
@@ -201,17 +232,29 @@ fn set_in(file: &Path, on: bool, exe: &Path) {
         let _ = std::fs::remove_file(file);
         return;
     }
+    let Some(entry) = autostart_entry(exe) else {
+        crate::log::error(
+            "the program's path has a line break, so it can't start with the session",
+        );
+        return;
+    };
     if let Some(folder) = file.parent() {
         let _ = std::fs::create_dir_all(folder);
     }
-    let _ = std::fs::write(file, autostart_entry(exe));
+    let _ = std::fs::write(file, entry);
 }
 
 /// See [`refresh_autostart`].
 fn refresh_in(file: &Path, exe: &Path, force: bool) {
-    let Some(target) = entry_program(file) else {
+    let Ok(text) = std::fs::read_to_string(file) else {
         return;
     };
+    let Some(target) = text.lines().find_map(exec_program) else {
+        return;
+    };
+    if entry_is_disabled(&text) {
+        return;
+    }
     let other_appimage = is_unkludge_appimage(exe) && is_unkludge_appimage(&target);
     if target != exe && (force || !target.exists() || other_appimage) {
         set_in(file, true, exe);
@@ -236,7 +279,7 @@ pub fn set_autostart(on: bool) {
 
 /// If the app starts with the session but the entry points at another program, points it at this
 /// one: always with `force`, and otherwise when that one no longer exists or is another Unkludge
-/// AppImage. With no entry this does nothing, as the user turned it off.
+/// AppImage. With no entry, or one that's turned off, this does nothing, as that's the user's doing.
 pub fn refresh_autostart(force: bool) {
     if cfg!(test) {
         panic!("tests must not change the real autostart entry");
@@ -281,7 +324,20 @@ fn take_lock(dir: &Path) -> Lock {
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
         Lock::Held(file)
     } else {
+        lock_failure(io::Error::last_os_error().raw_os_error())
+    }
+}
+
+/// Only one answer means that another copy has the lock. Anything else, as on a file system with no
+/// locks, shouldn't keep the app from running with no word of why.
+fn lock_failure(os_error: Option<i32>) -> Lock {
+    if os_error == Some(libc::EWOULDBLOCK) {
         Lock::Taken
+    } else {
+        crate::log::error(&format!(
+            "the single-copy lock failed, so this runs without it: error {os_error:?}"
+        ));
+        Lock::Untried
     }
 }
 
@@ -323,20 +379,52 @@ fn listen_for_show(socket: &Path, show: impl Fn() + Send + 'static) {
         return;
     };
     std::thread::spawn(move || {
-        for mut stream in listener.incoming().flatten() {
-            let mut buf = [0; 8];
-            if stream.read(&mut buf).is_ok_and(|read| read > 0) {
-                show();
+        accept_loop(
+            || listener.accept().map(|(stream, _)| stream),
+            |stream| {
+                if asks_to_show(stream) {
+                    show();
+                }
+            },
+            std::thread::sleep,
+        );
+    });
+}
+
+/// Whether what came in on a connection is a request. One that says nothing doesn't get to hold up
+/// the ones after it.
+fn asks_to_show(mut stream: UnixStream) -> bool {
+    let _ = stream.set_read_timeout(Some(SHOW_READ_TIMEOUT));
+    let mut buf = [0; 8];
+    stream.read(&mut buf).is_ok_and(|read| read > 0)
+}
+
+/// Serves connections as they come. Errors pause it, so that one that keeps coming doesn't take over
+/// a CPU, and past a number of them in a row it gives up, as nothing is going to get better.
+fn accept_loop<S>(
+    mut accept: impl FnMut() -> io::Result<S>,
+    mut serve: impl FnMut(S),
+    mut pause: impl FnMut(Duration),
+) {
+    let mut errors = 0;
+    while errors < ACCEPT_ERRORS_LIMIT {
+        match accept() {
+            Ok(stream) => {
+                errors = 0;
+                serve(stream);
+            }
+            Err(_) => {
+                errors += 1;
+                pause(ACCEPT_ERROR_PAUSE);
             }
         }
-    });
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::mpsc::channel;
-    use std::time::Duration;
 
     struct TempDir(PathBuf);
 
@@ -421,11 +509,13 @@ mod tests {
             "/home/ana/.local/bin/unkludge-app",
             "/home/Ana María/bin/unkludge-app",
             "/tmp/a\"b$c`d\\e/unkludge-app",
+            "/home/ana/100%/%f/unkludge-app",
         ] {
-            let line = exec_line(Path::new(path));
+            let line = exec_line(Path::new(path)).unwrap();
             assert_eq!(exec_program(&line), Some(PathBuf::from(path)), "{line}");
         }
         assert_eq!(exec_quote(Path::new("/a b")), "\"/a b\"");
+        assert_eq!(exec_quote(Path::new("/100%")), "\"/100%%\"");
         assert_eq!(
             exec_program("Exec=/usr/bin/unkludge-app --tray"),
             Some(PathBuf::from("/usr/bin/unkludge-app"))
@@ -436,7 +526,7 @@ mod tests {
 
     #[test]
     fn the_entry_starts_this_program_in_the_tray() {
-        let entry = autostart_entry(Path::new("/opt/My Apps/unkludge-app"));
+        let entry = autostart_entry(Path::new("/opt/My Apps/unkludge-app")).unwrap();
         let lines: Vec<&str> = entry.lines().collect();
         assert_eq!(lines[0], "[Desktop Entry]");
         assert!(lines.contains(&"Type=Application"));
@@ -523,6 +613,114 @@ mod tests {
         set_in(&file, true, &old_image);
         refresh_in(&file, &new_image, false);
         assert_eq!(entry_program(&file), Some(new_image));
+    }
+
+    #[test]
+    fn a_program_started_in_the_background_leaves_no_zombie() {
+        let id = start_and_reap(std::process::Command::new("true")).unwrap();
+        // A zombie keeps its entry here until something waits for it.
+        let entry = PathBuf::from(format!("/proc/{id}"));
+        let started = std::time::Instant::now();
+        while entry.exists() {
+            assert!(started.elapsed() < Duration::from_secs(10), "still there");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn a_path_with_a_line_break_gets_no_entry() {
+        let dir = TempDir::new("line-break");
+        let file = dir.0.join("unkludge.desktop");
+        for exe in ["/opt/a\nb/unkludge-app", "/opt/a\rb/unkludge-app"] {
+            let exe = Path::new(exe);
+            assert_eq!(exec_line(exe), None);
+            assert_eq!(autostart_entry(exe), None);
+            set_in(&file, true, exe);
+            assert!(!file.exists());
+            assert!(!enabled_in(&file, exe));
+        }
+    }
+
+    #[test]
+    fn an_entry_turned_off_in_the_session_settings_counts_as_off_and_stays() {
+        let dir = TempDir::new("disabled");
+        let file = dir.0.join("unkludge.desktop");
+        let exe = Path::new("/opt/unkludge-app");
+        let entry = autostart_entry(exe).unwrap();
+        let turned_off = [
+            entry.replace(
+                "X-GNOME-Autostart-enabled=true",
+                "X-GNOME-Autostart-enabled=false",
+            ),
+            format!("{entry}Hidden=true\n"),
+        ];
+        for text in turned_off {
+            std::fs::write(&file, &text).unwrap();
+            assert!(!enabled_in(&file, exe), "{text}");
+            refresh_in(&file, Path::new("/opt/other"), true);
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), text);
+        }
+        // `Hidden=false` is no reason to think it's off.
+        std::fs::write(&file, format!("{entry}Hidden=false\n")).unwrap();
+        assert!(enabled_in(&file, exe));
+    }
+
+    #[test]
+    fn only_would_block_means_another_copy_has_the_lock() {
+        assert!(matches!(lock_failure(Some(libc::EWOULDBLOCK)), Lock::Taken));
+        assert!(matches!(lock_failure(Some(libc::ENOLCK)), Lock::Untried));
+        assert!(matches!(lock_failure(None), Lock::Untried));
+    }
+
+    #[test]
+    fn the_accept_loop_pauses_on_errors_and_gives_up_on_a_long_run_of_them() {
+        let mut pauses = Vec::new();
+        let mut served = Vec::new();
+        // Four good ones with a few errors among them, which start the count again, then only errors.
+        let mut script = vec![Ok(1), Err(()), Err(()), Ok(2), Err(()), Ok(3), Ok(4)].into_iter();
+        let mut accepted = 0;
+        accept_loop(
+            || {
+                accepted += 1;
+                match script.next() {
+                    Some(Ok(number)) => Ok(number),
+                    _ => Err(io::Error::other("nope")),
+                }
+            },
+            |number| served.push(number),
+            |pause| pauses.push(pause),
+        );
+        assert_eq!(served, [1, 2, 3, 4]);
+        let errors = 3 + ACCEPT_ERRORS_LIMIT as usize;
+        assert_eq!(pauses.len(), errors);
+        assert!(pauses.iter().all(|&pause| pause == ACCEPT_ERROR_PAUSE));
+        assert_eq!(accepted, errors + 4);
+    }
+
+    #[test]
+    fn a_connection_that_says_nothing_doesnt_hold_up_the_next() {
+        let dir = TempDir::new("silent");
+        let socket = dir.0.join("test.sock");
+        let (shown_tx, shown) = channel();
+        listen_for_show(&socket, move || {
+            let _ = shown_tx.send(());
+        });
+        // Stays open, with nothing written.
+        let _silent = UnixStream::connect(&socket).unwrap();
+        ask_to_show(&socket);
+        assert_eq!(shown.recv_timeout(Duration::from_secs(10)), Ok(()));
+    }
+
+    #[test]
+    fn a_connection_that_closes_with_nothing_said_isnt_a_request() {
+        let dir = TempDir::new("closed");
+        let socket = dir.0.join("test.sock");
+        let (shown_tx, shown) = channel();
+        listen_for_show(&socket, move || {
+            let _ = shown_tx.send(());
+        });
+        drop(UnixStream::connect(&socket).unwrap());
+        assert!(shown.recv_timeout(Duration::from_millis(200)).is_err());
     }
 
     #[test]

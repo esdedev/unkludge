@@ -9,7 +9,7 @@ use unkludge_protocol::Error;
 
 use crate::worker::Problem;
 
-/// One language's texts. `{name}` marks where a value goes.
+/// One language's texts. In the private ones, `{name}` marks where a value goes.
 pub struct Tr {
     /// Shown when there's no keyboard.
     pub connect_keyboard: &'static str,
@@ -17,10 +17,14 @@ pub struct Tr {
     pub no_keyboard: &'static str,
     /// [`Problem::Busy`].
     pub busy: &'static str,
+    /// [`Problem::UnusableConfig`].
+    pub unusable_config: &'static str,
     /// While [`crate::worker::Event::RkAppRunning`] says so.
     pub rk_app_warning: &'static str,
     /// Before [`crate::worker::Event::CannotOpen`]'s error.
     pub cannot_open: &'static str,
+    /// From [`crate::worker::Event::Hung`] to [`crate::worker::Event::Responding`].
+    pub hung: &'static str,
     /// [`crate::worker::Event::Cancelling`].
     pub cancelling: &'static str,
     /// [`crate::worker::Event::UploadDone`].
@@ -35,38 +39,34 @@ pub struct Tr {
     pub image_failed: &'static str,
     /// [`crate::worker::Event::ClockSynced`].
     pub clock_synced: &'static str,
-    /// `{frames}`: the frames kept, from a file that has more than the keyboard's limit.
-    pub frames_cut: &'static str,
-    /// `{sent}`: the frames sent, `{frames}`: those in the file, `{delay}`: the delay in ms,
-    /// `{draw}`: the keyboard's draw time in ms.
-    pub frames_thinned: &'static str,
-    /// `{time}`: from [`Tr::duration`].
-    pub time_left: &'static str,
+
+    frames_cut: &'static str,
+    frames_thinned: &'static str,
+    time_left: &'static str,
 
     err_not_found: &'static str,
-    /// `{pid}`
     err_unsupported: &'static str,
-    /// `{detail}`
     err_usb: &'static str,
     err_start_no_ack: &'static str,
     err_start_rejected: &'static str,
-    /// `{idx}`, `{frame}`
     err_no_ack: &'static str,
-    /// `{idx}`, `{frame}`
     err_rejected: &'static str,
     err_cancelled: &'static str,
-    /// `{got}`, `{max}`
     err_too_many_frames: &'static str,
+    err_lights_off: &'static str,
+    err_custom_mode: &'static str,
 }
 
 const EN: Tr = Tr {
     connect_keyboard: "Connect the keyboard by USB cable",
     no_keyboard: "No keyboard is connected",
     busy: "Not possible during an upload: wait for it to end, or cancel it",
+    unusable_config: "This keyboard's settings can't be read properly, so nothing gets written to it",
     rk_app_warning: "DeviceDriver.exe, which may be RK's app, is running. It polls the keyboard and \
                      sends its own settings back, so close it first",
     cannot_open: "The keyboard can't be opened",
-    cancelling: "Cancelling… on a keyboard that has stopped answering this can take 15 seconds",
+    hung: "The keyboard isn't answering: unplug it and plug it back in",
+    cancelling: "Cancelling… on a keyboard that has stopped answering this can take 16 seconds",
     upload_done: "Uploaded",
     upload_unconfirmed: "The keyboard took every frame but didn't confirm the end, so it may not \
                          show the new animation",
@@ -89,16 +89,20 @@ const EN: Tr = Tr {
     err_rejected: "The keyboard refused chunk {idx} of frame {frame}. An abort was sent",
     err_cancelled: "Cancelled",
     err_too_many_frames: "Too many frames: at least {got}, this keyboard's limit is {max}",
+    err_lights_off: "The lights are off: choose an effect first",
+    err_custom_mode: "The keyboard is in the custom mode: choose an effect first",
 };
 
 const ES: Tr = Tr {
     connect_keyboard: "Conecta el teclado por cable USB",
     no_keyboard: "No hay ningún teclado conectado",
     busy: "No se puede durante una subida: espera a que termine o cancélala",
+    unusable_config: "Los ajustes de este teclado no se leen bien, así que no se le escribe nada",
     rk_app_warning: "DeviceDriver.exe, que puede ser el programa de RK, está en marcha. Ese programa \
                      sondea el teclado y le vuelve a enviar sus ajustes, así que ciérralo antes",
     cannot_open: "No se puede abrir el teclado",
-    cancelling: "Cancelando… con un teclado que ha dejado de responder puede tardar 15 segundos",
+    hung: "El teclado no responde: desenchúfalo y vuelve a enchufarlo",
+    cancelling: "Cancelando… con un teclado que ha dejado de responder puede tardar 16 segundos",
     upload_done: "Subida terminada",
     upload_unconfirmed: "El teclado recibió todos los fotogramas pero no confirmó el final, así que \
                          puede que no muestre la animación nueva",
@@ -123,6 +127,8 @@ const ES: Tr = Tr {
                    orden de abortar",
     err_cancelled: "Cancelado",
     err_too_many_frames: "Demasiados fotogramas: al menos {got}, y el límite de este teclado es {max}",
+    err_lights_off: "Las luces están apagadas: elige antes un efecto",
+    err_custom_mode: "El teclado está en el modo personalizado: elige antes un efecto",
 };
 
 /// The table for the system's language.
@@ -152,6 +158,8 @@ impl Tr {
                 .err_too_many_frames
                 .replace("{got}", &got.to_string())
                 .replace("{max}", &max.to_string()),
+            Error::LightsOff => self.err_lights_off.to_string(),
+            Error::CustomMode => self.err_custom_mode.to_string(),
             Error::Invalid(text) | Error::Image(text) => text.clone(),
         }
     }
@@ -160,18 +168,47 @@ impl Tr {
         match problem {
             Problem::Busy => self.busy.to_string(),
             Problem::NoKeyboard => self.no_keyboard.to_string(),
+            Problem::UnusableConfig => self.unusable_config.to_string(),
             Problem::Device(error) => self.error(error),
         }
     }
 
-    /// A time, rounded up: `40 s`, `3 min`, `1 h 20 min`. All these units read the same in both
-    /// languages.
+    /// For a file with more frames than the keyboard's limit, of which `frames` get used.
+    pub fn frames_cut(&self, frames: usize) -> String {
+        self.frames_cut.replace("{frames}", &frames.to_string())
+    }
+
+    /// For an animation faster than the keyboard's draw time, of whose `frames` only `sent` go out.
+    pub fn frames_thinned(
+        &self,
+        sent: usize,
+        frames: usize,
+        delay_ms: u16,
+        draw_ms: u16,
+    ) -> String {
+        self.frames_thinned
+            .replace("{sent}", &sent.to_string())
+            .replace("{frames}", &frames.to_string())
+            .replace("{delay}", &delay_ms.to_string())
+            .replace("{draw}", &draw_ms.to_string())
+    }
+
+    pub fn time_left(&self, time: Duration) -> String {
+        self.time_left.replace("{time}", &self.duration(time))
+    }
+
+    /// A time, rounded up to its smallest unit, seconds under a minute and minutes above that:
+    /// `40 s`, `3 min`, `1 h 20 min`. These units read the same in both languages.
     pub fn duration(&self, duration: Duration) -> String {
         let seconds = duration.as_secs() + u64::from(duration.subsec_nanos() > 0);
-        match seconds {
-            0..60 => format!("{seconds} s"),
-            60..3600 => format!("{} min", seconds.div_ceil(60)),
-            _ => format!("{} h {} min", seconds / 3600, seconds % 3600 / 60),
+        if seconds < 60 {
+            return format!("{seconds} s");
+        }
+        let minutes = seconds.div_ceil(60);
+        if minutes < 60 {
+            format!("{minutes} min")
+        } else {
+            format!("{} h {} min", minutes / 60, minutes % 60)
         }
     }
 }
@@ -185,23 +222,6 @@ fn chunk_text(template: &str, frame: u8, idx: u8) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
-
-    fn all_errors() -> Vec<Error> {
-        vec![
-            Error::NotFound,
-            Error::Unsupported(0x01FA),
-            Error::Hid("device gone".to_string()),
-            Error::StartNoAck,
-            Error::StartRejected,
-            Error::NoAck { frame: 2, idx: 7 },
-            Error::Rejected { frame: 2, idx: 7 },
-            Error::Invalid("bad value".to_string()),
-            Error::Cancelled,
-            Error::Image("bad file".to_string()),
-            Error::TooManyFrames { got: 61, max: 60 },
-        ]
-    }
 
     #[test]
     fn the_language_chooses_the_table() {
@@ -217,37 +237,91 @@ mod tests {
     }
 
     #[test]
-    fn every_error_has_words_with_its_details_filled_in() {
-        for table in [&EN, &ES] {
-            for error in all_errors() {
-                let text = table.error(&error);
-                assert!(!text.is_empty(), "{error:?}");
-                assert!(!text.contains('{'), "{text}");
-            }
-            assert!(table.error(&Error::Unsupported(0x01FA)).contains("01FA"));
-            let usb = table.error(&Error::Hid("device gone".into()));
-            assert!(usb.contains("device gone"), "{usb}");
-            let no_ack = table.error(&Error::NoAck { frame: 2, idx: 7 });
-            assert!(no_ack.contains('2') && no_ack.contains('7'), "{no_ack}");
-            let rejected = table.error(&Error::Rejected { frame: 2, idx: 7 });
-            assert!(
-                rejected.contains('2') && rejected.contains('7'),
-                "{rejected}"
-            );
-            let many = table.error(&Error::TooManyFrames { got: 61, max: 60 });
-            assert!(many.contains("61") && many.contains("60"), "{many}");
+    fn errors_read_in_english_with_each_detail_in_its_place() {
+        let cases = [
+            (Error::NotFound, "No supported keyboard found"),
+            (Error::Unsupported(0x01FA), "Keyboard 01FA isn't supported"),
+            (Error::Hid("gone".to_string()), "USB error: gone"),
+            (
+                Error::StartNoAck,
+                "The keyboard didn't acknowledge the start of the upload",
+            ),
+            (
+                Error::StartRejected,
+                "The keyboard refused the start of the upload",
+            ),
+            (
+                Error::NoAck { frame: 2, idx: 7 },
+                "The keyboard didn't acknowledge chunk 7 of frame 2. An abort was sent",
+            ),
+            (
+                Error::Rejected { frame: 2, idx: 7 },
+                "The keyboard refused chunk 7 of frame 2. An abort was sent",
+            ),
+            (Error::Cancelled, "Cancelled"),
+            (
+                Error::TooManyFrames { got: 61, max: 60 },
+                "Too many frames: at least 61, this keyboard's limit is 60",
+            ),
+            (
+                Error::LightsOff,
+                "The lights are off: choose an effect first",
+            ),
+            (
+                Error::CustomMode,
+                "The keyboard is in the custom mode: choose an effect first",
+            ),
+        ];
+        for (error, text) in cases {
+            assert_eq!(EN.error(&error), text);
         }
     }
 
     #[test]
-    fn the_common_errors_are_translated() {
-        for error in all_errors() {
-            let translated = !matches!(error, Error::Invalid(_) | Error::Image(_));
-            assert_eq!(
-                EN.error(&error) != ES.error(&error),
-                translated,
-                "{error:?}"
-            );
+    fn errors_read_in_spanish_with_each_detail_in_its_place() {
+        let cases = [
+            (
+                Error::NotFound,
+                "No se ha encontrado ningún teclado compatible",
+            ),
+            (
+                Error::Unsupported(0x01FA),
+                "El teclado 01FA no es compatible",
+            ),
+            (Error::Hid("gone".to_string()), "Error de USB: gone"),
+            (
+                Error::StartNoAck,
+                "El teclado no confirmó el inicio de la subida",
+            ),
+            (
+                Error::StartRejected,
+                "El teclado rechazó el inicio de la subida",
+            ),
+            (
+                Error::NoAck { frame: 2, idx: 7 },
+                "El teclado no confirmó el paquete 7 del fotograma 2. Se ha enviado la orden de \
+                 abortar",
+            ),
+            (
+                Error::Rejected { frame: 2, idx: 7 },
+                "El teclado rechazó el paquete 7 del fotograma 2. Se ha enviado la orden de abortar",
+            ),
+            (Error::Cancelled, "Cancelado"),
+            (
+                Error::TooManyFrames { got: 61, max: 60 },
+                "Demasiados fotogramas: al menos 61, y el límite de este teclado es 60",
+            ),
+            (
+                Error::LightsOff,
+                "Las luces están apagadas: elige antes un efecto",
+            ),
+            (
+                Error::CustomMode,
+                "El teclado está en el modo personalizado: elige antes un efecto",
+            ),
+        ];
+        for (error, text) in cases {
+            assert_eq!(ES.error(&error), text);
         }
     }
 
@@ -267,6 +341,8 @@ mod tests {
         assert_eq!(EN.problem(&Problem::Busy), EN.busy);
         assert_eq!(ES.problem(&Problem::Busy), ES.busy);
         assert_eq!(ES.problem(&Problem::NoKeyboard), ES.no_keyboard);
+        assert_eq!(ES.problem(&Problem::UnusableConfig), ES.unusable_config);
+        assert_ne!(EN.unusable_config, ES.unusable_config);
         assert_eq!(
             ES.problem(&Problem::Device(Error::StartNoAck)),
             ES.error(&Error::StartNoAck)
@@ -282,13 +358,60 @@ mod tests {
     }
 
     #[test]
-    fn durations_read_as_seconds_then_minutes_then_hours() {
-        assert_eq!(EN.duration(Duration::from_millis(400)), "1 s");
-        assert_eq!(EN.duration(Duration::from_secs(59)), "59 s");
-        assert_eq!(EN.duration(Duration::from_secs(60)), "1 min");
-        assert_eq!(EN.duration(Duration::from_secs(90)), "2 min");
-        assert_eq!(EN.duration(Duration::from_secs(3599)), "60 min");
-        assert_eq!(EN.duration(Duration::from_secs(3600)), "1 h 0 min");
+    fn cancelling_gives_the_longest_it_can_take_in_both_languages() {
+        assert_eq!(
+            EN.cancelling,
+            "Cancelling… on a keyboard that has stopped answering this can take 16 seconds"
+        );
+        assert_eq!(
+            ES.cancelling,
+            "Cancelando… con un teclado que ha dejado de responder puede tardar 16 segundos"
+        );
+    }
+
+    #[test]
+    fn notes_about_frames_fill_in_every_value() {
+        assert_eq!(
+            EN.frames_cut(60),
+            "The file has more frames than this keyboard's limit: only the first 60 are used"
+        );
+        assert_eq!(
+            ES.frames_cut(60),
+            "El archivo tiene más fotogramas de los que admite este teclado: solo se usan los \
+             primeros 60"
+        );
+        assert_eq!(
+            EN.frames_thinned(12, 40, 10, 33),
+            "At 10 ms per frame, 12 of its 40 frames are sent, as this keyboard's draw time is 33 ms"
+        );
+        assert_eq!(
+            ES.frames_thinned(12, 40, 10, 33),
+            "A 10 ms por fotograma se envían 12 de sus 40 fotogramas, porque el tiempo de dibujo de \
+             este teclado es de 33 ms"
+        );
+    }
+
+    #[test]
+    fn the_time_left_reads_in_both_languages() {
+        assert_eq!(EN.time_left(Duration::from_secs(90)), "About 2 min left");
+        assert_eq!(ES.time_left(Duration::from_secs(90)), "Quedan unos 2 min");
+    }
+
+    #[test]
+    fn durations_round_up_through_their_units() {
+        let of = |seconds: f64| EN.duration(Duration::from_secs_f64(seconds));
+        assert_eq!(of(0.0), "0 s");
+        assert_eq!(of(0.4), "1 s");
+        assert_eq!(of(59.0), "59 s");
+        assert_eq!(of(59.5), "1 min");
+        assert_eq!(of(60.0), "1 min");
+        assert_eq!(of(61.0), "2 min");
+        assert_eq!(of(90.0), "2 min");
+        assert_eq!(of(3540.0), "59 min");
+        assert_eq!(of(3541.0), "1 h 0 min");
+        assert_eq!(of(3599.0), "1 h 0 min");
+        assert_eq!(of(3600.0), "1 h 0 min");
+        assert_eq!(of(3601.0), "1 h 1 min");
         assert_eq!(ES.duration(Duration::from_secs(5400)), "1 h 30 min");
     }
 }

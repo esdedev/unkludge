@@ -113,6 +113,34 @@ mod tests {
     }
 
     #[test]
+    fn a_report_has_nothing_personal_in_it() {
+        let data = ReportData {
+            model: model::find(0x0265),
+            config: Ok(block()),
+            errors: vec!["cancelled".to_string()],
+        };
+        let text = text(&data, false, &collections());
+        for variable in [
+            "USERNAME",
+            "USER",
+            "USERPROFILE",
+            "HOME",
+            "HOSTNAME",
+            "COMPUTERNAME",
+        ] {
+            if let Ok(value) = std::env::var(variable)
+                && !value.is_empty()
+            {
+                assert!(!text.contains(&value), "{variable} in:\n{text}");
+            }
+        }
+        let exe = std::env::current_exe().unwrap();
+        for folder in exe.ancestors().filter(|path| path.components().count() > 2) {
+            assert!(!text.contains(&*folder.to_string_lossy()), "{text}");
+        }
+    }
+
+    #[test]
     fn a_report_says_when_something_is_missing() {
         let data = ReportData {
             model: None,
