@@ -9,3 +9,15 @@ license.workspace = true
 [[bin]]
 name = "unkludge"
 path = "src/main.rs"
+
+[dependencies]
+unkludge-protocol = { path = "../unkludge-protocol" }
+chrono.workspace = true
+clap.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Diagnostics_ToolHelp"] }
+
+[dev-dependencies]
+unkludge-protocol = { path = "../unkludge-protocol", features = ["fake"] }
+image.workspace = true
