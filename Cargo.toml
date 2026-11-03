@@ -14,3 +14,8 @@ lto = true
 codegen-units = 1
 strip = true
 panic = "abort"
+
+[workspace.dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+thiserror = "=2.0.21"
+toml = { version = "=1.1.8", default-features = false, features = ["std", "serde", "parse"] }
