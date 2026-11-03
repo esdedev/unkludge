@@ -16,6 +16,7 @@ use unkludge_protocol::{Device, Error};
 use crate::args::{KeyboardCommand, LightArgs, ScreenArgs};
 use crate::local_time::device_time;
 use crate::output::{self, Console};
+use crate::report_lines::{config_lines, keyboard_lines, report_header};
 
 pub type Failure = Box<dyn StdError>;
 
@@ -46,7 +47,12 @@ pub fn run<T: Transport>(
         KeyboardCommand::Report => {
             console.lines(report_header());
             console.lines(options.host);
-            report_keyboard(device, console);
+            let config = Config::read(device);
+            let block = config
+                .as_ref()
+                .map(|config| config.as_bytes().as_slice())
+                .map_err(ToString::to_string);
+            console.lines(keyboard_lines(device.model(), block));
             Ok(())
         }
     }
@@ -125,7 +131,7 @@ fn info<T: Transport>(device: &mut Device<T>, console: &mut Console) -> Result<(
     let current = CurrentLighting::from_config(&config, &model.lighting);
     console.lines(output::lighting_lines(&current, &model.lighting));
     console.line("Config block:");
-    console.lines(output::config_lines(config.as_bytes()));
+    console.lines(config_lines(config.as_bytes()));
     Ok(())
 }
 
@@ -254,37 +260,6 @@ fn load_error(file: &Path, error: Error) -> Failure {
             format!("{error}. --truncate keeps the first {max}").into()
         }
         other => format!("{}: {other}", file.display()).into(),
-    }
-}
-
-/// The first lines of a report, which need no keyboard.
-pub fn report_header() -> Vec<String> {
-    vec![
-        format!("Unkludge: {}", env!("CARGO_PKG_VERSION")),
-        format!(
-            "System: {} {}",
-            std::env::consts::OS,
-            std::env::consts::ARCH
-        ),
-    ]
-}
-
-/// The part of a report that comes from the keyboard. A read that fails is what a report is for, so
-/// it goes in the report rather than ending it.
-fn report_keyboard<T: Transport>(device: &mut Device<T>, console: &mut Console) {
-    let model = device.model();
-    console.line(format_args!("Model: {}", model.name));
-    console.line(format_args!("PID: {:04X}", model.pid));
-    console.line(format_args!(
-        "Status: {}",
-        output::status_label(model.status)
-    ));
-    match Config::read(device) {
-        Ok(config) => {
-            console.line("Config block:");
-            console.lines(output::config_lines(config.as_bytes()));
-        }
-        Err(error) => console.line(format_args!("Config block: couldn't read it: {error}")),
     }
 }
 

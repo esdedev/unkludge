@@ -3,13 +3,11 @@
 use std::fmt::Display;
 use std::io::Write;
 
-use unkludge_protocol::Error;
 use unkludge_protocol::config::SleepTime;
-use unkludge_protocol::device::HidCollection;
 use unkludge_protocol::lighting::{ColorSetting, CurrentLighting, LightMode, SleepSetting};
-use unkludge_protocol::model::{Effect, Lighting, Model, Status, VID};
+use unkludge_protocol::model::{Effect, Lighting, Model};
 
-use crate::packets::hex;
+use crate::report_lines::status_label;
 
 /// Where a command's output goes. Output that can't be written, as when a pipe has closed, is no
 /// reason to stop talking to a keyboard halfway through.
@@ -59,32 +57,6 @@ impl Console<'_> {
     }
 }
 
-/// What a report says about the computer: whether the official app is running, and every collection
-/// the system lists for this vendor.
-pub fn host_lines(
-    rk_app_running: bool,
-    collections: &Result<Vec<HidCollection>, Error>,
-) -> Vec<String> {
-    let yes_no = if rk_app_running { "yes" } else { "no" };
-    let mut lines = vec![format!("RK app running: {yes_no}")];
-    match collections {
-        Ok(collections) if collections.is_empty() => {
-            lines.push(format!("Collections for vendor {VID:04X}: none"));
-        }
-        Ok(collections) => {
-            lines.push(format!("Collections for vendor {VID:04X}:"));
-            lines.extend(collections.iter().map(|c| {
-                format!(
-                    "  PID {:04X}, usage page {:04X}, usage {:04X}, interface {}",
-                    c.pid, c.usage_page, c.usage, c.interface
-                )
-            }));
-        }
-        Err(error) => lines.push(format!("Collections: couldn't list them: {error}")),
-    }
-    lines
-}
-
 /// The supported models as a table, one per row after the heading.
 pub fn models_table(models: impl IntoIterator<Item = &'static Model>) -> Vec<String> {
     let models: Vec<&Model> = models.into_iter().collect();
@@ -105,13 +77,6 @@ pub fn models_table(models: impl IntoIterator<Item = &'static Model>) -> Vec<Str
         )
     }));
     lines
-}
-
-pub fn status_label(status: Status) -> &'static str {
-    match status {
-        Status::Tested => "tested",
-        Status::Experimental => "experimental",
-    }
 }
 
 /// What a model is and what it offers.
@@ -197,58 +162,10 @@ fn sleep_text(sleep: SleepSetting) -> String {
     }
 }
 
-/// The config block in rows of 16 bytes, each with its offset.
-pub fn config_lines(block: &[u8]) -> Vec<String> {
-    block
-        .chunks(16)
-        .enumerate()
-        .map(|(row, bytes)| format!("  {:02X}: {}", row * 16, hex(bytes)))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use unkludge_protocol::model;
-
-    #[test]
-    fn host_lines_list_every_collection() {
-        let collections = vec![
-            HidCollection {
-                pid: 0x0265,
-                usage_page: 0xFF02,
-                usage: 2,
-                interface: 1,
-            },
-            HidCollection {
-                pid: 0x0265,
-                usage_page: 0x0001,
-                usage: 6,
-                interface: 0,
-            },
-        ];
-        assert_eq!(
-            host_lines(false, &Ok(collections)),
-            [
-                "RK app running: no",
-                "Collections for vendor 258A:",
-                "  PID 0265, usage page FF02, usage 0002, interface 1",
-                "  PID 0265, usage page 0001, usage 0006, interface 0",
-            ]
-        );
-    }
-
-    #[test]
-    fn host_lines_say_when_there_is_nothing_to_list() {
-        assert_eq!(
-            host_lines(true, &Ok(Vec::new())),
-            ["RK app running: yes", "Collections for vendor 258A: none"]
-        );
-        assert_eq!(
-            host_lines(false, &Err(Error::Hid("no access".to_string())))[1],
-            "Collections: couldn't list them: USB error: no access"
-        );
-    }
 
     #[test]
     fn the_table_has_a_row_per_supported_model() {
@@ -338,22 +255,5 @@ mod tests {
             "custom, set with another tool"
         );
         assert_eq!(color_text(Some(ColorSetting::Rainbow)), "rainbow");
-    }
-
-    #[test]
-    fn the_config_prints_in_rows_with_offsets() {
-        let mut block = [0; 128];
-        block[0x7E] = 0x5A;
-        block[0x7F] = 0xA5;
-        let lines = config_lines(&block);
-        assert_eq!(lines.len(), 8);
-        assert_eq!(
-            lines[0],
-            "  00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
-        );
-        assert_eq!(
-            lines[7],
-            "  70: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 5A A5"
-        );
     }
 }

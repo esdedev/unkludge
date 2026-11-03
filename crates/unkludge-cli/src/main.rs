@@ -23,6 +23,7 @@ mod interrupt;
 mod local_time;
 mod output;
 mod packets;
+mod report_lines;
 mod rk_app;
 
 fn main() -> ExitCode {
@@ -80,7 +81,7 @@ fn run_on_keyboard(cli: &Cli, command: &KeyboardCommand) -> Result<(), Failure> 
 
     // Only a report needs this up front, and asking the system sends nothing to a keyboard.
     let host = match command {
-        KeyboardCommand::Report => output::host_lines(rk_app_running, &list_collections()),
+        KeyboardCommand::Report => report_lines::host_lines(rk_app_running, &list_collections()),
         _ => Vec::new(),
     };
     match Device::open(cli.pid) {
@@ -93,7 +94,7 @@ fn run_on_keyboard(cli: &Cli, command: &KeyboardCommand) -> Result<(), Failure> 
         // Not being able to open the keyboard is just what a report should tell.
         Err(error) if matches!(command, KeyboardCommand::Report) => {
             Console::with_stdio(|console| {
-                console.lines(commands::report_header());
+                console.lines(report_lines::report_header());
                 console.lines(&host);
                 console.line(format_args!("Keyboard: couldn't open it: {error}"));
             });

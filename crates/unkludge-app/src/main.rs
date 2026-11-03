@@ -2,7 +2,15 @@
 
 #[path = "../../unkludge-cli/src/local_time.rs"]
 mod local_time;
-// The interface, which comes later, is what uses this.
+// The interface, which comes later, is what uses these.
+#[allow(dead_code)]
+mod i18n;
+#[allow(dead_code)]
+mod report;
+#[path = "../../unkludge-cli/src/report_lines.rs"]
+mod report_lines;
+#[allow(dead_code)]
+mod settings;
 #[allow(dead_code)]
 mod worker;
 

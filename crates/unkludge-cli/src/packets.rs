@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use unkludge_protocol::device::{Collection, PacketEvent};
 
 use crate::output::Console;
+use crate::report_lines::hex;
 
 /// The command byte of screen data chunks.
 pub const SCREEN_DATA: u8 = 0x0C;
@@ -32,12 +33,6 @@ pub fn format_report(report: &[u8], limit: Option<usize>) -> String {
         text.push_str(&format!(" (+{} zeros)", report.len() - used));
     }
     text
-}
-
-/// Bytes as upper-case hex, separated by spaces.
-pub fn hex(bytes: &[u8]) -> String {
-    let pairs: Vec<String> = bytes.iter().map(|byte| format!("{byte:02X}")).collect();
-    pairs.join(" ")
 }
 
 /// Turns the reports of a dry run into lines of text. An upload has thousands of chunks, so each
