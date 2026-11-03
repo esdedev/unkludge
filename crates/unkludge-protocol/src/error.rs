@@ -19,7 +19,8 @@ pub enum Error {
     Cancelled,
     #[error("image: {0}")]
     Image(String),
-    #[error("too many frames: {got}, this keyboard's limit is {max}")]
+    /// `got` may be less than the whole count, as decoding stops soon after the limit.
+    #[error("too many frames: at least {got}, this keyboard's limit is {max}")]
     TooManyFrames { got: usize, max: usize },
 }
 
@@ -43,7 +44,7 @@ mod tests {
         );
         assert_eq!(
             Error::TooManyFrames { got: 61, max: 60 }.to_string(),
-            "too many frames: 61, this keyboard's limit is 60"
+            "too many frames: at least 61, this keyboard's limit is 60"
         );
     }
 }

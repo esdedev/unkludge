@@ -12,6 +12,7 @@ fake = []
 
 [dependencies]
 hidapi.workspace = true
+image.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

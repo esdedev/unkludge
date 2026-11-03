@@ -18,6 +18,8 @@ panic = "abort"
 [workspace.dependencies]
 # hidraw on Linux needs libudev, not libusb. The Windows backend is Rust, with no C to build.
 hidapi = { version = "=2.6.7", default-features = false, features = ["linux-static-hidraw", "windows-native"] }
+# Decoders for the images users upload. Encoders come with them, and only tests use those.
+image = { version = "=0.25.10", default-features = false, features = ["gif", "png", "jpeg", "bmp", "webp"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 thiserror = "=2.0.21"
 toml = { version = "=1.1.8", default-features = false, features = ["std", "serde", "parse"] }

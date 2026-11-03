@@ -15,6 +15,7 @@ pub mod model;
     expect(dead_code, reason = "the feature modules will build these reports")
 )]
 pub(crate) mod packet;
+pub mod screen;
 pub mod transport;
 
 pub use device::Device;
