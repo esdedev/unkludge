@@ -7,7 +7,9 @@
 //! worker and the same events as the real thing.
 
 use std::cell::Cell;
-use std::path::PathBuf;
+use std::fs::OpenOptions;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -332,6 +334,7 @@ pub enum Step {
 pub struct Script {
     state: DemoState,
     keyboard: Arc<DemoKeyboard>,
+    folder: Option<PathBuf>,
     file: Option<PathBuf>,
     uploaded: bool,
     interfered: bool,
@@ -339,10 +342,13 @@ pub struct Script {
 }
 
 impl Script {
-    pub fn new(state: DemoState, keyboard: Arc<DemoKeyboard>) -> Script {
+    /// `folder` is where the demo's picture goes for as long as this lasts: the user's own, as
+    /// anything shared could have something waiting under the picture's name.
+    pub fn new(state: DemoState, keyboard: Arc<DemoKeyboard>, folder: Option<PathBuf>) -> Script {
         Script {
             state,
             keyboard,
+            folder,
             file: None,
             uploaded: false,
             interfered: false,
@@ -422,7 +428,14 @@ impl Script {
                 if self.file.is_some() {
                     return None;
                 }
-                let path = write_gif(frames, delay)?;
+                let written = write_gif(self.folder.as_deref()?, frames, delay);
+                let path = match written {
+                    Ok(path) => path,
+                    Err(error) => {
+                        crate::log::error(&format!("the demo's picture can't be written: {error}"));
+                        return None;
+                    }
+                };
                 self.file = Some(path.clone());
                 if self.state == DemoState::Loading {
                     self.reached = true;
@@ -458,11 +471,30 @@ impl Drop for Script {
     }
 }
 
-/// Writes the demo's picture where temporary files go.
-fn write_gif(frames: usize, delay: u16) -> Option<PathBuf> {
-    let path = std::env::temp_dir().join(format!("unkludge-demo-{}.gif", std::process::id()));
-    std::fs::write(&path, gif_bytes(frames, delay)).ok()?;
-    Some(path)
+/// How many names to try for the demo's picture.
+const GIF_NAMES: u32 = 16;
+
+/// Writes the demo's picture as a new file. Whatever already has its name, a file or a link to one,
+/// stays as it is and doesn't get written through: another name is tried instead.
+fn write_gif(folder: &Path, frames: usize, delay: u16) -> io::Result<PathBuf> {
+    std::fs::create_dir_all(folder)?;
+    let bytes = gif_bytes(frames, delay);
+    for attempt in 0..GIF_NAMES {
+        let name = format!("unkludge-demo-{}-{attempt}.gif", std::process::id());
+        let path = folder.join(name);
+        let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        };
+        if let Err(error) = file.write_all(&bytes) {
+            drop(file);
+            let _ = std::fs::remove_file(&path);
+            return Err(error);
+        }
+        return Ok(path);
+    }
+    Err(io::ErrorKind::AlreadyExists.into())
 }
 
 /// Size of the demo's picture, a little wider than most screens, so that the fits differ.

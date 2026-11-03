@@ -213,8 +213,33 @@ fn the_worker_runs_on_it_as_on_a_real_keyboard() {
     assert_eq!(keyboard.config()[EFFECT], 5);
 }
 
+/// A folder of the test's own, gone at the end.
+struct TempDir(PathBuf);
+
+impl TempDir {
+    fn new(name: &str) -> TempDir {
+        let dir = std::env::temp_dir().join(format!("unkludge-demo-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        TempDir(dir)
+    }
+
+    /// The name the picture tries first.
+    fn first_name(&self) -> PathBuf {
+        let name = format!("unkludge-demo-{}-0.gif", std::process::id());
+        self.0.join(name)
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// With nowhere to write, for the states that need no picture.
 fn script(state: DemoState) -> Script {
-    Script::new(state, keyboard(state))
+    Script::new(state, keyboard(state), None)
 }
 
 fn lights() -> Event {
@@ -258,9 +283,96 @@ fn a_state_with_no_keyboard_is_reached_when_none_is_found() {
 }
 
 #[test]
-fn an_image_state_chooses_its_file_once_and_removes_it_at_the_end() {
+fn the_picture_goes_in_the_folder_it_is_given() {
+    let dir = TempDir::new("folder");
+    let path = write_gif(&dir.0, 1, 100).unwrap();
+    assert_eq!(path.parent(), Some(dir.0.as_path()));
+    assert_eq!(std::fs::read(&path).unwrap(), gif_bytes(1, 100));
+}
+
+#[test]
+fn the_picture_makes_its_folder() {
+    let dir = TempDir::new("makes-folder");
+    let deeper = dir.0.join("deeper");
+    assert!(write_gif(&deeper, 1, 100).unwrap().starts_with(&deeper));
+}
+
+#[test]
+fn a_file_already_under_the_pictures_name_stays_as_it_is() {
+    let dir = TempDir::new("existing");
+    std::fs::write(dir.first_name(), "someone else's").unwrap();
+    let path = write_gif(&dir.0, 1, 100).unwrap();
+    assert_ne!(path, dir.first_name());
+    assert_eq!(
+        std::fs::read_to_string(dir.first_name()).unwrap(),
+        "someone else's"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_under_the_pictures_name_isnt_written_through() {
+    let dir = TempDir::new("link");
+    let target = dir.0.join("target");
+    std::fs::write(&target, "someone else's").unwrap();
+    std::os::unix::fs::symlink(&target, dir.first_name()).unwrap();
+    let path = write_gif(&dir.0, 1, 100).unwrap();
+    assert_ne!(path, dir.first_name());
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "someone else's");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_with_nothing_behind_it_isnt_written_through_either() {
+    let dir = TempDir::new("dangling");
+    let target = dir.0.join("not-there-yet");
+    std::os::unix::fs::symlink(&target, dir.first_name()).unwrap();
+    write_gif(&dir.0, 1, 100).unwrap();
+    assert!(!target.exists());
+}
+
+#[test]
+fn with_every_name_taken_it_gives_up_and_leaves_them_alone() {
+    let dir = TempDir::new("all-taken");
+    for attempt in 0..GIF_NAMES {
+        let name = format!("unkludge-demo-{}-{attempt}.gif", std::process::id());
+        std::fs::write(dir.0.join(name), "taken").unwrap();
+    }
+    let error = write_gif(&dir.0, 1, 100).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(std::fs::read_to_string(dir.first_name()).unwrap(), "taken");
+}
+
+#[test]
+fn with_nowhere_to_write_an_image_state_chooses_nothing() {
+    let mut script = script(DemoState::Image);
+    assert_eq!(script.on_event(&lights()), []);
+    assert!(!script.reached());
+}
+
+#[test]
+fn the_end_removes_only_the_file_it_made() {
+    let dir = TempDir::new("only-its-own");
+    std::fs::write(dir.first_name(), "someone else's").unwrap();
     let path = {
-        let mut script = script(DemoState::Image);
+        let keyboard = keyboard(DemoState::Image);
+        let mut script = Script::new(DemoState::Image, keyboard, Some(dir.0.clone()));
+        let steps = script.on_event(&lights());
+        let [Step::ChooseFile(path)] = steps.as_slice() else {
+            panic!("{steps:?}");
+        };
+        path.clone()
+    };
+    assert!(!path.exists());
+    assert!(dir.first_name().exists());
+}
+
+#[test]
+fn an_image_state_chooses_its_file_once_and_removes_it_at_the_end() {
+    let dir = TempDir::new("image-state");
+    let path = {
+        let keyboard = keyboard(DemoState::Image);
+        let mut script = Script::new(DemoState::Image, keyboard, Some(dir.0.clone()));
         let steps = script.on_event(&lights());
         let [Step::ChooseFile(path)] = steps.as_slice() else {
             panic!("{steps:?}");

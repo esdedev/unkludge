@@ -105,7 +105,7 @@ impl App {
                     notify,
                 );
                 let session = DemoSession {
-                    script: Script::new(args.state, keyboard),
+                    script: Script::new(args.state, keyboard, sys::data_dir()),
                     args,
                     shot_timer_set: false,
                 };
