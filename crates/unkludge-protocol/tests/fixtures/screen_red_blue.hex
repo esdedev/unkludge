@@ -1,0 +1,18 @@
+# A 2-frame upload to a 320x172 screen with no checksum and a draw time of 180 ms, at a delay of
+# 200 ms: all red, then all blue. These are the control reports, and the first and last chunks of
+# each frame.
+#
+# Written from the protocol notes, not a capture.
+#
+# Each line is a name and then the bytes of the report. F800*256 means those two bytes 256 times.
+# Whatever isn't shown is zero, up to 520 bytes.
+#
+#   start:  [0x40] [frames LE16] [delay - draw time, LE16]
+#   chunks: 09 0C 00 <frame> <idx> <check> <len LE16>, and 512 bytes of RGB565
+#   finish: [0x00] [frames LE16] [delay LE16]
+start         09 0D 00 00 01 00 05 00  40 02 00 14 00
+frame0-first  09 0C 00 00 00 00 00 02  F800*256
+frame0-last   09 0C 00 00 D6 00 00 02  F800*256
+frame1-first  09 0C 00 01 00 00 00 02  001F*256
+frame1-last   09 0C 00 01 D6 00 00 02  001F*256
+finish        09 0D 00 00 01 00 05 00  00 02 00 C8 00

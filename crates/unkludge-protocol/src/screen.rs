@@ -21,6 +21,10 @@ use crate::Error;
 use crate::model::ScreenSpec;
 use crate::packet::MAX_DATA;
 
+mod upload;
+
+pub use upload::{Progress, UploadPlan};
+
 /// The delay of animations whose file says 0, and of still images, in milliseconds. Browsers also
 /// show GIFs with no delay at this speed.
 pub const DEFAULT_DELAY_MS: u16 = 100;
