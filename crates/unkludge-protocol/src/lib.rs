@@ -1,9 +1,5 @@
 //! Protocol library for Royal Kludge keyboards.
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "lighting changes will use the setters")
-)]
 pub mod config;
 #[cfg_attr(
     not(test),
@@ -11,6 +7,7 @@ pub mod config;
 )]
 pub mod device;
 mod error;
+pub mod lighting;
 pub mod model;
 #[cfg_attr(
     not(test),
