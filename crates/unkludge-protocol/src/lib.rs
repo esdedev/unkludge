@@ -1,5 +1,6 @@
 //! Protocol library for Royal Kludge keyboards.
 
+pub mod clock;
 pub mod config;
 #[cfg_attr(
     not(test),
