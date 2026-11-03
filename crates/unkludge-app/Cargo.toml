@@ -9,3 +9,11 @@ license.workspace = true
 [[bin]]
 name = "unkludge-app"
 path = "src/main.rs"
+
+[dependencies]
+unkludge-protocol = { path = "../unkludge-protocol" }
+chrono.workspace = true
+
+[dev-dependencies]
+unkludge-protocol = { path = "../unkludge-protocol", features = ["fake"] }
+image.workspace = true

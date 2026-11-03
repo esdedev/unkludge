@@ -20,6 +20,7 @@ mod args;
 mod commands;
 mod dry_run;
 mod interrupt;
+mod local_time;
 mod output;
 mod packets;
 mod rk_app;

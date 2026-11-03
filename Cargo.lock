@@ -310,6 +310,11 @@ version = "0.1.0"
 [[package]]
 name = "unkludge-app"
 version = "0.1.0"
+dependencies = [
+ "chrono",
+ "image",
+ "unkludge-protocol",
+]
 
 [[package]]
 name = "unkludge-cli"
