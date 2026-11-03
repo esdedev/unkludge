@@ -44,7 +44,11 @@ pub fn create(hwnd: HWND, shared: Rc<RefCell<Shared>>) -> IAccessible {
     Accessible { hwnd, shared }.into()
 }
 
-#[implement(IAccessible)]
+// Not agile: by default the macro marks an object as callable from any thread, and screen readers
+// do call from theirs. This one shares `Rc<RefCell<Shared>>` with the window, so calls have to wait
+// their turn on the window's thread, which is what COM does for an object that isn't agile. Without
+// this, a call arriving during a paint panics with "already borrowed".
+#[implement(IAccessible, Agile = false)]
 struct Accessible {
     hwnd: HWND,
     shared: Rc<RefCell<Shared>>,
@@ -376,6 +380,17 @@ impl IDispatch_Impl for Accessible_Impl {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows::Win32::System::Com::IAgileObject;
+
+    /// The object shares an `Rc` with the window, so it must never be called from another thread.
+    /// COM decides that by asking for this interface: having it means callers may skip the
+    /// apartment and call straight in.
+    #[test]
+    fn calls_have_to_come_through_the_windows_thread() {
+        let shared = Rc::new(RefCell::new(Shared::default()));
+        let accessible = create(HWND::default(), shared);
+        assert!(accessible.cast::<IAgileObject>().is_err());
+    }
 
     #[test]
     fn a_child_is_read_from_its_variant() {
