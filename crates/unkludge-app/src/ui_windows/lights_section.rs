@@ -9,7 +9,7 @@ use super::gfx::{BORDER, DIM, Draw, MUTED, R, SILVER, TEXT, TRACK, alpha};
 use super::{App, Hit, Role};
 use crate::i18n::t;
 use crate::layout::{self, effect_chips, split_row};
-use crate::state::LightControls;
+use crate::state::{LightControls, percent};
 
 fn color_of(rgb: Rgb) -> D2D1_COLOR_F {
     D2D1_COLOR_F {
@@ -18,14 +18,6 @@ fn color_of(rgb: Rgb) -> D2D1_COLOR_F {
         b: f32::from(rgb.b) / 255.0,
         a: 1.0,
     }
-}
-
-/// How far along a step is, as a share of the steps there are.
-fn percent(step: usize, steps: usize) -> u32 {
-    if steps < 2 {
-        return 0;
-    }
-    (step * 100 / (steps - 1)) as u32
 }
 
 impl App {
@@ -72,7 +64,14 @@ impl App {
             &self.fonts.chip,
             self.look(off, off_on, enabled),
         );
-        self.item(chips[0].into(), off, t().off, Role::Choice, off_on, enabled);
+        self.item(
+            chips[0].into(),
+            off,
+            t().labelled(t().effect, t().off),
+            Role::Choice,
+            off_on,
+            enabled,
+        );
         for (effect, chip) in effects.iter().zip(&chips[1..]) {
             let hit = Hit::Mode(ModeChoice::Effect(effect.id));
             let on = controls.mode == Some(LightMode::Effect(effect.id));
@@ -83,7 +82,14 @@ impl App {
                 &self.fonts.chip,
                 self.look(hit, on, enabled),
             );
-            self.item((*chip).into(), hit, name, Role::Choice, on, enabled);
+            self.item(
+                (*chip).into(),
+                hit,
+                t().labelled(t().effect, name),
+                Role::Choice,
+                on,
+                enabled,
+            );
         }
     }
 
@@ -207,7 +213,7 @@ impl App {
             self.item(
                 swatch_rect(x, y, radius),
                 Hit::Rainbow,
-                t().rainbow,
+                t().labelled(t().color, t().rainbow),
                 Role::Choice,
                 on,
                 enabled,
@@ -301,7 +307,14 @@ impl App {
                 &self.fonts.chip,
                 self.look(hit, on, enabled),
             );
-            self.item(part.into(), hit, label, Role::Choice, on, enabled);
+            self.item(
+                part.into(),
+                hit,
+                t().labelled(t().sleep, label),
+                Role::Choice,
+                on,
+                enabled,
+            );
         }
     }
 
@@ -343,7 +356,7 @@ impl App {
         self.item(
             row,
             Hit::AutoClock,
-            t().auto_clock,
+            t().auto_clock_name,
             Role::Toggle,
             self.settings.auto_clock,
             true,
@@ -358,14 +371,6 @@ fn swatch_rect(x: f32, y: f32, radius: f32) -> R {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_sliders_value_reads_as_a_percentage() {
-        assert_eq!(percent(0, 6), 0);
-        assert_eq!(percent(3, 6), 60);
-        assert_eq!(percent(5, 6), 100);
-        assert_eq!(percent(0, 1), 0);
-    }
 
     #[test]
     fn a_swatch_can_be_clicked_where_it_shows() {

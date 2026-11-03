@@ -23,13 +23,13 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{Interface, PCWSTR, Result, w};
 
 use super::gfx::{BG, Draw, Fonts, Gfx, R};
-use super::{Anim, App, Deferred, DemoSession, Drag, Shared, a11y, dialogs, tray};
+use super::{Anim, App, Deferred, DemoSession, Shared, a11y, dialogs, tray};
 use crate::args::DemoArgs;
 use crate::demo::{DemoKeyboard, Script};
 use crate::i18n::t;
 use crate::layout::{Frame, WIDTH};
 use crate::settings::{self, Settings};
-use crate::state::State;
+use crate::state::{Slider, State};
 use crate::worker::{self, Cmd, Options};
 use crate::{log, sys};
 
@@ -65,8 +65,7 @@ impl App {
                 DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?,
             )
         };
-        let spanish = t().connected == "Conectado";
-        let fonts = Fonts::new(&dw, spanish)?;
+        let fonts = Fonts::new(&dw, t().spanish)?;
 
         let woken = Arc::new(AtomicBool::new(false));
         let notify = {
@@ -123,7 +122,7 @@ impl App {
 
         let is_demo = session.is_some();
         let autostart = !is_demo && sys::autostart_enabled();
-        let state = State::default();
+        let state = State::with_settings(&settings);
         let frame = Frame::new(0, state.preview_height());
         Ok(App {
             hwnd,
@@ -360,8 +359,9 @@ impl App {
         };
         self.paint_header(&d);
         self.paint_banners(&d);
-        if self.state.model().is_some() {
-            self.paint_screen(&d, preview.as_ref());
+        // Every model this version connects to has a screen.
+        if let Some(screen) = self.state.model().and_then(|model| model.screen) {
+            self.paint_screen(&d, screen, preview.as_ref());
             self.paint_lights(&d, &rainbow);
             self.paint_clock(&d);
         } else {
@@ -404,6 +404,10 @@ impl App {
         // SAFETY: the handle is this window's own.
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_HIDE);
+        }
+        if !self.settings.tray_note_shown {
+            self.settings.tray_note_shown = true;
+            self.show_tray_note();
         }
         self.save_settings();
         self.restart_preview();
@@ -680,7 +684,7 @@ impl App {
     }
 
     /// For the slider code, which moves a thumb to where the mouse is.
-    pub fn begin_drag(&mut self, drag: Drag, x: f32) {
+    pub fn begin_drag(&mut self, drag: Slider, x: f32) {
         self.drag = Some(drag);
         self.drag_to(x);
         // SAFETY: the handle is this window's own.

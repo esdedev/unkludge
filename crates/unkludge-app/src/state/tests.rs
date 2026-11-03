@@ -245,7 +245,7 @@ fn an_upload_goes_from_starting_to_running_to_done() {
     let (mut state, mut settings) = with_image(1, 100);
     assert!(state.can_upload());
     assert!(matches!(state.start_upload(), Some(Cmd::UploadScreen(_))));
-    assert_eq!(state.upload, Upload::Starting);
+    assert_eq!(state.upload, Upload::Starting { cancelling: false });
     assert!(state.start_upload().is_none(), "only one at a time");
 
     state.apply(
@@ -551,4 +551,330 @@ fn the_preview_makes_room_for_the_models_screen() {
         &mut Settings::default(),
     );
     assert_eq!(state.preview_height(), 240);
+}
+
+// What the code review found.
+
+#[test]
+fn a_cancel_before_the_worker_starts_the_upload_counts() {
+    let (mut state, mut settings) = with_image(1, 100);
+    state.start_upload().unwrap();
+    state.apply(Event::Cancelling, &mut settings);
+    assert!(state.upload.is_cancelling());
+    assert!(state.cancel_upload().is_none(), "already asked");
+    assert_eq!(state.screen_notes()[0].text, t().cancelling);
+    state.apply(Event::UploadCancelled, &mut settings);
+    assert!(state.upload.is_idle());
+}
+
+#[test]
+fn a_cancel_stays_when_the_upload_starts_after_all() {
+    let (mut state, mut settings) = with_image(1, 100);
+    state.start_upload().unwrap();
+    state.apply(Event::Cancelling, &mut settings);
+    state.apply(
+        Event::UploadStarted {
+            total: 100,
+            estimate: Duration::from_secs(40),
+        },
+        &mut settings,
+    );
+    assert!(state.upload.is_cancelling());
+}
+
+#[test]
+fn a_bad_file_during_an_upload_doesnt_hide_how_the_upload_went() {
+    let (mut state, mut settings) = with_image(1, 100);
+    running(&mut state, &mut settings);
+    state.choose_file(PathBuf::from("bad.gif"));
+    state.apply(
+        Event::ImageFailed(Error::Image("not a picture".to_string())),
+        &mut settings,
+    );
+    state.apply(Event::UploadDone, &mut settings);
+    let texts: Vec<String> = state.screen_notes().into_iter().map(|n| n.text).collect();
+    assert!(
+        texts.iter().any(|text| text == t().upload_done),
+        "{texts:?}"
+    );
+    assert!(
+        texts.iter().any(|text| text.contains("not a picture")),
+        "{texts:?}"
+    );
+}
+
+#[test]
+fn an_upload_ending_after_an_unconfirmed_finish_says_only_that() {
+    let (mut state, mut settings) = with_image(1, 100);
+    running(&mut state, &mut settings);
+    state.apply(Event::UploadUnconfirmed, &mut settings);
+    state.apply(Event::UploadDone, &mut settings);
+    state.start_upload().unwrap();
+    state.apply(Event::UploadDone, &mut settings);
+    assert_eq!(state.outcome.as_ref().unwrap().text, t().upload_done);
+}
+
+#[test]
+fn losing_the_keyboard_ends_an_upload() {
+    let (mut state, mut settings) = with_image(1, 100);
+    running(&mut state, &mut settings);
+    state.apply(Event::Disconnected, &mut settings);
+    assert!(state.upload.is_idle());
+    let (mut state, mut settings) = with_image(1, 100);
+    running(&mut state, &mut settings);
+    state.apply(
+        Event::CannotOpen(Error::Hid("x".to_string())),
+        &mut settings,
+    );
+    assert!(state.upload.is_idle());
+}
+
+#[test]
+fn losing_the_keyboard_forgets_slider_values_on_their_way() {
+    let (mut state, mut settings) = with_lights(LightMode::Effect(2));
+    state.adjust_brightness(5).unwrap();
+    state.apply(Event::Disconnected, &mut settings);
+    state.apply(Event::Connected { model: s85() }, &mut settings);
+    state.apply(
+        Event::Lighting(lighting(LightMode::Effect(2))),
+        &mut settings,
+    );
+    assert_eq!(state.light_controls().brightness, Some((2, 6)));
+}
+
+#[test]
+fn a_speed_goes_as_an_adjustment_that_settles_not_at_once() {
+    let (mut state, _) = with_lights(LightMode::Effect(2));
+    assert!(matches!(
+        state.adjust_speed(4),
+        Some(Cmd::AdjustLighting(LightingChange {
+            speed: Some(4),
+            brightness: None,
+            ..
+        }))
+    ));
+}
+
+#[test]
+fn the_speed_it_already_is_sends_nothing() {
+    let (mut state, _) = with_lights(LightMode::Effect(2));
+    assert!(state.adjust_speed(2).is_none(), "as the keyboard has it");
+    state.adjust_speed(4).unwrap();
+    assert!(state.adjust_speed(4).is_none(), "as the slider has it");
+}
+
+#[test]
+fn what_the_keyboard_says_replaces_what_a_slider_had_on_its_way() {
+    let (mut state, mut settings) = with_lights(LightMode::Effect(2));
+    state.adjust_brightness(5).unwrap();
+    state.adjust_speed(4).unwrap();
+    // Something else changed them meanwhile: the keyboard's word is the last one.
+    state.apply(
+        Event::Lighting(lighting(LightMode::Effect(2))),
+        &mut settings,
+    );
+    assert_eq!(state.light_controls().brightness, Some((2, 6)));
+    assert_eq!(state.light_controls().speed, Some((2, 0, 5)));
+}
+
+#[test]
+fn a_slider_can_be_moved_only_while_the_lights_can_change() {
+    let (mut state, mut settings) = with_image(1, 100);
+    state.apply(
+        Event::Lighting(lighting(LightMode::Effect(2))),
+        &mut settings,
+    );
+    running(&mut state, &mut settings);
+    assert!(state.adjust_brightness(5).is_none());
+    assert!(state.adjust_speed(4).is_none());
+    assert_eq!(state.light_controls().brightness, Some((2, 6)), "no change");
+    assert_eq!(state.light_controls().speed, Some((2, 0, 5)), "no change");
+}
+
+#[test]
+fn a_reload_keeps_the_old_picture_but_not_the_button() {
+    let (mut state, _) = with_image(1, 100);
+    assert!(state.can_upload());
+    state.set_fit(Fit::Stretch).unwrap();
+    assert!(state.animation().is_some(), "still showing");
+    assert!(!state.can_upload(), "what would go up is on its way");
+    assert!(state.start_upload().is_none());
+}
+
+#[test]
+fn arrows_move_a_slider_one_step_the_way_they_say() {
+    let (mut state, _) = with_lights(LightMode::Effect(2));
+    state.nudge(Slider::Brightness, 1).unwrap();
+    assert_eq!(state.light_controls().brightness, Some((3, 6)));
+    state.nudge(Slider::Brightness, -1).unwrap();
+    state.nudge(Slider::Brightness, -1).unwrap();
+    assert_eq!(state.light_controls().brightness, Some((1, 6)));
+    state.nudge(Slider::Speed, 1).unwrap();
+    assert_eq!(state.light_controls().speed, Some((3, 0, 5)));
+    state.nudge(Slider::Speed, -1).unwrap();
+    assert_eq!(state.light_controls().speed, Some((2, 0, 5)));
+}
+
+#[test]
+fn arrows_stop_at_a_sliders_ends_with_nothing_to_send() {
+    let (mut state, _) = with_lights(LightMode::Effect(2));
+    state.adjust_brightness(5).unwrap();
+    assert!(state.nudge(Slider::Brightness, 1).is_none());
+    state.adjust_speed(0).unwrap();
+    assert!(state.nudge(Slider::Speed, -1).is_none());
+}
+
+#[test]
+fn an_effect_without_a_slider_has_nothing_to_move() {
+    // Solid has no speed.
+    let (mut state, _) = with_lights(LightMode::Effect(1));
+    assert!(state.nudge(Slider::Speed, 1).is_none());
+    assert!(state.drag_slider(Slider::Speed, 50.0, 0.0, 100.0).is_none());
+    let (mut state, _) = with_lights(LightMode::Off);
+    assert!(state.nudge(Slider::Brightness, 1).is_none());
+    assert!(
+        state
+            .drag_slider(Slider::Brightness, 50.0, 0.0, 100.0)
+            .is_none()
+    );
+}
+
+#[test]
+fn dragging_picks_the_nearest_step_along_the_track() {
+    let (mut state, _) = with_lights(LightMode::Effect(2));
+    assert!(matches!(
+        state.drag_slider(Slider::Brightness, 100.0, 0.0, 100.0),
+        Some(Cmd::AdjustLighting(LightingChange {
+            brightness: Some(20),
+            ..
+        }))
+    ));
+    assert_eq!(state.light_controls().brightness, Some((5, 6)));
+    assert!(matches!(
+        state.drag_slider(Slider::Speed, 0.0, 0.0, 100.0),
+        Some(Cmd::AdjustLighting(LightingChange { speed: Some(0), .. }))
+    ));
+}
+
+#[test]
+fn dragging_a_disabled_slider_does_nothing() {
+    let (mut state, mut settings) = with_image(1, 100);
+    state.apply(
+        Event::Lighting(lighting(LightMode::Effect(2))),
+        &mut settings,
+    );
+    running(&mut state, &mut settings);
+    assert!(
+        state
+            .drag_slider(Slider::Brightness, 100.0, 0.0, 100.0)
+            .is_none()
+    );
+    assert!(
+        state
+            .drag_slider(Slider::Speed, 100.0, 0.0, 100.0)
+            .is_none()
+    );
+    assert_eq!(state.light_controls().brightness, Some((2, 6)));
+}
+
+#[test]
+fn a_sliders_value_reads_as_a_percentage() {
+    assert_eq!(percent(0, 6), 0);
+    assert_eq!(percent(3, 6), 60);
+    assert_eq!(percent(5, 6), 100);
+    assert_eq!(percent(0, 1), 0);
+}
+
+#[test]
+fn the_preview_shows_the_frame_that_is_due_and_goes_around() {
+    assert_eq!(preview_frame(0, 4, 100), 0);
+    assert_eq!(preview_frame(99, 4, 100), 0);
+    assert_eq!(preview_frame(100, 4, 100), 1);
+    assert_eq!(preview_frame(399, 4, 100), 3);
+    assert_eq!(preview_frame(400, 4, 100), 0);
+    assert_eq!(preview_frame(5000, 1, 100), 0);
+    assert_eq!(preview_frame(5000, 0, 100), 0);
+    assert_eq!(
+        preview_frame(5, 4, 0),
+        1,
+        "a delay of 0 doesn't divide by 0"
+    );
+}
+
+#[test]
+fn the_preview_doesnt_look_more_often_than_it_can_show() {
+    assert_eq!(preview_interval(100), 100);
+    assert_eq!(preview_interval(20), PREVIEW_MIN_MS);
+}
+
+#[test]
+fn a_settings_file_that_cant_be_read_stays_on_show() {
+    let settings = Settings {
+        read_error: Some("no access".to_string()),
+        ..Settings::default()
+    };
+    let state = State::with_settings(&settings);
+    let banners = state.banners();
+    assert_eq!(banners.len(), 1);
+    assert_eq!(banners[0].text, t().settings_unreadable);
+    assert_eq!(banners[0].tone, Tone::Warning);
+    assert!(
+        State::with_settings(&Settings::default())
+            .banners()
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_file_chosen_with_no_keyboard_says_it_is_waiting() {
+    let mut state = State::default();
+    state.apply(Event::Disconnected, &mut Settings::default());
+    let hint = state.empty_view().detail;
+    state.choose_file(PathBuf::from("C:/somewhere/cat.gif"));
+    let view = state.empty_view();
+    assert_ne!(view.detail, hint);
+    assert!(view.detail.contains("cat.gif"), "{}", view.detail);
+    assert!(!view.detail.contains("somewhere"), "{}", view.detail);
+}
+
+#[test]
+fn a_keyboard_that_cant_be_opened_doesnt_ask_to_connect_it() {
+    let mut state = State::default();
+    state.apply(
+        Event::CannotOpen(Error::Hid("denied".to_string())),
+        &mut Settings::default(),
+    );
+    let view = state.empty_view();
+    assert_eq!(view.headline, t().cannot_open);
+    assert_ne!(view.headline, t().connect_keyboard);
+    assert!(view.detail.contains("denied"), "{}", view.detail);
+    assert_eq!(view.tone, Tone::Bad);
+    assert!(!state.offers_report());
+}
+
+#[test]
+fn an_unsupported_keyboard_says_so_and_offers_a_report() {
+    let mut state = State::default();
+    state.apply(
+        Event::CannotOpen(Error::Unsupported(0x002A)),
+        &mut Settings::default(),
+    );
+    let view = state.empty_view();
+    assert_eq!(view.headline, t().unsupported_title);
+    assert!(view.detail.contains("002A"), "{}", view.detail);
+    assert_eq!(view.tone, Tone::Warning);
+    assert!(state.offers_report());
+    assert_eq!(state.status().text, t().unsupported_short);
+}
+
+#[test]
+fn looking_is_what_shows_before_the_worker_has_said() {
+    assert_eq!(State::default().empty_view().detail, t().looking);
+    assert_eq!(State::default().empty_view().headline, t().connect_keyboard);
+}
+
+#[test]
+fn a_tested_or_connected_keyboard_needs_no_new_view_of_its_own() {
+    let (state, _) = connected();
+    assert!(state.offers_report(), "every model is experimental for now");
 }

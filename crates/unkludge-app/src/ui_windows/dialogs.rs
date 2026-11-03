@@ -14,7 +14,9 @@ use windows::Win32::UI::Shell::{
     DragFinish, DragQueryFileW, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FileOpenDialog, HDROP,
     IFileOpenDialog, SIGDN_FILESYSPATH,
 };
-use windows::Win32::UI::WindowsAndMessaging::{IDOK, MB_ICONWARNING, MB_OKCANCEL, MessageBoxW};
+use windows::Win32::UI::WindowsAndMessaging::{
+    IDOK, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_OKCANCEL, MessageBoxW,
+};
 use windows::core::{HSTRING, PCWSTR, Result, w};
 
 use crate::i18n::t;
@@ -89,6 +91,19 @@ pub fn warn_first_custom_color(owner: HWND) -> bool {
     // SAFETY: the strings outlive the call.
     let answer = unsafe { MessageBoxW(Some(owner), &text, &title, MB_OKCANCEL | MB_ICONWARNING) };
     answer == IDOK
+}
+
+/// Says why the app won't start. A release build has no console to say it on.
+pub fn refuse_start(problem: &str) {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    let text = HSTRING::from(problem);
+    let title = HSTRING::from(t().bad_option);
+    // SAFETY: the strings outlive the call.
+    unsafe {
+        MessageBoxW(None, &text, &title, MB_OK | MB_ICONERROR);
+    }
 }
 
 /// The first file of a drop, which is then finished with.

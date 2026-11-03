@@ -10,7 +10,7 @@ use super::gfx::{
 use super::{App, Hit, Item, Role};
 use crate::i18n::t;
 use crate::layout::WIDTH;
-use crate::state::{Link, Tone};
+use crate::state::Tone;
 
 pub fn tone_color(tone: Tone) -> D2D1_COLOR_F {
     match tone {
@@ -133,16 +133,18 @@ impl App {
             MUTED,
         );
 
+        let mut x = 78.0 + title_width + 14.0;
         if self.state.is_experimental() {
-            let x = 78.0 + title_width + 14.0;
             let badge_w = d.text_width(t().experimental, &self.fonts.badge) + 20.0;
             let badge = R::new(x, 21.0, x + badge_w, 41.0);
             d.round(badge, 10.0, alpha(AMBER, 0.12));
             d.round_stroke(badge, 10.0, alpha(AMBER, 0.5), 1.0);
             d.text(t().experimental, &self.fonts.badge, badge, AMBER);
-
+            x = badge.x1 + 10.0;
+        }
+        if self.state.offers_report() {
             let link_w = d.text_width(t().send_report, &self.fonts.small) + 2.0;
-            let link = R::new(badge.x1 + 10.0, 21.0, badge.x1 + 10.0 + link_w, 41.0);
+            let link = R::new(x, 21.0, x + link_w, 41.0);
             let hovered = self.hover == Some(Hit::Report);
             let color = if hovered { TEXT } else { ACCENT_HI };
             d.text(t().send_report, &self.fonts.small, link, color);
@@ -263,18 +265,18 @@ impl App {
         );
 
         let text_top = art_top + art_h + 28.0;
+        let view = self.state.empty_view();
         d.text(
-            t().connect_keyboard,
+            &view.headline,
             &self.fonts.headline,
             R::new(c.x0 + 20.0, text_top, c.x1 - 20.0, text_top + 30.0),
             TEXT,
         );
-        let (detail, color) = match &self.state.link {
-            Link::Blocked(error) => (format!("{}: {}", t().cannot_open, t().error(error)), RED),
-            Link::Searching => (t().looking.to_string(), MUTED),
-            _ => (t().connect_hint.to_string(), MUTED),
+        let color = match view.tone {
+            Tone::Neutral | Tone::Good => MUTED,
+            tone => tone_color(tone),
         };
-        let detail = fitted_text(d, &detail, &self.fonts.body_c, c.w() - 60.0);
+        let detail = fitted_text(d, &view.detail, &self.fonts.body_c, c.w() - 60.0);
         d.text(
             &detail,
             &self.fonts.body_c,

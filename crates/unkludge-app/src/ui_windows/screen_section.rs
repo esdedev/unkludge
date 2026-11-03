@@ -1,5 +1,6 @@
 //! The screen section: the preview, the file, how it fits, and the upload.
 
+use unkludge_protocol::model::ScreenSpec;
 use unkludge_protocol::screen::Fit;
 use windows::Win32::Graphics::Direct2D::ID2D1Bitmap;
 
@@ -11,7 +12,7 @@ use super::header::{fitted_text, tone_color};
 use super::{App, Hit, Role};
 use crate::i18n::t;
 use crate::layout::{self, centered, split_row};
-use crate::state::Upload;
+use crate::state::{Upload, preview_frame};
 use crate::worker::rgb_from_565;
 
 const FITS: [Fit; 3] = [Fit::Cover, Fit::Contain, Fit::Stretch];
@@ -34,22 +35,14 @@ fn bgra_from_rgb(rgb: &[u8]) -> Vec<u8> {
 }
 
 impl App {
-    /// Which of the animation's frames is showing, going by the time since it started.
-    fn preview_frame(&self, frames: usize, delay_ms: u16) -> usize {
-        if frames < 2 {
-            return 0;
-        }
-        let elapsed = self.preview_since.elapsed().as_millis();
-        (elapsed / u128::from(delay_ms.max(1))) as usize % frames
-    }
-
     /// Puts the frame that's due into the preview's bitmap, unless it's there already.
     pub fn update_preview(&mut self) {
         let Some(animation) = self.state.animation().cloned() else {
             return;
         };
         let frames = animation.frames();
-        let at = self.preview_frame(frames.len(), animation.delay_ms());
+        let elapsed = self.preview_since.elapsed().as_millis();
+        let at = preview_frame(elapsed, frames.len(), animation.delay_ms());
         let Some(frame) = frames.get(at) else {
             return;
         };
@@ -115,12 +108,9 @@ impl App {
         }
     }
 
-    pub fn paint_screen(&self, d: &Draw, preview: Option<&ID2D1Bitmap>) {
+    pub fn paint_screen(&self, d: &Draw, screen: ScreenSpec, preview: Option<&ID2D1Bitmap>) {
         let c = R::from(self.frame.screen);
         self.card(d, c, t().screen, "\u{E7F4}");
-        let Some(screen) = self.state.model().and_then(|model| model.screen) else {
-            return;
-        };
         d.text(
             &t().screen_info(screen.width, screen.height, screen.max_frames),
             &self.fonts.small_r,
@@ -251,7 +241,7 @@ impl App {
             self.item(
                 part.into(),
                 hit,
-                fit_name(*fit),
+                t().labelled(t().fit, fit_name(*fit)),
                 Role::Choice,
                 selected,
                 true,
@@ -352,7 +342,7 @@ impl App {
                     );
                 }
             }
-            Upload::Starting | Upload::Running { .. } => self.paint_progress(d, row),
+            Upload::Starting { .. } | Upload::Running { .. } => self.paint_progress(d, row),
         }
     }
 

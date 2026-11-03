@@ -6,7 +6,8 @@ use windows::Win32::Graphics::Gdi::{
     DeleteObject,
 };
 use windows::Win32::UI::Shell::{
-    NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
+    NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_ADD, NIM_DELETE, NIM_MODIFY,
+    NOTIFYICONDATAW, Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconIndirect, CreatePopupMenu, DestroyMenu, GetCursorPos, HICON, ICONINFO,
@@ -107,6 +108,27 @@ impl App {
         // SAFETY: the structure is valid for the call, which copies what it needs.
         unsafe {
             let _ = Shell_NotifyIconW(NIM_ADD, &self.tray_data());
+        }
+    }
+
+    /// A balloon from the tray icon, the one time it's needed.
+    pub fn show_tray_note(&self) {
+        let mut data = self.tray_data();
+        data.uFlags |= NIF_INFO;
+        data.dwInfoFlags = NIIF_INFO;
+        for (slot, unit) in data
+            .szInfoTitle
+            .iter_mut()
+            .zip(t().tray_note_title.encode_utf16())
+        {
+            *slot = unit;
+        }
+        for (slot, unit) in data.szInfo.iter_mut().zip(t().tray_note.encode_utf16()) {
+            *slot = unit;
+        }
+        // SAFETY: as in `add_tray`.
+        unsafe {
+            let _ = Shell_NotifyIconW(NIM_MODIFY, &data);
         }
     }
 

@@ -16,6 +16,7 @@ use unkludge_protocol::model::{Effect, Model, Status};
 use unkludge_protocol::screen::{Animation, Fit};
 
 use crate::i18n::t;
+use crate::layout::step_at;
 use crate::settings::Settings;
 use crate::worker::{Cmd, Event, LoadedImage, Problem, ReportData};
 
@@ -36,7 +37,7 @@ pub struct Note {
 }
 
 impl Note {
-    fn new(text: impl Into<String>, tone: Tone) -> Note {
+    pub fn new(text: impl Into<String>, tone: Tone) -> Note {
         Note {
             text: text.into(),
             tone,
@@ -62,8 +63,10 @@ pub enum Link {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Upload {
     Idle,
-    /// Asked for, and the worker hasn't said yet.
-    Starting,
+    /// Asked for, and the worker hasn't said yet. It can be cancelled already.
+    Starting {
+        cancelling: bool,
+    },
     Running {
         done: usize,
         total: usize,
@@ -80,10 +83,11 @@ impl Upload {
     pub fn is_cancelling(&self) -> bool {
         matches!(
             self,
-            Upload::Running {
-                cancelling: true,
-                ..
-            }
+            Upload::Starting { cancelling: true }
+                | Upload::Running {
+                    cancelling: true,
+                    ..
+                }
         )
     }
 
@@ -134,6 +138,21 @@ pub struct LightControls {
     pub sleep: Option<SleepSetting>,
 }
 
+/// A slider of the lights.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Slider {
+    Brightness,
+    Speed,
+}
+
+/// What to show when there's no keyboard to set.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EmptyView {
+    pub headline: String,
+    pub detail: String,
+    pub tone: Tone,
+}
+
 /// What the interface knows.
 pub struct State {
     pub link: Link,
@@ -145,8 +164,14 @@ pub struct State {
     /// `None` means what the file says.
     pub delay: Option<u16>,
     pub upload: Upload,
-    /// How the last upload or file went, shown with the screen's controls.
+    /// How the last upload went, shown with the screen's controls.
     pub outcome: Option<Note>,
+    /// Why the last file can't be used, which an upload ending doesn't change.
+    pub file_note: Option<Note>,
+    /// The upload that's running didn't get its finish confirmed.
+    unconfirmed: bool,
+    /// The settings file couldn't be read, so these are the defaults and nothing gets saved.
+    pub settings_unreadable: bool,
     /// Anything else, at the foot of the window.
     pub message: Option<Note>,
     /// Slider values on their way to the keyboard, which the next word from it replaces.
@@ -165,6 +190,9 @@ impl Default for State {
             delay: None,
             upload: Upload::Idle,
             outcome: None,
+            file_note: None,
+            unconfirmed: false,
+            settings_unreadable: false,
             message: None,
             pending: LightingChange::default(),
         }
@@ -172,6 +200,14 @@ impl Default for State {
 }
 
 impl State {
+    /// How things stand with these settings loaded.
+    pub fn with_settings(settings: &Settings) -> State {
+        State {
+            settings_unreadable: settings.read_error.is_some(),
+            ..State::default()
+        }
+    }
+
     pub fn model(&self) -> Option<&'static Model> {
         match self.link {
             Link::Connected(model) => Some(model),
@@ -223,7 +259,7 @@ impl State {
             }
             Event::ImageFailed(error) => {
                 self.file = None;
-                self.outcome = Some(Note::new(
+                self.file_note = Some(Note::new(
                     format!("{}: {}", t().image_failed, t().error(&error)),
                     Tone::Bad,
                 ));
@@ -233,7 +269,7 @@ impl State {
                     done: 0,
                     total,
                     remaining: estimate,
-                    cancelling: false,
+                    cancelling: self.upload.is_cancelling(),
                 };
                 self.outcome = None;
             }
@@ -250,19 +286,23 @@ impl State {
                 };
             }
             Event::Cancelling => {
-                if let Upload::Running { cancelling, .. } = &mut self.upload {
+                if let Upload::Starting { cancelling } | Upload::Running { cancelling, .. } =
+                    &mut self.upload
+                {
                     *cancelling = true;
                 }
             }
             Event::UploadUnconfirmed => {
-                self.outcome = Some(Note::new(t().upload_unconfirmed, Tone::Warning));
+                self.unconfirmed = true;
             }
             Event::UploadDone => {
                 self.upload = Upload::Idle;
                 // After `UploadUnconfirmed`, that's the news.
-                if self.outcome.is_none() {
-                    self.outcome = Some(Note::new(t().upload_done, Tone::Good));
-                }
+                self.outcome = Some(if std::mem::take(&mut self.unconfirmed) {
+                    Note::new(t().upload_unconfirmed, Tone::Warning)
+                } else {
+                    Note::new(t().upload_done, Tone::Good)
+                });
             }
             Event::UploadCancelled => {
                 self.upload = Upload::Idle;
@@ -280,7 +320,7 @@ impl State {
             }
             Event::Error(problem) => {
                 // An upload that was asked for and refused never starts.
-                if self.upload == Upload::Starting {
+                if matches!(self.upload, Upload::Starting { .. }) {
                     self.upload = Upload::Idle;
                 }
                 if problem == Problem::NoKeyboard
@@ -334,6 +374,7 @@ impl State {
         });
         self.delay = None;
         self.outcome = None;
+        self.file_note = None;
         self.load_chosen()
     }
 
@@ -375,8 +416,9 @@ impl State {
             return None;
         }
         let animation = Arc::clone(self.animation()?);
-        self.upload = Upload::Starting;
+        self.upload = Upload::Starting { cancelling: false };
         self.outcome = None;
+        self.unconfirmed = false;
         Some(Cmd::UploadScreen(animation))
     }
 
@@ -387,11 +429,15 @@ impl State {
     /// What to say about the file, with the screen's controls: the news from an upload, or else
     /// what will happen to the frames.
     pub fn screen_notes(&self) -> Vec<Note> {
+        let mut news = Vec::new();
         if self.upload.is_cancelling() {
-            return vec![Note::new(t().cancelling, Tone::Warning)];
+            news.push(Note::new(t().cancelling, Tone::Warning));
+        } else if let Some(outcome) = &self.outcome {
+            news.push(outcome.clone());
         }
-        if let Some(outcome) = &self.outcome {
-            return vec![outcome.clone()];
+        news.extend(self.file_note.clone());
+        if !news.is_empty() {
+            return news;
         }
         let Some(image) = self.file.as_ref().and_then(|file| file.loaded.as_ref()) else {
             return Vec::new();
@@ -539,6 +585,38 @@ impl State {
         Some(Cmd::AdjustLighting(change))
     }
 
+    /// One step along a slider, from the keyboard. Stops at the ends.
+    pub fn nudge(&mut self, slider: Slider, by: i32) -> Option<Cmd> {
+        let controls = self.light_controls();
+        match slider {
+            Slider::Brightness => {
+                let (step, steps) = controls.brightness?;
+                self.adjust_brightness((step as i32 + by).clamp(0, steps as i32 - 1) as usize)
+            }
+            Slider::Speed => {
+                let (value, min, max) = controls.speed?;
+                let value = (i32::from(value) + by).clamp(i32::from(min), i32::from(max));
+                self.adjust_speed(value as u8)
+            }
+        }
+    }
+
+    /// A slider being dragged to `x`, on a track running from `x0` to `x1`.
+    pub fn drag_slider(&mut self, slider: Slider, x: f32, x0: f32, x1: f32) -> Option<Cmd> {
+        let controls = self.light_controls();
+        match slider {
+            Slider::Brightness => {
+                let (_, steps) = controls.brightness?;
+                self.adjust_brightness(step_at(x, x0, x1, steps))
+            }
+            Slider::Speed => {
+                let (_, min, max) = controls.speed?;
+                let steps = usize::from(max - min) + 1;
+                self.adjust_speed(min + step_at(x, x0, x1, steps) as u8)
+            }
+        }
+    }
+
     /// The first custom colour for a model writes every effect's colours, and the keyboard's own
     /// can't be read first, so the others go back to the defaults. After that there's a saved copy.
     pub fn custom_color_resets_others(&self, settings: &Settings) -> bool {
@@ -571,6 +649,7 @@ impl State {
         match self.link {
             Link::Searching => Note::new(t().looking, Tone::Neutral),
             Link::Absent => Note::new(t().disconnected, Tone::Bad),
+            Link::Blocked(Error::Unsupported(_)) => Note::new(t().unsupported_short, Tone::Warning),
             Link::Blocked(_) => Note::new(t().cannot_open_short, Tone::Bad),
             Link::Connected(_) => Note::new(t().connected, Tone::Good),
         }
@@ -581,9 +660,45 @@ impl State {
             .is_some_and(|model| model.status == Status::Experimental)
     }
 
+    /// Whether a report is the thing to do next: a model not tried yet, or one not supported.
+    pub fn offers_report(&self) -> bool {
+        self.is_experimental() || matches!(self.link, Link::Blocked(Error::Unsupported(_)))
+    }
+
+    /// What to show when there's no keyboard to set.
+    pub fn empty_view(&self) -> EmptyView {
+        let view = |headline: &str, detail: String, tone| EmptyView {
+            headline: headline.to_string(),
+            detail,
+            tone,
+        };
+        match &self.link {
+            Link::Blocked(Error::Unsupported(pid)) => view(
+                t().unsupported_title,
+                t().unsupported_detail(*pid),
+                Tone::Warning,
+            ),
+            Link::Blocked(error) => view(t().cannot_open, t().error(error), Tone::Bad),
+            _ if self.file.is_some() => view(
+                t().connect_keyboard,
+                t().file_waiting(&self.file_name().unwrap_or_default()),
+                Tone::Neutral,
+            ),
+            Link::Searching => view(t().connect_keyboard, t().looking.to_string(), Tone::Neutral),
+            _ => view(
+                t().connect_keyboard,
+                t().connect_hint.to_string(),
+                Tone::Neutral,
+            ),
+        }
+    }
+
     /// Warnings that stay for as long as they're true, across the whole window.
     pub fn banners(&self) -> Vec<Note> {
         let mut banners = Vec::new();
+        if self.settings_unreadable {
+            banners.push(Note::new(t().settings_unreadable, Tone::Warning));
+        }
         if self.hung {
             banners.push(Note::new(t().hung, Tone::Warning));
         }
@@ -592,6 +707,30 @@ impl State {
         }
         banners
     }
+}
+
+/// How far along a step is, as a percentage, for showing a slider's value.
+pub fn percent(step: usize, steps: usize) -> u32 {
+    if steps < 2 {
+        return 0;
+    }
+    (step * 100 / (steps - 1)) as u32
+}
+
+/// An animation's preview needn't go faster than this, whatever the file says.
+pub const PREVIEW_MIN_MS: u32 = 33;
+
+/// How often an animation's preview should look for its next frame.
+pub fn preview_interval(delay_ms: u16) -> u32 {
+    u32::from(delay_ms).max(PREVIEW_MIN_MS)
+}
+
+/// Which frame of an animation is showing, `elapsed_ms` after it started.
+pub fn preview_frame(elapsed_ms: u128, frames: usize, delay_ms: u16) -> usize {
+    if frames < 2 {
+        return 0;
+    }
+    (elapsed_ms / u128::from(delay_ms.max(1)) % frames as u128) as usize
 }
 
 /// A file's name, for showing. No folder: it isn't needed, and a window may end up in a screenshot.

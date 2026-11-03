@@ -35,13 +35,14 @@ use windows::Win32::Graphics::DirectWrite::IDWriteFactory;
 use windows::Win32::UI::Accessibility::IAccessible;
 use windows::Win32::UI::WindowsAndMessaging::HICON;
 
+pub use dialogs::refuse_start;
 pub use startup::run;
 
 use crate::args::DemoArgs;
 use crate::demo::Script;
 use crate::layout::Frame;
 use crate::settings::Settings;
-use crate::state::State;
+use crate::state::{Slider, State};
 use crate::worker::{Event, WorkerHandle};
 use gfx::{Fonts, Gfx, R};
 
@@ -100,13 +101,6 @@ pub struct Shared {
     pub focus: Option<Hit>,
     /// Device pixels per DIP.
     pub scale: f32,
-}
-
-/// A slider being dragged.
-#[derive(Clone, Copy, PartialEq)]
-pub enum Drag {
-    Brightness,
-    Speed,
 }
 
 /// Something that opens a dialog, which runs its own message loop, so it can't be done while the
@@ -180,7 +174,7 @@ pub struct App {
     show_focus: bool,
     hover: Option<Hit>,
     tracking_mouse: bool,
-    drag: Option<Drag>,
+    drag: Option<Slider>,
     autostart: bool,
     a_autostart: Anim,
     a_auto_clock: Anim,

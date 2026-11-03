@@ -10,14 +10,12 @@ use super::App;
 use super::window::{TIMER_MESSAGE, TIMER_PREVIEW, TIMER_SHOT};
 use crate::demo::Step;
 use crate::i18n::t;
-use crate::state::Reaction;
+use crate::state::{Reaction, preview_interval};
 use crate::worker::{self, Cmd, Event};
 use crate::{log, report, sys};
 
 /// How long passing news stays at the foot of the window.
 const MESSAGE_TIME_MS: u32 = 6000;
-/// The preview doesn't need to go faster than this, whatever the file says.
-const PREVIEW_MIN_MS: u32 = 33;
 const PROGRESS_PAINT_GAP: Duration = Duration::from_millis(250);
 
 impl App {
@@ -135,7 +133,7 @@ impl App {
             .state
             .animation()
             .filter(|animation| animation.frames().len() > 1 && self.is_visible())
-            .map(|animation| u32::from(animation.delay_ms()).max(PREVIEW_MIN_MS));
+            .map(|animation| preview_interval(animation.delay_ms()));
         if wanted != self.preview_timer {
             // SAFETY: the handle is this window's own.
             unsafe {

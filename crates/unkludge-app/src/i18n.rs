@@ -13,6 +13,8 @@ use crate::worker::Problem;
 
 /// One language's texts. In the private ones, `{name}` marks where a value goes.
 pub struct Tr {
+    /// Which language this is, for what needs to know, as text shaping does.
+    pub spanish: bool,
     /// Shown when there's no keyboard.
     pub connect_keyboard: &'static str,
     /// [`Problem::NoKeyboard`].
@@ -44,6 +46,21 @@ pub struct Tr {
 
     /// Under the app's name when no model is showing.
     pub tagline: &'static str,
+    /// A keyboard is there that this version can't use.
+    pub unsupported_title: &'static str,
+    pub unsupported_short: &'static str,
+    /// While the settings file can't be read.
+    pub settings_unreadable: &'static str,
+    /// The first time the window is closed.
+    pub tray_note_title: &'static str,
+    pub tray_note: &'static str,
+    /// What goes before a choice when a screen reader names it.
+    pub effect: &'static str,
+    pub fit: &'static str,
+    /// What a screen reader calls the automatic clock's toggle, which is read away from its card.
+    pub auto_clock_name: &'static str,
+    /// The title of the message about a mistyped option.
+    pub bad_option: &'static str,
     pub looking: &'static str,
     pub connected: &'static str,
     pub disconnected: &'static str,
@@ -116,6 +133,9 @@ pub struct Tr {
     /// By effect number, from 1. The model data's own names are the English ones.
     effects: [&'static str; 17],
     frames_info: &'static str,
+    file_waiting: &'static str,
+    unsupported_known: &'static str,
+    unsupported_unknown: &'static str,
     screen_info: &'static str,
     sleep_other: &'static str,
     about: &'static str,
@@ -140,6 +160,7 @@ pub struct Tr {
 }
 
 const EN: Tr = Tr {
+    spanish: false,
     connect_keyboard: "Connect the keyboard by USB cable",
     no_keyboard: "No keyboard is connected",
     busy: "Not possible during an upload: wait for it to end, or cancel it",
@@ -163,6 +184,15 @@ const EN: Tr = Tr {
     time_left: "About {time} left",
 
     tagline: "Royal Kludge keyboards, without the bloat",
+    unsupported_title: "This keyboard isn't supported yet",
+    unsupported_short: "Not supported",
+    settings_unreadable: "The settings file can't be read, so these are the defaults, and changes won't be saved",
+    tray_note_title: "Unkludge keeps running",
+    tray_note: "It stays here, in the notification area, to keep the keyboard's clock right. Right-click the icon to quit.",
+    effect: "Effect",
+    fit: "Fit",
+    auto_clock_name: "Set the clock automatically",
+    bad_option: "Unkludge didn't start",
     looking: "Looking for a keyboard…",
     connected: "Connected",
     disconnected: "No keyboard",
@@ -242,10 +272,13 @@ const EN: Tr = Tr {
         "Blossom",
     ],
     frames_info: "{frames} frames, {ms} ms each",
+    file_waiting: "{name} will load when the keyboard is connected",
+    unsupported_known: "{name} (PID {pid}) can't be used with this version. Send a report so it can be looked at",
+    unsupported_unknown: "A device with PID {pid} isn't one this version knows. If it's your keyboard, send a report so it can be looked at",
     screen_info: "{width} × {height}, up to {frames} frames",
     sleep_other: "now {raw}",
     about: "About {time}",
-    color_slot: "Colour {slot}",
+    color_slot: "Colour slot {slot}",
 
     err_not_found: "No supported keyboard found",
     err_unsupported: "Keyboard {pid} isn't supported",
@@ -261,6 +294,7 @@ const EN: Tr = Tr {
 };
 
 const ES: Tr = Tr {
+    spanish: true,
     connect_keyboard: "Conecta el teclado por cable USB",
     no_keyboard: "No hay ningún teclado conectado",
     busy: "No se puede durante una subida: espera a que termine o cancélala",
@@ -284,6 +318,15 @@ const ES: Tr = Tr {
     time_left: "Quedan unos {time}",
 
     tagline: "Teclados Royal Kludge, sin lo que sobra",
+    unsupported_title: "Este teclado aún no es compatible",
+    unsupported_short: "No compatible",
+    settings_unreadable: "No se puede leer el archivo de ajustes, así que estos son los predeterminados y los cambios no se guardarán",
+    tray_note_title: "Unkludge sigue en marcha",
+    tray_note: "Se queda aquí, en el área de notificación, para mantener en hora el reloj del teclado. Haz clic derecho en el icono para salir.",
+    effect: "Efecto",
+    fit: "Encaje",
+    auto_clock_name: "Ajustar la hora automáticamente",
+    bad_option: "Unkludge no ha arrancado",
     looking: "Buscando un teclado…",
     connected: "Conectado",
     disconnected: "Sin teclado",
@@ -363,10 +406,13 @@ const ES: Tr = Tr {
         "Flor",
     ],
     frames_info: "{frames} fotogramas, {ms} ms cada uno",
+    file_waiting: "{name} se cargará cuando conectes el teclado",
+    unsupported_known: "{name} (PID {pid}) no se puede usar con esta versión. Envía un informe para que se pueda estudiar",
+    unsupported_unknown: "Esta versión no conoce el dispositivo con PID {pid}. Si es tu teclado, envía un informe para que se pueda estudiar",
     screen_info: "{width} × {height}, hasta {frames} fotogramas",
     sleep_other: "ahora {raw}",
     about: "Unos {time}",
-    color_slot: "Color {slot}",
+    color_slot: "Hueco de color {slot}",
 
     err_not_found: "No se ha encontrado ningún teclado compatible",
     err_unsupported: "El teclado {pid} no es compatible",
@@ -468,6 +514,28 @@ impl Tr {
         self.frames_info
             .replace("{frames}", &frames.to_string())
             .replace("{ms}", &delay_ms.to_string())
+    }
+
+    /// A file waiting for a keyboard.
+    pub fn file_waiting(&self, name: &str) -> String {
+        self.file_waiting.replace("{name}", name)
+    }
+
+    /// What to say about a device this version can't use, and what to do next.
+    pub fn unsupported_detail(&self, pid: u16) -> String {
+        let pid_text = format!("{pid:04X}");
+        match unkludge_protocol::model::find(pid) {
+            Some(model) => self
+                .unsupported_known
+                .replace("{name}", model.name)
+                .replace("{pid}", &pid_text),
+            None => self.unsupported_unknown.replace("{pid}", &pid_text),
+        }
+    }
+
+    /// A choice with what it's a choice of, for a screen reader, which reads it on its own.
+    pub fn labelled(&self, label: &str, value: &str) -> String {
+        format!("{label}: {value}")
     }
 
     /// What a model's screen is like.
@@ -706,6 +774,22 @@ mod tests {
     }
 
     #[test]
+    fn an_unsupported_keyboard_is_named_when_it_is_known() {
+        let known = EN.unsupported_detail(0x002A);
+        assert!(known.contains("002A"), "{known}");
+        assert!(known.contains("report"), "{known}");
+        let unknown = ES.unsupported_detail(0xFFFF);
+        assert!(unknown.contains("FFFF"), "{unknown}");
+        assert!(unknown.contains("informe"), "{unknown}");
+    }
+
+    #[test]
+    fn each_table_knows_its_language() {
+        assert!(for_language(true).spanish);
+        assert!(!for_language(false).spanish);
+    }
+
+    #[test]
     fn a_file_is_described_by_its_frames() {
         assert_eq!(EN.frames_info(1, 100), "Still image");
         assert_eq!(ES.frames_info(1, 100), "Imagen fija");
@@ -755,8 +839,8 @@ mod tests {
 
     #[test]
     fn colours_are_counted_from_one_for_people() {
-        assert_eq!(EN.color_slot(0), "Colour 1");
-        assert_eq!(ES.color_slot(6), "Color 7");
+        assert_eq!(EN.color_slot(0), "Colour slot 1");
+        assert_eq!(ES.color_slot(6), "Hueco de color 7");
     }
 
     #[test]

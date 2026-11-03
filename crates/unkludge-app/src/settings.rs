@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use unkludge_protocol::lighting::Palettes;
 
 const AUTO_CLOCK: &str = "auto_clock";
+const TRAY_NOTE_SHOWN: &str = "tray_note_shown";
 const PALETTES_PREFIX: &str = "palettes.";
 /// Far more than these settings can ever take, for all the models there are. A larger file isn't one
 /// of ours, and gets treated like any other damaged one.
@@ -21,6 +22,8 @@ const MAX_FILE_BYTES: u64 = 1 << 20;
 pub struct Settings {
     /// Set the clock on connecting and on coming back from sleep.
     pub auto_clock: bool,
+    /// The first time the window is closed, a note says that the app keeps running in the tray.
+    pub tray_note_shown: bool,
     /// The last palettes sent to each model, by product ID, as a keyboard's can't be read back.
     pub palettes: BTreeMap<u16, Palettes>,
     /// Whether a file was there. If not, this is the first launch.
@@ -34,6 +37,7 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             auto_clock: true,
+            tray_note_shown: false,
             palettes: BTreeMap::new(),
             existed: false,
             read_error: None,
@@ -114,6 +118,8 @@ impl Settings {
                     "0" => settings.auto_clock = false,
                     _ => {}
                 }
+            } else if key == TRAY_NOTE_SHOWN {
+                settings.tray_note_shown = value == "1";
             } else if let Some(pid) = key.strip_prefix(PALETTES_PREFIX).and_then(parse_pid)
                 && let Some(palettes) =
                     decode_hex(value).and_then(|bytes| Palettes::from_bytes(&bytes).ok())
@@ -126,6 +132,9 @@ impl Settings {
 
     fn to_text(&self) -> String {
         let mut text = format!("{AUTO_CLOCK}={}\n", u8::from(self.auto_clock));
+        if self.tray_note_shown {
+            text += &format!("{TRAY_NOTE_SHOWN}=1\n");
+        }
         for (pid, palettes) in &self.palettes {
             let hex = encode_hex(palettes.as_bytes());
             text += &format!("{PALETTES_PREFIX}{pid:04X}={hex}\n");
@@ -280,6 +289,19 @@ mod tests {
         assert!(!loaded.auto_clock);
         assert_eq!(loaded.palettes, settings.palettes);
         assert_eq!(loaded.palettes[&0x0265].get(3, 2), Some(Rgb::new(1, 2, 3)));
+    }
+
+    #[test]
+    fn the_tray_note_is_remembered_once_shown() {
+        let dir = TempDir::new("tray-note");
+        Settings::default().save_to(&dir.file()).unwrap();
+        assert!(!Settings::load_from(&dir.file()).tray_note_shown);
+        let shown = Settings {
+            tray_note_shown: true,
+            ..Settings::default()
+        };
+        shown.save_to(&dir.file()).unwrap();
+        assert!(Settings::load_from(&dir.file()).tray_note_shown);
     }
 
     #[test]

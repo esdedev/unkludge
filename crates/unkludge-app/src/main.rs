@@ -42,6 +42,8 @@ fn main() {
         // A flag this doesn't know could be a mistyped --demo, so nothing starts.
         Err(problem) => {
             log::error(&problem);
+            #[cfg(windows)]
+            ui_windows::refuse_start(&problem);
             std::process::exit(2);
         }
     };

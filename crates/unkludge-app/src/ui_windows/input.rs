@@ -13,8 +13,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::gfx::{ACCENT_HI, Draw, R, alpha};
-use super::{App, Deferred, Drag, Hit};
-use crate::layout::{self, step_at};
+use super::{App, Deferred, Hit};
+use crate::layout;
+use crate::state::Slider;
 use crate::worker::Cmd;
 
 /// What Tab does: the next or previous of the enabled items, around the end of the list.
@@ -103,8 +104,8 @@ impl App {
         let hit = self.hit_at(x, y);
         self.set_focus(hit);
         match hit {
-            Some(Hit::Brightness) => self.begin_drag(Drag::Brightness, x),
-            Some(Hit::Speed) => self.begin_drag(Drag::Speed, x),
+            Some(Hit::Brightness) => self.begin_drag(Slider::Brightness, x),
+            Some(Hit::Speed) => self.begin_drag(Slider::Speed, x),
             Some(hit) => self.activate(hit),
             None => {}
         }
@@ -135,52 +136,28 @@ impl App {
 
     /// Moves a slider being dragged to where the mouse is.
     pub fn drag_to(&mut self, x: f32) {
-        let controls = self.state.light_controls();
-        match self.drag {
-            Some(Drag::Brightness) => {
-                if let Some((_, steps)) = controls.brightness {
-                    let (x0, x1) = self.slider_track(Hit::Brightness);
-                    let cmd = self.state.adjust_brightness(step_at(x, x0, x1, steps));
-                    self.send(cmd);
-                }
-            }
-            Some(Drag::Speed) => {
-                if let Some((_, min, max)) = controls.speed {
-                    let (x0, x1) = self.slider_track(Hit::Speed);
-                    let steps = usize::from(max - min) + 1;
-                    let cmd = self
-                        .state
-                        .adjust_speed(min + step_at(x, x0, x1, steps) as u8);
-                    self.send(cmd);
-                }
-            }
-            None => {}
+        if let Some(slider) = self.drag {
+            let hit = match slider {
+                Slider::Brightness => Hit::Brightness,
+                Slider::Speed => Hit::Speed,
+            };
+            let (x0, x1) = self.slider_track(hit);
+            let cmd = self.state.drag_slider(slider, x, x0, x1);
+            self.send(cmd);
         }
         self.invalidate();
     }
 
     /// One step along a slider, from the keyboard. Says whether it was a slider.
     fn nudge(&mut self, hit: Hit, by: i32) -> bool {
-        let controls = self.state.light_controls();
-        match hit {
-            Hit::Brightness => {
-                if let Some((step, steps)) = controls.brightness {
-                    let step = (step as i32 + by).clamp(0, steps as i32 - 1) as usize;
-                    let cmd = self.state.adjust_brightness(step);
-                    self.send(cmd);
-                }
-                true
-            }
-            Hit::Speed => {
-                if let Some((value, min, max)) = controls.speed {
-                    let value = (i32::from(value) + by).clamp(i32::from(min), i32::from(max));
-                    let cmd = self.state.adjust_speed(value as u8);
-                    self.send(cmd);
-                }
-                true
-            }
-            _ => false,
-        }
+        let slider = match hit {
+            Hit::Brightness => Slider::Brightness,
+            Hit::Speed => Slider::Speed,
+            _ => return false,
+        };
+        let cmd = self.state.nudge(slider, by);
+        self.send(cmd);
+        true
     }
 
     /// Does what an item is for.
