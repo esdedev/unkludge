@@ -1,0 +1,7 @@
+[package]
+name = "unkludge-protocol"
+description = "Protocol library for Royal Kludge keyboards"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true

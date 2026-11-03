@@ -1,0 +1,11 @@
+[package]
+name = "unkludge-cli"
+description = "Command-line tool for Royal Kludge keyboards"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "unkludge"
+path = "src/main.rs"

@@ -1,0 +1,7 @@
+# Linux packaging files must keep LF endings, also in a Windows checkout
+*.sh text eol=lf
+*.desktop text eol=lf
+*.rules text eol=lf
+*.svg text eol=lf
+packaging/aur/** text eol=lf
+packaging/deb/* text eol=lf
