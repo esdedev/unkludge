@@ -6,6 +6,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+# Exposes transport::fake, an in-memory keyboard for tests in other crates.
+fake = []
+
 [dependencies]
 thiserror.workspace = true
 
