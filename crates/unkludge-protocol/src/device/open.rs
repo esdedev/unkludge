@@ -1,17 +1,20 @@
 //! Finding and opening a real keyboard.
 //!
-//! Only two kinds of HID collection are ever opened: usage page `0xFF02` usage 2 for the keyboard,
-//! and usage page `0xFF03` usage 2 for the second collection of `kind = 2` models. Everything else
-//! stays closed, `0xFF00` collections above all.
+//! Only two kinds of HID collection are ever selected: usage page `0xFF02` usage 2 for the
+//! keyboard, and usage page `0xFF03` usage 2 for the second collection of `kind = 2` models. `0xFF00`
+//! collections never are. On Windows each collection has its own path, so only the selected one
+//! opens. On Linux the hidraw node is the whole interface, so opening it reaches any other collection
+//! there too. What protects those is the allow-list of commands.
 
 use std::ffi::{CStr, CString};
 
 use hidapi::HidApi;
 
+use super::descriptor::feature_report_len;
 use super::{Device, fetch_block, request_block};
 use crate::Error;
 use crate::model::{self, Model, VID};
-use crate::packet::{self, cmd};
+use crate::packet::{self, REPORT_ID, REPORT_LEN, cmd};
 use crate::transport::{HidTransport, Transport, hid_error};
 
 /// Usage page and usage of the collection that carries the protocol.
@@ -52,7 +55,14 @@ struct Selection {
 }
 
 /// Picks the keyboard to open from the system's list, or the one with product ID `pid` if given.
-fn select(entries: &[HidEntry], pid: Option<u16>) -> Result<Selection, Error> {
+/// `usage_fallback` allows an entry without usages on the right interface. Only for Linux: on
+/// Windows those zeros can also mean that reading a collection's capabilities failed, and then it
+/// could be any collection.
+fn select(
+    entries: &[HidEntry],
+    pid: Option<u16>,
+    usage_fallback: bool,
+) -> Result<Selection, Error> {
     if let Some(pid) = pid
         && !model::find(pid).is_some_and(Model::is_supported)
     {
@@ -67,12 +77,14 @@ fn select(entries: &[HidEntry], pid: Option<u16>) -> Result<Selection, Error> {
     let position_of =
         |wanted: fn(&HidEntry) -> bool| entries.iter().position(|e| keyboard(e) && wanted(e));
     let main = position_of(|e| e.usages() == MAIN_USAGE)
-        .or_else(|| position_of(|e| e.usages() == (0, 0) && e.interface == FALLBACK_INTERFACE))
+        .or_else(|| {
+            position_of(|e| e.usages() == (0, 0) && e.interface == FALLBACK_INTERFACE)
+                .filter(|_| usage_fallback)
+        })
         .ok_or(Error::NotFound)?;
 
     let model = model::find(entries[main].pid).ok_or(Error::NotFound)?;
-    let has_screen_collection = model.screen.is_some_and(|s| s.kind == 2);
-    let screen_candidates = if has_screen_collection {
+    let screen_candidates = if model.has_second_collection() {
         screen_candidates(entries, &entries[main])
     } else {
         Vec::new()
@@ -86,19 +98,22 @@ fn select(entries: &[HidEntry], pid: Option<u16>) -> Result<Selection, Error> {
 }
 
 /// The second collection's product ID isn't known, so any collection of the right usage and vendor
-/// could be it. Where the paths show which of them are on the keyboard's USB device, only those.
+/// could be it. Where the paths show some with the keyboard's vendor and product IDs, only those.
 fn screen_candidates(entries: &[HidEntry], main: &HidEntry) -> Vec<usize> {
     let candidates: Vec<usize> = (0..entries.len())
-        .filter(|&i| entries[i].vid == VID && entries[i].usages() == SCREEN_USAGE)
+        .filter(|&i| {
+            let entry = &entries[i];
+            entry.vid == VID && entry.usages() == SCREEN_USAGE && entry.path != main.path
+        })
         .collect();
 
-    let Some(prefix) = usb_prefix(&main.path) else {
+    let Some(prefix) = vid_pid_prefix(&main.path) else {
         return candidates;
     };
     let same_device: Vec<usize> = candidates
         .iter()
         .copied()
-        .filter(|&i| usb_prefix(&entries[i].path).as_ref() == Some(&prefix))
+        .filter(|&i| vid_pid_prefix(&entries[i].path).as_ref() == Some(&prefix))
         .collect();
     if same_device.is_empty() {
         candidates
@@ -107,9 +122,10 @@ fn screen_candidates(entries: &[HidEntry], main: &HidEntry) -> Vec<usize> {
     }
 }
 
-/// The part of a Windows device path that names the USB device, before the interface and collection
-/// numbers. Other systems' paths don't have one.
-fn usb_prefix(path: &CStr) -> Option<String> {
+/// The part of a Windows device path before the interface and collection numbers. It holds only
+/// the vendor and product IDs, so it doesn't tell apart two keyboards of one model: that's left to
+/// the identity read. Other systems' paths don't have one.
+fn vid_pid_prefix(path: &CStr) -> Option<String> {
     let path = path.to_string_lossy().to_lowercase();
     let end = path.find("&mi_").or_else(|| path.find("&col"))?;
     Some(path[..end].to_string())
@@ -122,16 +138,42 @@ fn read_identity<T: Transport>(transport: &T) -> Result<Vec<u8>, Error> {
     fetch_block(transport, cmd::PAIR_ID_READ, IDENTITY_LEN)
 }
 
-/// Finds the keyboard's second collection: the first candidate reporting the same identity.
+/// Whether a collection's feature reports are the full length. Reports of another length would be
+/// cut short without any error on Windows, so this is checked before sending it anything.
+fn takes_full_reports<T: Transport>(candidate: &T) -> bool {
+    candidate
+        .report_descriptor()
+        .is_ok_and(|descriptor| feature_report_len(&descriptor, REPORT_ID) == Some(REPORT_LEN))
+}
+
+/// Finds the keyboard's second collection: the first candidate with full-length feature reports
+/// reporting the same identity. If none is found and some could not be opened, says so, since one
+/// of those may be the one.
 fn pair_screen<T: Transport>(
     main: &T,
-    candidates: impl IntoIterator<Item = T>,
+    candidates: impl IntoIterator<Item = Result<T, Error>>,
 ) -> Result<T, Error> {
     let identity = read_identity(main)?;
-    candidates
-        .into_iter()
-        .find(|candidate| read_identity(candidate).is_ok_and(|other| other == identity))
-        .ok_or(Error::NotFound)
+    let mut not_opened = None;
+    for candidate in candidates {
+        match candidate {
+            Ok(candidate) => {
+                if takes_full_reports(&candidate)
+                    && read_identity(&candidate).is_ok_and(|other| other == identity)
+                {
+                    return Ok(candidate);
+                }
+            }
+            Err(error) => {
+                not_opened.get_or_insert(error);
+            }
+        }
+    }
+    Err(not_opened.map_or(Error::NotFound, |error| {
+        Error::Hid(format!(
+            "couldn't open a possible screen collection: {error}"
+        ))
+    }))
 }
 
 impl Device<HidTransport> {
@@ -151,13 +193,13 @@ impl Device<HidTransport> {
             })
             .collect();
 
-        let selection = select(&entries, pid)?;
+        let selection = select(&entries, pid, cfg!(target_os = "linux"))?;
         let main = HidTransport::open(&api, &entries[selection.main].path)?;
-        let screen = if selection.model.screen.is_some_and(|s| s.kind == 2) {
+        let screen = if selection.model.has_second_collection() {
             let candidates = selection
                 .screen_candidates
                 .iter()
-                .filter_map(|&i| HidTransport::open(&api, &entries[i].path).ok());
+                .map(|&i| HidTransport::open(&api, &entries[i].path));
             Some(pair_screen(&main, candidates)?)
         } else {
             None
@@ -169,7 +211,7 @@ impl Device<HidTransport> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transport::fake::FakeTransport;
+    use crate::transport::fake::{FakeEvent, FakeTransport};
 
     const S85_ES: u16 = 0x0265;
     const N99: u16 = 0x01B8;
@@ -217,14 +259,22 @@ mod tests {
         ]
     }
 
+    fn select_windows(entries: &[HidEntry], pid: Option<u16>) -> Result<Selection, Error> {
+        select(entries, pid, false)
+    }
+
+    fn select_linux(entries: &[HidEntry], pid: Option<u16>) -> Result<Selection, Error> {
+        select(entries, pid, true)
+    }
+
     fn picked(entries: &[HidEntry], pid: Option<u16>) -> &HidEntry {
-        &entries[select(entries, pid).unwrap().main]
+        &entries[select_windows(entries, pid).unwrap().main]
     }
 
     #[test]
     fn picks_the_vendor_collection_from_a_windows_list() {
         let list = windows_list(S85_ES);
-        let selection = select(&list, None).unwrap();
+        let selection = select_windows(&list, None).unwrap();
         assert_eq!(selection.main, 3);
         assert_eq!(selection.model.pid, S85_ES);
         assert!(selection.screen_candidates.is_empty());
@@ -233,7 +283,15 @@ mod tests {
     #[test]
     fn picks_interface_1_from_a_linux_list_without_usages() {
         let list = linux_list(S85_ES);
-        assert_eq!(select(&list, None).unwrap().main, 1);
+        assert_eq!(select_linux(&list, None).unwrap().main, 1);
+    }
+
+    #[test]
+    fn an_entry_without_usages_is_never_picked_elsewhere() {
+        // On Windows, failing to read a collection's capabilities also shows as 0 and 0, and that
+        // collection could be any of them.
+        let list = linux_list(S85_ES);
+        assert_eq!(select_windows(&list, None).err(), Some(Error::NotFound));
     }
 
     #[test]
@@ -243,7 +301,7 @@ mod tests {
             entry(VID, S85_ES, 0xFF00, 0x0001, 1, "/dev/hidraw3"),
             entry(VID, S85_ES, 0xFF02, 0x0002, 1, "/dev/hidraw3"),
         ];
-        assert_eq!(select(&list, None).unwrap().main, 2);
+        assert_eq!(select_linux(&list, None).unwrap().main, 2);
     }
 
     #[test]
@@ -252,7 +310,7 @@ mod tests {
             entry(VID, S85_ES, 0, 0, 1, "/dev/hidraw3"),
             entry(VID, S85_ES, 0xFF02, 0x0002, 1, "/dev/hidraw4"),
         ];
-        assert_eq!(select(&list, None).unwrap().main, 1);
+        assert_eq!(select_linux(&list, None).unwrap().main, 1);
     }
 
     #[test]
@@ -261,8 +319,11 @@ mod tests {
             entry(0x1234, S85_ES, 0xFF02, 0x0002, 1, "a"),
             entry(0x1234, S85_ES, 0, 0, 1, "b"),
         ];
-        assert_eq!(select(&list, None).err(), Some(Error::NotFound));
-        assert_eq!(select(&list, Some(S85_ES)).err(), Some(Error::NotFound));
+        assert_eq!(select_linux(&list, None).err(), Some(Error::NotFound));
+        assert_eq!(
+            select_linux(&list, Some(S85_ES)).err(),
+            Some(Error::NotFound)
+        );
     }
 
     #[test]
@@ -278,13 +339,13 @@ mod tests {
         for pid in [V1_MODEL, NO_SCREEN_MODEL, UNKNOWN] {
             let list = windows_list(pid);
             assert_eq!(
-                select(&list, None).err(),
+                select_windows(&list, None).err(),
                 Some(Error::NotFound),
                 "{pid:04X}"
             );
             let list = linux_list(pid);
             assert_eq!(
-                select(&list, None).err(),
+                select_linux(&list, None).err(),
                 Some(Error::NotFound),
                 "{pid:04X}"
             );
@@ -296,7 +357,7 @@ mod tests {
         for pid in [V1_MODEL, NO_SCREEN_MODEL, UNKNOWN] {
             let list = windows_list(pid);
             assert_eq!(
-                select(&list, Some(pid)).err(),
+                select_windows(&list, Some(pid)).err(),
                 Some(Error::Unsupported(pid))
             );
         }
@@ -305,7 +366,10 @@ mod tests {
     #[test]
     fn asking_for_a_supported_pid_that_isnt_connected_is_not_found() {
         let list = windows_list(0x01FA);
-        assert_eq!(select(&list, Some(S85_ES)).err(), Some(Error::NotFound));
+        assert_eq!(
+            select_windows(&list, Some(S85_ES)).err(),
+            Some(Error::NotFound)
+        );
     }
 
     #[test]
@@ -318,7 +382,7 @@ mod tests {
 
     #[test]
     fn nothing_listed_is_not_found() {
-        assert_eq!(select(&[], None).err(), Some(Error::NotFound));
+        assert_eq!(select_windows(&[], None).err(), Some(Error::NotFound));
     }
 
     #[test]
@@ -328,8 +392,12 @@ mod tests {
                 for interface in [-1, 0, 1, 2] {
                     let path = windows_path(model.pid, 1, 2);
                     let list = [entry(VID, model.pid, 0xFF00, usage, interface, &path)];
-                    assert_eq!(select(&list, None).err(), Some(Error::NotFound));
-                    assert_eq!(select(&list, Some(model.pid)).err(), Some(Error::NotFound));
+                    assert_eq!(select_windows(&list, None).err(), Some(Error::NotFound));
+                    assert_eq!(select_linux(&list, None).err(), Some(Error::NotFound));
+                    assert_eq!(
+                        select_linux(&list, Some(model.pid)).err(),
+                        Some(Error::NotFound)
+                    );
                 }
             }
         }
@@ -356,7 +424,7 @@ mod tests {
         for (page, usage, interface) in others {
             let list = [entry(VID, S85_ES, page, usage, interface, "x")];
             assert_eq!(
-                select(&list, None).err(),
+                select_linux(&list, None).err(),
                 Some(Error::NotFound),
                 "{page:04X} {usage} {interface}"
             );
@@ -373,7 +441,7 @@ mod tests {
 
     #[test]
     fn a_model_with_a_screen_collection_gets_candidates() {
-        let selection = select(&n99_list(), None).unwrap();
+        let selection = select_windows(&n99_list(), None).unwrap();
         assert_eq!(selection.main, 3);
         assert_eq!(selection.screen_candidates, [5]);
     }
@@ -382,7 +450,12 @@ mod tests {
     fn a_model_without_a_screen_collection_gets_none() {
         let mut list = windows_list(S85_ES);
         list.push(entry(VID, S85_ES, 0xFF03, 0x0002, 3, "x"));
-        assert!(select(&list, None).unwrap().screen_candidates.is_empty());
+        assert!(
+            select_windows(&list, None)
+                .unwrap()
+                .screen_candidates
+                .is_empty()
+        );
     }
 
     #[test]
@@ -391,7 +464,7 @@ mod tests {
         list.push(entry(0x1234, N99, 0xFF03, 0x0002, 3, "other vendor"));
         list.push(entry(VID, N99, 0xFF03, 0x0001, 3, "wrong usage"));
         list.push(entry(VID, N99, 0xFF00, 0x0002, 3, "wrong page"));
-        assert_eq!(select(&list, None).unwrap().screen_candidates, [5]);
+        assert_eq!(select_windows(&list, None).unwrap().screen_candidates, [5]);
     }
 
     #[test]
@@ -406,7 +479,7 @@ mod tests {
         )];
         list.extend(n99_list());
         // Index 0 is on another USB device, index 6 on this one.
-        let selection = select(&list, Some(N99)).unwrap();
+        let selection = select_windows(&list, Some(N99)).unwrap();
         assert_eq!(selection.screen_candidates, [6]);
     }
 
@@ -418,7 +491,27 @@ mod tests {
             entry(VID, N99, 0xFF03, 0x0002, 2, "/dev/hidraw4"),
             entry(VID, 0x01FA, 0xFF03, 0x0002, 2, "/dev/hidraw7"),
         ];
-        assert_eq!(select(&list, None).unwrap().screen_candidates, [1, 2]);
+        assert_eq!(select_linux(&list, None).unwrap().screen_candidates, [1, 2]);
+    }
+
+    #[test]
+    fn on_linux_only_the_vendor_keeps_another_vendors_collection_out() {
+        let list = vec![
+            entry(VID, N99, 0xFF02, 0x0002, 1, "/dev/hidraw3"),
+            entry(0x1234, N99, 0xFF03, 0x0002, 2, "/dev/hidraw9"),
+            entry(VID, N99, 0xFF03, 0x0002, 2, "/dev/hidraw4"),
+        ];
+        assert_eq!(select_linux(&list, None).unwrap().screen_candidates, [2]);
+    }
+
+    #[test]
+    fn the_keyboards_own_path_is_never_a_candidate() {
+        let list = vec![
+            entry(VID, N99, 0xFF02, 0x0002, 1, "/dev/hidraw3"),
+            entry(VID, N99, 0xFF03, 0x0002, 1, "/dev/hidraw3"),
+            entry(VID, N99, 0xFF03, 0x0002, 2, "/dev/hidraw4"),
+        ];
+        assert_eq!(select_linux(&list, None).unwrap().screen_candidates, [2]);
     }
 
     #[test]
@@ -432,29 +525,42 @@ mod tests {
             0,
             &windows_path(0x0150, 0, 1),
         ));
-        assert_eq!(select(&list, None).unwrap().screen_candidates, [5]);
+        assert_eq!(select_windows(&list, None).unwrap().screen_candidates, [5]);
     }
 
     #[test]
-    fn usb_prefix_reads_windows_paths_only() {
-        let prefix = usb_prefix(&CString::new(windows_path(N99, 1, 3)).unwrap());
-        assert_eq!(prefix.as_deref(), Some(r"\\?\hid#vid_258a&pid_01b8"));
-        let upper = CString::new(r"\\?\HID#VID_258A&PID_01B8&MI_01#7&2a&0&0000#{4d1e55b2}");
-        assert_eq!(
-            usb_prefix(&upper.unwrap()).as_deref(),
-            Some(r"\\?\hid#vid_258a&pid_01b8")
-        );
-        assert_eq!(usb_prefix(&CString::new("/dev/hidraw3").unwrap()), None);
-    }
-
-    #[test]
-    fn opening_links_on_this_platform() {
-        // Only takes the function's address: nothing here touches a device.
-        let open: fn(Option<u16>) -> Result<Device, Error> = Device::open;
-        assert!(!std::hint::black_box(open as usize == 0));
+    fn the_prefix_comes_from_windows_paths_only() {
+        let expected = Some(r"\\?\hid#vid_258a&pid_01b8");
+        let with_interface = CString::new(windows_path(N99, 1, 3)).unwrap();
+        assert_eq!(vid_pid_prefix(&with_interface).as_deref(), expected);
+        let upper =
+            CString::new(r"\\?\HID#VID_258A&PID_01B8&MI_01#7&2a&0&0000#{4d1e55b2}").unwrap();
+        assert_eq!(vid_pid_prefix(&upper).as_deref(), expected);
+        // One interface only, so a collection number and no interface number.
+        let no_interface =
+            CString::new(r"\\?\hid#vid_258a&pid_01b8&col02#7&2a&0&0001#{4d1e55b2}").unwrap();
+        assert_eq!(vid_pid_prefix(&no_interface).as_deref(), expected);
+        let linux = CString::new("/dev/hidraw3").unwrap();
+        assert_eq!(vid_pid_prefix(&linux), None);
     }
 
     // Pairing.
+
+    /// A descriptor of one vendor collection whose report 9 has this many feature bytes after the ID.
+    fn descriptor(feature_bytes: u16) -> Vec<u8> {
+        let [lo, hi] = feature_bytes.to_le_bytes();
+        vec![
+            0x06, 0x03, 0xFF, // Usage page 0xFF03
+            0x09, 0x02, // Usage 2
+            0xA1, 0x01, // Collection
+            0x85, 0x09, // Report ID 9
+            0x75, 0x08, // Report size 8
+            0x96, lo, hi, // Report count
+            0x09, 0x01, // Usage 1
+            0xB1, 0x02, // Feature
+            0xC0, // End collection
+        ]
+    }
 
     /// A collection that answers the identity read with `id`.
     fn answers(id: &[u8]) -> FakeTransport {
@@ -465,11 +571,21 @@ mod tests {
         fake
     }
 
+    /// A possible second collection, with full-length feature reports.
+    fn candidate(id: &[u8]) -> FakeTransport {
+        let fake = answers(id);
+        fake.set_report_descriptor(&descriptor(519));
+        fake
+    }
+
+    const ID: [u8; 6] = [1, 2, 3, 4, 5, 6];
+    const OTHER_ID: [u8; 6] = [9, 9, 9, 9, 9, 9];
+
     #[test]
     fn pairing_reads_6_bytes_with_arg_1_from_both_sides() {
-        let main = answers(&[1, 2, 3, 4, 5, 6]);
-        let screen = answers(&[1, 2, 3, 4, 5, 6]);
-        pair_screen(&main, [screen.clone()]).unwrap();
+        let main = answers(&ID);
+        let screen = candidate(&ID);
+        pair_screen(&main, [Ok(screen.clone())]).unwrap();
 
         for fake in [&main, &screen] {
             let sent = fake.sent();
@@ -484,11 +600,15 @@ mod tests {
 
     #[test]
     fn pairing_takes_the_first_match_and_stops_looking() {
-        let main = answers(&[1, 2, 3, 4, 5, 6]);
-        let other = answers(&[9, 9, 9, 9, 9, 9]);
-        let right = answers(&[1, 2, 3, 4, 5, 6]);
-        let unused = answers(&[1, 2, 3, 4, 5, 6]);
-        let found = pair_screen(&main, [other.clone(), right.clone(), unused.clone()]).unwrap();
+        let main = answers(&ID);
+        let other = candidate(&OTHER_ID);
+        let right = candidate(&ID);
+        let unused = candidate(&ID);
+        let found = pair_screen(
+            &main,
+            [Ok(other.clone()), Ok(right.clone()), Ok(unused.clone())],
+        )
+        .unwrap();
 
         assert_eq!(found.sent().len(), right.sent().len());
         assert_eq!(other.sent().len(), 1);
@@ -498,32 +618,105 @@ mod tests {
 
     #[test]
     fn pairing_without_a_match_is_not_found() {
-        let main = answers(&[1, 2, 3, 4, 5, 6]);
-        let other = answers(&[9, 9, 9, 9, 9, 9]);
-        assert_eq!(pair_screen(&main, [other]).err(), Some(Error::NotFound));
-        let main = answers(&[1, 2, 3, 4, 5, 6]);
-        let none: [FakeTransport; 0] = [];
+        let main = answers(&ID);
+        let other = candidate(&OTHER_ID);
+        assert_eq!(pair_screen(&main, [Ok(other)]).err(), Some(Error::NotFound));
+        let main = answers(&ID);
+        let none: [Result<FakeTransport, Error>; 0] = [];
         assert_eq!(pair_screen(&main, none).err(), Some(Error::NotFound));
     }
 
     #[test]
     fn pairing_skips_a_collection_that_cant_answer() {
-        let main = answers(&[1, 2, 3, 4, 5, 6]);
+        let main = answers(&ID);
         // Nothing queued, so its read fails.
         let silent = FakeTransport::new();
-        let right = answers(&[1, 2, 3, 4, 5, 6]);
-        pair_screen(&main, [silent, right.clone()]).unwrap();
+        silent.set_report_descriptor(&descriptor(519));
+        let right = candidate(&ID);
+        pair_screen(&main, [Ok(silent), Ok(right.clone())]).unwrap();
         assert_eq!(right.sent().len(), 1);
     }
 
     #[test]
     fn pairing_fails_if_the_keyboard_itself_cant_answer() {
         let main = FakeTransport::new();
-        let screen = answers(&[1, 2, 3, 4, 5, 6]);
+        let screen = candidate(&ID);
         assert!(matches!(
-            pair_screen(&main, [screen.clone()]),
+            pair_screen(&main, [Ok(screen.clone())]),
             Err(Error::Hid(_))
         ));
         assert!(screen.sent().is_empty());
+    }
+
+    #[test]
+    fn pairing_checks_the_length_before_sending_anything() {
+        let main = answers(&ID);
+        let screen = candidate(&ID);
+        pair_screen(&main, [Ok(screen.clone())]).unwrap();
+        assert_eq!(screen.events()[0], FakeEvent::ReadDescriptor);
+    }
+
+    #[test]
+    fn pairing_sends_nothing_to_a_collection_of_another_length() {
+        for feature_bytes in [64, 518, 520, 1031] {
+            let main = answers(&ID);
+            let wrong = answers(&ID);
+            wrong.set_report_descriptor(&descriptor(feature_bytes));
+            let right = candidate(&ID);
+            let found = pair_screen(&main, [Ok(wrong.clone()), Ok(right.clone())]).unwrap();
+            assert!(wrong.sent().is_empty(), "{feature_bytes}");
+            assert_eq!(found.sent().len(), 1);
+        }
+    }
+
+    #[test]
+    fn pairing_sends_nothing_to_a_collection_without_a_readable_descriptor() {
+        let main = answers(&ID);
+        let unreadable = answers(&ID);
+        assert_eq!(
+            pair_screen(&main, [Ok(unreadable.clone())]).err(),
+            Some(Error::NotFound)
+        );
+        assert!(unreadable.sent().is_empty());
+
+        let main = answers(&ID);
+        let malformed = answers(&ID);
+        malformed.set_report_descriptor(&[0x96, 0x07]);
+        assert_eq!(
+            pair_screen(&main, [Ok(malformed.clone())]).err(),
+            Some(Error::NotFound)
+        );
+        assert!(malformed.sent().is_empty());
+    }
+
+    #[test]
+    fn the_keyboards_own_collection_needs_no_descriptor() {
+        // Its usage page and usage have already ruled out the other kinds of collection.
+        let main = answers(&ID);
+        assert!(main.report_descriptor().is_err());
+        pair_screen(&main, [Ok(candidate(&ID))]).unwrap();
+    }
+
+    fn denied() -> Result<FakeTransport, Error> {
+        Err(Error::Hid("access denied".to_string()))
+    }
+
+    #[test]
+    fn pairing_says_so_when_a_candidate_couldnt_be_opened() {
+        let main = answers(&ID);
+        let other = candidate(&OTHER_ID);
+        let Err(Error::Hid(message)) = pair_screen(&main, [denied(), Ok(other)]) else {
+            panic!("should have been an error from the transport");
+        };
+        assert!(message.contains("couldn't open"), "{message}");
+        assert!(message.contains("access denied"), "{message}");
+    }
+
+    #[test]
+    fn pairing_still_works_when_another_candidate_couldnt_be_opened() {
+        let main = answers(&ID);
+        let right = candidate(&ID);
+        pair_screen(&main, [denied(), Ok(right.clone())]).unwrap();
+        assert_eq!(right.sent().len(), 1);
     }
 }

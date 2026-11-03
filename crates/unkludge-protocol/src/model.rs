@@ -35,6 +35,13 @@ pub struct ScreenSpec {
     pub draw_frame_time: u16,
 }
 
+impl ScreenSpec {
+    /// Whether screen data goes to a second HID collection.
+    pub fn has_second_collection(&self) -> bool {
+        self.kind == 2
+    }
+}
+
 /// A lighting effect, and which controls it offers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Effect {
@@ -89,6 +96,11 @@ impl Model {
     /// Whether this version can configure the model.
     pub fn is_supported(&self) -> bool {
         self.protocol == Protocol::V2 && self.screen.is_some()
+    }
+
+    /// Whether screen data goes to a second HID collection.
+    pub fn has_second_collection(&self) -> bool {
+        self.screen.is_some_and(|s| s.has_second_collection())
     }
 }
 
@@ -176,7 +188,7 @@ mod tests {
     #[test]
     fn n99_family_has_a_second_collection() {
         let kind_2: Vec<u16> = supported()
-            .filter(|m| m.screen.unwrap().kind == 2)
+            .filter(|m| m.has_second_collection())
             .map(|m| m.pid)
             .collect();
         assert_eq!(kind_2, [0x01B8, 0x025E, 0x025F]);

@@ -4,14 +4,15 @@
 //! waits 25 ms first, and only the send itself is retried. Screen reports get an ack each, with
 //! no pause between them, so the keyboard's answer sets the pace.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::Error;
 use crate::model::Model;
-use crate::packet::cmd::Cmd;
+use crate::packet::cmd::{Cmd, ReadCmd};
 use crate::packet::{self, Ack, AckExpect, HEADER_LEN, REPORT_ID, REPORT_LEN, Report};
 use crate::transport::{HidTransport, Transport};
 
+mod descriptor;
 mod open;
 
 /// Wait before each generic chunk and each read request.
@@ -24,9 +25,9 @@ const SEND_RETRY_GAP: Duration = Duration::from_millis(50);
 const ACKED_SEND_RETRY_GAP: Duration = Duration::from_millis(100);
 /// Wait between a read request and fetching the reply.
 const READ_WAIT: Duration = Duration::from_millis(25);
-/// Default for [`Device::ack_timeout`].
+/// Default for `Device::ack_timeout`.
 const ACK_TIMEOUT: Duration = Duration::from_millis(8000);
-/// Default for [`Device::retries`].
+/// Default for `Device::retries`.
 const RESENDS: u32 = 5;
 /// With two collections, how long each wait on one of them lasts before checking the other.
 const ACK_POLL_MS: i32 = 10;
@@ -81,11 +82,11 @@ pub(crate) enum AckOutcome {
 pub struct Device<T: Transport = HidTransport> {
     main: T,
     screen: Option<T>,
-    pub model: &'static Model,
+    model: &'static Model,
     /// How long to wait for each ack.
-    pub ack_timeout: Duration,
+    pub(crate) ack_timeout: Duration,
     /// How many times a screen chunk is sent again after an ack that doesn't accept it.
-    pub retries: u32,
+    pub(crate) retries: u32,
     /// Called for each report sent and each ack received.
     pub on_packet: Option<OnPacket>,
 }
@@ -97,7 +98,7 @@ impl<T: Transport> Device<T> {
         if !model.is_supported() {
             return Err(Error::Unsupported(model.pid));
         }
-        let wants_screen = model.screen.is_some_and(|s| s.kind == 2);
+        let wants_screen = model.has_second_collection();
         if wants_screen != screen.is_some() {
             return Err(Error::Invalid(format!(
                 "model {:04X} {} a second collection",
@@ -117,6 +118,11 @@ impl<T: Transport> Device<T> {
             retries: RESENDS,
             on_packet: None,
         })
+    }
+
+    /// The model of this keyboard.
+    pub fn model(&self) -> &'static Model {
+        self.model
     }
 
     /// Pauses, skipping the wait on transports with no hardware behind them.
@@ -142,7 +148,7 @@ impl<T: Transport> Device<T> {
     /// Reads a block from the main collection, returning its `len` data bytes.
     pub(crate) fn read_block(
         &mut self,
-        command: Cmd,
+        command: ReadCmd,
         arg: u8,
         len: usize,
     ) -> Result<Vec<u8>, Error> {
@@ -166,22 +172,21 @@ impl<T: Transport> Device<T> {
     }
 
     /// Sends one screen data chunk and waits for its ack. An ack that doesn't accept it sends the
-    /// chunk again, up to [`Device::retries`] times. No ack in time fails at once.
+    /// chunk again, up to `retries` times, then gives [`Error::Rejected`]. No ack in time gives
+    /// [`Error::NoAck`] at once.
     pub(crate) fn send_screen_chunk(&mut self, report: &Report) -> Result<(), Error> {
         let to = self.screen_collection();
         let crc = self.model.screen.is_some_and(|s| s.crc);
         let expect = AckExpect::chunk(report, crc);
+        let (cmd, idx) = (report[1], report[4]);
         for _ in 0..=self.retries {
             match self.send_and_wait(to, report, expect)? {
                 AckOutcome::Confirmed => return Ok(()),
                 AckOutcome::Rejected => {}
-                AckOutcome::TimedOut => break,
+                AckOutcome::TimedOut => return Err(Error::NoAck { cmd, idx }),
             }
         }
-        Err(Error::NoAck {
-            cmd: report[1],
-            idx: report[4],
-        })
+        Err(Error::Rejected { cmd, idx })
     }
 
     /// Sends a screen control report and waits for its ack: on the main collection, then on the
@@ -211,14 +216,17 @@ impl<T: Transport> Device<T> {
         }
     }
 
-    /// One send and one wait. When the send keeps failing the wait still decides, since the report
-    /// may have got through. If no ack comes either, the send's error is the one to report.
+    /// One send and one wait. Input already waiting is discarded first: a stale ack would count as
+    /// the answer to this report, and every later one would then be answered one ack behind. When
+    /// the send keeps failing the wait still decides, since the report may have got through. If no
+    /// ack comes either, the send's error is the one to report.
     fn send_and_wait(
         &mut self,
         to: Collection,
         report: &Report,
         expect: AckExpect,
     ) -> Result<AckOutcome, Error> {
+        self.drain()?;
         let sent = try_send(self.transport(to), report, ACKED_SEND_RETRY_GAP);
         if sent.is_ok() {
             self.notify_sent(to, report);
@@ -231,22 +239,16 @@ impl<T: Transport> Device<T> {
 
     /// Waits for the next ack, ignoring other input. Other input doesn't extend the wait.
     fn wait_for_ack(&mut self, to: Collection, expect: AckExpect) -> Result<AckOutcome, Error> {
-        let start = Instant::now();
+        let start = self.transport(to).now();
         let deadline = start + self.ack_timeout;
         let mut input = [0; INPUT_LEN];
         loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
+            let remaining = deadline.saturating_duration_since(self.transport(to).now());
             if remaining.is_zero() {
                 return Ok(AckOutcome::TimedOut);
             }
+            // Nothing read isn't necessarily the end of the wait: the deadline decides.
             let len = self.read_input(to, &mut input, remaining)?;
-            if len == 0 {
-                // With one collection the read has already waited for all of the remaining time.
-                if self.screen.is_none() {
-                    return Ok(AckOutcome::TimedOut);
-                }
-                continue;
-            }
             let Some(ack) = Ack::parse(&input[..len]) else {
                 continue;
             };
@@ -254,7 +256,7 @@ impl<T: Transport> Device<T> {
             self.notify(PacketEvent::Ack {
                 idx: ack.idx,
                 accepted,
-                latency: start.elapsed(),
+                latency: self.transport(to).now().saturating_duration_since(start),
             });
             return Ok(if accepted {
                 AckOutcome::Confirmed
@@ -317,7 +319,11 @@ fn request_block<T: Transport>(transport: &T, request: &Report) -> Result<(), Er
 }
 
 /// Waits, fetches the reply to a read request and returns its `len` data bytes.
-fn fetch_block<T: Transport>(transport: &T, command: Cmd, len: usize) -> Result<Vec<u8>, Error> {
+fn fetch_block<T: Transport>(
+    transport: &T,
+    command: ReadCmd,
+    len: usize,
+) -> Result<Vec<u8>, Error> {
     transport.sleep(READ_WAIT);
     let mut reply = [0; REPORT_LEN];
     reply[0] = REPORT_ID;
@@ -326,15 +332,15 @@ fn fetch_block<T: Transport>(transport: &T, command: Cmd, len: usize) -> Result<
 }
 
 /// The reply repeats the request's header, with or without the leading report ID, followed by the
-/// data. The echoed command may have the read bit set or clear.
-fn parse_reply(command: Cmd, reply: &[u8], len: usize) -> Result<Vec<u8>, Error> {
+/// data. Anything else isn't a reply to this read, even with the same command in a write's form.
+fn parse_reply(command: ReadCmd, reply: &[u8], len: usize) -> Result<Vec<u8>, Error> {
     let body = match reply {
         [REPORT_ID, rest @ ..] => rest,
         other => other,
     };
     let echo = body.first().copied();
     let read_cmd = command.byte();
-    if echo != Some(read_cmd) && echo != Some(read_cmd & 0x7F) {
+    if echo != Some(read_cmd) {
         return Err(Error::Invalid(format!(
             "reply to command {read_cmd:#04x} echoes {echo:02X?}"
         )));
@@ -377,9 +383,7 @@ mod tests {
     fn pair() -> (FakeTransport, FakeTransport, Device<FakeTransport>) {
         let main = FakeTransport::with_auto_ack();
         let screen = FakeTransport::with_auto_ack();
-        let mut device = Device::new(main.clone(), Some(screen.clone()), n99()).unwrap();
-        // Empty reads return at once in the fake, so this is what a timed-out wait costs a test.
-        device.ack_timeout = MS(5);
+        let device = Device::new(main.clone(), Some(screen.clone()), n99()).unwrap();
         (main, screen, device)
     }
 
@@ -388,7 +392,7 @@ mod tests {
         let device = device(&FakeTransport::new());
         assert_eq!(device.ack_timeout, MS(8000));
         assert_eq!(device.retries, 5);
-        assert_eq!(device.model.pid, 0x0265);
+        assert_eq!(device.model().pid, 0x0265);
     }
 
     #[test]
@@ -501,11 +505,11 @@ mod tests {
     }
 
     #[test]
-    fn read_block_accepts_an_echo_with_the_read_bit_clear() {
+    fn read_block_rejects_an_echo_with_the_read_bit_clear() {
         let fake = FakeTransport::new();
         fake.queue_feature_reply(&reply(0x04, &[1, 2, 3], true));
-        let data = device(&fake).read_block(cmd::CONFIG_READ, 0, 3).unwrap();
-        assert_eq!(data, [1, 2, 3]);
+        let result = device(&fake).read_block(cmd::CONFIG_READ, 0, 3);
+        assert!(matches!(result, Err(Error::Invalid(_))));
     }
 
     #[test]
@@ -562,23 +566,15 @@ mod tests {
     fn the_ack_wait_lasts_up_to_8_seconds() {
         let fake = FakeTransport::with_auto_ack();
         device(&fake).send_screen_chunk(&chunk(7)).unwrap();
-        let waited = fake
-            .events()
-            .iter()
-            .find_map(|e| match e {
-                FakeEvent::Read { ms } => Some(*ms),
-                _ => None,
-            })
-            .unwrap();
-        assert!((7900..=8000).contains(&waited), "{waited}");
+        assert_eq!(fake.events().last(), Some(&FakeEvent::Read { ms: 8000 }));
     }
 
     #[test]
     fn other_input_reports_dont_count_as_acks() {
         let fake = FakeTransport::new();
-        fake.queue_input(&[0x09, 0x0A, 0x02, 0x01, 0x07, 0, 0, 0]);
-        fake.queue_input(&[0x09, 0x0B, 0, 0, 0, 0, 0, 0]);
-        fake.queue_input(&[0x09, 0x0A, 0x06, 0x01, 0x07, 0, 0, 0]);
+        fake.queue_input_after_send(&[0x09, 0x0A, 0x02, 0x01, 0x07, 0, 0, 0]);
+        fake.queue_input_after_send(&[0x09, 0x0B, 0, 0, 0, 0, 0, 0]);
+        fake.queue_input_after_send(&[0x09, 0x0A, 0x06, 0x01, 0x07, 0, 0, 0]);
         device(&fake).send_screen_chunk(&chunk(7)).unwrap();
         assert_eq!(fake.sent().len(), 1);
     }
@@ -586,9 +582,74 @@ mod tests {
     #[test]
     fn acks_without_the_report_id_count() {
         let fake = FakeTransport::new();
-        fake.queue_input(&[0x0A, 0x06, 0x01, 0x07, 0, 0, 0]);
+        fake.queue_input_after_send(&[0x0A, 0x06, 0x01, 0x07, 0, 0, 0]);
         device(&fake).send_screen_chunk(&chunk(7)).unwrap();
         assert_eq!(fake.sent().len(), 1);
+    }
+
+    #[test]
+    fn only_the_bytes_read_count_as_the_report() {
+        // The first report leaves a status and an index in the buffer, where the rest of an ack
+        // would go. The second has only the first 3 bytes of one.
+        let fake = FakeTransport::new();
+        fake.queue_input_after_send(&[0x09, 0x0B, 0x00, 0x01, 0x07, 0, 0, 0]);
+        fake.queue_input_after_send(&[0x09, 0x0A, 0x06]);
+        let result = device(&fake).send_screen_chunk(&chunk(7));
+        assert_eq!(result, Err(Error::NoAck { cmd: 0x0C, idx: 7 }));
+    }
+
+    #[test]
+    fn other_input_doesnt_extend_the_wait() {
+        // 20 other reports at a second each, then an ack that comes too late to count.
+        let fake = FakeTransport::new();
+        fake.set_input_latency(MS(1000));
+        for _ in 0..20 {
+            fake.queue_input_after_send(&[0x09, 0x0B, 0, 0, 0, 0, 0, 0]);
+        }
+        fake.queue_input_after_send(&[0x09, 0x0A, 0x06, 0x01, 0x07, 0, 0, 0]);
+
+        let result = device(&fake).send_screen_chunk(&chunk(7));
+        assert_eq!(result, Err(Error::NoAck { cmd: 0x0C, idx: 7 }));
+        assert_eq!(fake.pending_input(), 21 - 8);
+        let waits: Vec<i32> = fake
+            .events()
+            .iter()
+            .filter_map(|e| match e {
+                FakeEvent::Read { ms } if *ms > 0 => Some(*ms),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(waits, [8000, 7000, 6000, 5000, 4000, 3000, 2000, 1000]);
+    }
+
+    #[test]
+    fn a_read_returning_0_early_is_not_a_timeout() {
+        let fake = FakeTransport::new();
+        fake.queue_input_after_send(&[]);
+        fake.queue_input_after_send(&[0x09, 0x0A, 0x06, 0x01, 0x07, 0, 0, 0]);
+        device(&fake).send_screen_chunk(&chunk(7)).unwrap();
+        assert_eq!(fake.sent().len(), 1);
+    }
+
+    #[test]
+    fn one_stale_ack_doesnt_make_later_chunks_go_out_twice() {
+        let fake = FakeTransport::with_auto_ack();
+        fake.queue_input(&[0x09, 0x0A, 0x06, 0x01, 0x63, 0, 0, 0]);
+        let mut device = device(&fake);
+        for idx in 0..50 {
+            device.send_screen_chunk(&chunk(idx)).unwrap();
+        }
+        let sent: Vec<u8> = fake.sent().iter().map(|report| report[4]).collect();
+        assert_eq!(sent, (0..50).collect::<Vec<u8>>());
+    }
+
+    #[test]
+    fn input_is_drained_right_before_each_send() {
+        let fake = FakeTransport::with_auto_ack();
+        device(&fake).send_screen_chunk(&chunk(7)).unwrap();
+        let events = fake.events();
+        assert_eq!(events[0], FakeEvent::Read { ms: 0 });
+        assert!(matches!(events[1], FakeEvent::Sent(_)));
     }
 
     #[test]
@@ -625,11 +686,11 @@ mod tests {
     }
 
     #[test]
-    fn resends_are_bounded_then_no_ack() {
+    fn resends_are_bounded_then_rejected() {
         let fake = FakeTransport::with_auto_ack();
         (0..6).for_each(|n| fake.ack_fault(n, AckFault::Reject));
         let result = device(&fake).send_screen_chunk(&chunk(7));
-        assert_eq!(result, Err(Error::NoAck { cmd: 0x0C, idx: 7 }));
+        assert_eq!(result, Err(Error::Rejected { cmd: 0x0C, idx: 7 }));
         // The first send and 5 resends.
         assert_eq!(fake.sent().len(), 6);
     }
@@ -674,12 +735,12 @@ mod tests {
         // An ack after all: the report got through.
         let fake = FakeTransport::new();
         (0..3).for_each(|n| fake.fail_send(n));
-        fake.queue_input(&[0x09, 0x0A, 0x06, 0x01, 0x07, 0, 0, 0]);
+        fake.queue_input_after_send(&[0x09, 0x0A, 0x06, 0x01, 0x07, 0, 0, 0]);
         device(&fake).send_screen_chunk(&chunk(7)).unwrap();
     }
 
     #[test]
-    fn a_read_error_during_the_wait_is_returned() {
+    fn a_read_error_is_returned() {
         let fake = FakeTransport::with_auto_ack();
         fake.disconnect();
         let result = device(&fake).send_screen_chunk(&chunk(7));
@@ -695,9 +756,17 @@ mod tests {
     #[test]
     fn control_reports_accept_any_index() {
         let fake = FakeTransport::new();
-        fake.queue_input(&[0x09, 0x0A, 0x06, 0x01, 0x33, 0x44, 0, 0]);
+        fake.queue_input_after_send(&[0x09, 0x0A, 0x06, 0x01, 0x33, 0x44, 0, 0]);
         let outcome = device(&fake).send_screen_control(&control()).unwrap();
         assert_eq!(outcome, AckOutcome::Confirmed);
+    }
+
+    #[test]
+    fn a_stale_ack_doesnt_confirm_a_control_report() {
+        let fake = FakeTransport::new();
+        fake.queue_input(&[0x09, 0x0A, 0x06, 0x01, 0x33, 0x44, 0, 0]);
+        let outcome = device(&fake).send_screen_control(&control()).unwrap();
+        assert_eq!(outcome, AckOutcome::TimedOut);
     }
 
     #[test]
@@ -746,12 +815,11 @@ mod tests {
 
     #[test]
     fn both_collections_feed_one_ack_queue() {
-        let main = FakeTransport::new();
-        let screen = FakeTransport::new();
-        let mut device = Device::new(main.clone(), Some(screen.clone()), n99()).unwrap();
-        // The chunk went to the screen collection, and the ack shows up on the main one.
-        main.queue_input(&[0x09, 0x0A, 0x06, 0x01, 0x07, 0, 0, 0]);
+        let (main, screen, mut device) = pair();
+        // The chunk goes to the screen collection, and the ack shows up on the main one.
+        screen.route_acks_to(&main);
         device.send_screen_chunk(&chunk(7)).unwrap();
+        assert_eq!(screen.sent().len(), 1);
     }
 
     #[test]
@@ -765,10 +833,10 @@ mod tests {
     #[test]
     fn with_two_collections_the_wait_polls_in_short_slices() {
         let (main, screen, mut device) = pair();
-        device.ack_timeout = MS(8000);
         device.send_screen_chunk(&chunk(7)).unwrap();
         assert_eq!(screen.events().last(), Some(&FakeEvent::Read { ms: 10 }));
-        assert!(main.events().is_empty());
+        // Only the drain before sending: the ack was on the screen collection, as expected.
+        assert_eq!(main.events(), [FakeEvent::Read { ms: 0 }]);
     }
 
     // Draining and observing.

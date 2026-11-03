@@ -1,9 +1,9 @@
 //! The link to the keyboard, behind a trait so the protocol can run without hardware.
 
 use std::ffi::CStr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use hidapi::{HidApi, HidDevice, HidError};
+use hidapi::{HidApi, HidDevice, HidError, MAX_REPORT_DESCRIPTOR_SIZE};
 
 use crate::Error;
 
@@ -27,6 +27,18 @@ pub trait Transport {
     /// hardware behind it can skip the wait.
     fn sleep(&self, duration: Duration) {
         std::thread::sleep(duration);
+    }
+
+    /// The time, for timing the wait for an ack. A transport with no hardware behind it can keep
+    /// its own clock, so that waits take no real time.
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+
+    /// The collection's HID report descriptor. Only needed for checking a possible second
+    /// collection, so transports that are never paired can leave this as it is.
+    fn report_descriptor(&self) -> Result<Vec<u8>, Error> {
+        Err(Error::Hid("no report descriptor".to_string()))
     }
 }
 
@@ -52,11 +64,23 @@ impl Transport for HidTransport {
         self.device.send_feature_report(report).map_err(hid_error)
     }
 
+    /// On Windows this can block, as the system call behind it has no timeout. If a keyboard stops
+    /// answering here the calling thread waits with it.
     fn get_feature(&self, buf: &mut [u8]) -> Result<usize, Error> {
         self.device.get_feature_report(buf).map_err(hid_error)
     }
 
     fn read_timeout(&self, buf: &mut [u8], ms: i32) -> Result<usize, Error> {
         self.device.read_timeout(buf, ms).map_err(hid_error)
+    }
+
+    fn report_descriptor(&self) -> Result<Vec<u8>, Error> {
+        let mut descriptor = vec![0; MAX_REPORT_DESCRIPTOR_SIZE];
+        let len = self
+            .device
+            .get_report_descriptor(&mut descriptor)
+            .map_err(hid_error)?;
+        descriptor.truncate(len);
+        Ok(descriptor)
     }
 }

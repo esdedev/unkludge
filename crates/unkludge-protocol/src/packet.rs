@@ -5,21 +5,26 @@ use crate::Error;
 /// Size of every report sent, report ID included.
 pub const REPORT_LEN: usize = 520;
 /// Size of the header at the start of each report.
-pub const HEADER_LEN: usize = 8;
+pub(crate) const HEADER_LEN: usize = 8;
 /// Data bytes that fit in one report.
-pub const MAX_DATA: usize = REPORT_LEN - HEADER_LEN;
+pub(crate) const MAX_DATA: usize = REPORT_LEN - HEADER_LEN;
 /// Report ID of every report sent.
 pub const REPORT_ID: u8 = 0x09;
 
 /// One report, ready to send.
-pub type Report = [u8; REPORT_LEN];
+pub(crate) type Report = [u8; REPORT_LEN];
 
-/// The commands this crate can send. These are the only ones that exist here: [`cmd::Cmd`] can't
-/// be made from a byte outside this module, so no other command can reach a report.
+/// The commands this crate can send. These are the only ones that exist here: [`cmd::Cmd`] and
+/// [`cmd::ReadCmd`] can't be made from a byte outside this module, so no other command can reach
+/// a report. Writes and reads are separate types, so a read can't put a write on the wire.
 pub(crate) mod cmd {
-    /// A command byte from the allow-list.
+    /// A command that sends data to the keyboard.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(crate) struct Cmd(u8);
+
+    /// A command that asks the keyboard for data, and sends none.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) struct ReadCmd(u8);
 
     impl Cmd {
         pub(crate) const fn byte(self) -> u8 {
@@ -27,10 +32,14 @@ pub(crate) mod cmd {
         }
     }
 
+    impl ReadCmd {
+        pub(crate) const fn byte(self) -> u8 {
+            self.0
+        }
+    }
+
     /// Writes the 128-byte config block.
     pub(crate) const CONFIG: Cmd = Cmd(0x04);
-    /// Reads the config block.
-    pub(crate) const CONFIG_READ: Cmd = Cmd(0x84);
     /// Writes the effect palettes.
     pub(crate) const PALETTES: Cmd = Cmd(0x0A);
     /// Writes the clock.
@@ -39,25 +48,31 @@ pub(crate) mod cmd {
     pub(crate) const SCREEN_DATA: Cmd = Cmd(0x0C);
     /// Starts, finishes or aborts a screen upload.
     pub(crate) const SCREEN_CONTROL: Cmd = Cmd(0x0D);
-    /// Reads the 6-byte identity used to pair a second collection with the keyboard.
-    pub(crate) const PAIR_ID_READ: Cmd = Cmd(0x82);
 
-    pub(crate) const ALLOWED: [Cmd; 7] = [
-        CONFIG,
-        CONFIG_READ,
-        PALETTES,
-        CLOCK,
-        SCREEN_DATA,
-        SCREEN_CONTROL,
-        PAIR_ID_READ,
+    /// Reads the config block.
+    pub(crate) const CONFIG_READ: ReadCmd = ReadCmd(0x84);
+    /// Reads the 6-byte identity used to pair a second collection with the keyboard.
+    pub(crate) const PAIR_ID_READ: ReadCmd = ReadCmd(0x82);
+
+    /// Every command byte above, for tests to check outgoing reports against.
+    #[cfg(any(test, feature = "fake"))]
+    pub(crate) const ALLOWED: [u8; 7] = [
+        CONFIG.byte(),
+        CONFIG_READ.byte(),
+        PALETTES.byte(),
+        CLOCK.byte(),
+        SCREEN_DATA.byte(),
+        SCREEN_CONTROL.byte(),
+        PAIR_ID_READ.byte(),
     ];
 
+    #[cfg(any(test, feature = "fake"))]
     pub(crate) fn is_allowed(byte: u8) -> bool {
-        ALLOWED.iter().any(|c| c.byte() == byte)
+        ALLOWED.contains(&byte)
     }
 }
 
-use cmd::Cmd;
+use cmd::{Cmd, ReadCmd};
 
 fn empty_report(first: [u8; 8]) -> Report {
     let mut report = [0; REPORT_LEN];
@@ -79,7 +94,7 @@ pub(crate) fn build(command: Cmd, arg: u8, chunks: u8, idx: u8, payload: &[u8]) 
 }
 
 /// A read request: the header states the length wanted, and there is no data.
-pub(crate) fn read_request(command: Cmd, arg: u8, len: usize) -> Report {
+pub(crate) fn read_request(command: ReadCmd, arg: u8, len: usize) -> Report {
     assert!(len <= MAX_DATA, "a read must fit in one report");
     let [lo, hi] = le(len);
     empty_report([REPORT_ID, command.byte(), arg, 0, 1, 0, lo, hi])
@@ -146,16 +161,16 @@ pub(crate) fn screen_control(state: ScreenState, frames: u16, delay_ms: u16) -> 
 /// An acknowledgement: the input report `09 0A 06 <status> <idx> <check> ...`, which arrives with
 /// or without the leading report ID depending on the platform.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Ack {
+pub(crate) struct Ack {
     /// Non-zero means accepted.
-    pub status: u8,
-    pub idx: u8,
-    pub check: u8,
+    pub(crate) status: u8,
+    pub(crate) idx: u8,
+    pub(crate) check: u8,
 }
 
 impl Ack {
     /// Reads an input report. Any other kind of report gives `None`.
-    pub fn parse(input: &[u8]) -> Option<Ack> {
+    pub(crate) fn parse(input: &[u8]) -> Option<Ack> {
         let body = match input {
             [REPORT_ID, rest @ ..] => rest,
             other => other,
@@ -186,7 +201,8 @@ pub(crate) struct AckExpect {
 }
 
 impl AckExpect {
-    /// For a screen chunk: the ack repeats its index and, on checksum models, its checksum.
+    /// For a screen chunk: the ack repeats its index and, on checksum models, its checksum. It has
+    /// no frame number, so a late ack for the same index of the previous frame looks just the same.
     pub(crate) fn chunk(report: &Report, crc: bool) -> Self {
         AckExpect {
             idx: Some(report[4]),
@@ -194,7 +210,8 @@ impl AckExpect {
         }
     }
 
-    /// For a screen control report: a non-zero status is enough.
+    /// For a screen control report: a non-zero status is enough. Any ack would do, so stale input
+    /// must be drained before sending one.
     pub(crate) fn control() -> Self {
         AckExpect {
             idx: None,
@@ -208,17 +225,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sizes() {
-        assert_eq!(REPORT_LEN, 520);
-        assert_eq!(HEADER_LEN, 8);
-        assert_eq!(MAX_DATA, 512);
-        assert_eq!(REPORT_ID, 0x09);
-    }
-
-    #[test]
     fn the_allow_list_is_exactly_the_commands_in_use() {
-        let bytes: Vec<u8> = cmd::ALLOWED.iter().map(|c| c.byte()).collect();
-        assert_eq!(bytes, [0x04, 0x84, 0x0A, 0x0B, 0x0C, 0x0D, 0x82]);
+        assert_eq!(cmd::ALLOWED, [0x04, 0x84, 0x0A, 0x0B, 0x0C, 0x0D, 0x82]);
         assert!(!cmd::is_allowed(0x11));
         assert!(!cmd::is_allowed(0x12));
         assert!(cmd::is_allowed(0x0C));
@@ -379,6 +387,12 @@ mod tests {
         assert_eq!(Ack::parse(&[0x09, 0x0A, 0x02, 0x01, 0x73, 0, 0, 0]), None);
         assert_eq!(Ack::parse(&[0x0A, 0x05, 0x01, 0x73, 0, 0, 0]), None);
         assert_eq!(Ack::parse(&[0x07, 0x0A, 0x06, 0x01, 0x73, 0, 0, 0]), None);
+    }
+
+    #[test]
+    fn an_all_zero_input_report_is_not_an_ack() {
+        assert_eq!(Ack::parse(&[0; 8]), None);
+        assert_eq!(Ack::parse(&[0x09, 0, 0, 0, 0, 0, 0, 0]), None);
     }
 
     #[test]

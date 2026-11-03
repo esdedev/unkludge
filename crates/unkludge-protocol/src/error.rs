@@ -11,6 +11,8 @@ pub enum Error {
     Hid(String),
     #[error("the keyboard didn't acknowledge command {cmd:#04x}, chunk {idx}")]
     NoAck { cmd: u8, idx: u8 },
+    #[error("the keyboard refused command {cmd:#04x}, chunk {idx}")]
+    Rejected { cmd: u8, idx: u8 },
     #[error("invalid data: {0}")]
     Invalid(String),
     #[error("cancelled")]
@@ -34,6 +36,10 @@ mod tests {
         assert_eq!(
             Error::NoAck { cmd: 0x0C, idx: 7 }.to_string(),
             "the keyboard didn't acknowledge command 0x0c, chunk 7"
+        );
+        assert_eq!(
+            Error::Rejected { cmd: 0x0C, idx: 7 }.to_string(),
+            "the keyboard refused command 0x0c, chunk 7"
         );
         assert_eq!(
             Error::TooManyFrames { got: 61, max: 60 }.to_string(),
