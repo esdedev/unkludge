@@ -16,6 +16,8 @@ use crate::transport::{HidTransport, Transport};
 mod descriptor;
 mod open;
 
+pub use open::{HidCollection, list_collections};
+
 /// Wait before each generic chunk, each read request and each screen control report.
 const CHUNK_DELAY: Duration = Duration::from_millis(25);
 /// How many times one report is handed to the transport before giving up on it.
@@ -179,15 +181,15 @@ impl<T: Transport> Device<T> {
         let to = self.screen_collection();
         let crc = self.model.screen.is_some_and(|s| s.crc);
         let expect = AckExpect::chunk(report, crc);
-        let (cmd, idx) = (report[1], report[4]);
+        let (frame, idx) = (report[3], report[4]);
         for _ in 0..=self.retries {
             match self.send_and_wait(to, report, expect, ACKED_SEND_RETRY_GAP)? {
                 AckOutcome::Confirmed => return Ok(()),
                 AckOutcome::Rejected => {}
-                AckOutcome::TimedOut => return Err(Error::NoAck { cmd, idx }),
+                AckOutcome::TimedOut => return Err(Error::NoAck { frame, idx }),
             }
         }
-        Err(Error::Rejected { cmd, idx })
+        Err(Error::Rejected { frame, idx })
     }
 
     /// Sends a screen control report and waits for its ack: on the main collection, then on the
@@ -603,7 +605,7 @@ mod tests {
         fake.queue_input_after_send(&[0x09, 0x0B, 0x00, 0x01, 0x07, 0, 0, 0]);
         fake.queue_input_after_send(&[0x09, 0x0A, 0x06]);
         let result = device(&fake).send_screen_chunk(&chunk(7));
-        assert_eq!(result, Err(Error::NoAck { cmd: 0x0C, idx: 7 }));
+        assert_eq!(result, Err(Error::NoAck { frame: 0, idx: 7 }));
     }
 
     #[test]
@@ -617,7 +619,7 @@ mod tests {
         fake.queue_input_after_send(&[0x09, 0x0A, 0x06, 0x01, 0x07, 0, 0, 0]);
 
         let result = device(&fake).send_screen_chunk(&chunk(7));
-        assert_eq!(result, Err(Error::NoAck { cmd: 0x0C, idx: 7 }));
+        assert_eq!(result, Err(Error::NoAck { frame: 0, idx: 7 }));
         assert_eq!(fake.pending_input(), 21 - 8);
         let waits: Vec<i32> = fake
             .events()
@@ -698,7 +700,7 @@ mod tests {
         let fake = FakeTransport::with_auto_ack();
         (0..6).for_each(|n| fake.ack_fault(n, AckFault::Reject));
         let result = device(&fake).send_screen_chunk(&chunk(7));
-        assert_eq!(result, Err(Error::Rejected { cmd: 0x0C, idx: 7 }));
+        assert_eq!(result, Err(Error::Rejected { frame: 0, idx: 7 }));
         // The first send and 5 resends.
         assert_eq!(fake.sent().len(), 6);
     }
@@ -718,7 +720,7 @@ mod tests {
         let fake = FakeTransport::with_auto_ack();
         fake.ack_fault(0, AckFault::Drop);
         let result = device(&fake).send_screen_chunk(&chunk(7));
-        assert_eq!(result, Err(Error::NoAck { cmd: 0x0C, idx: 7 }));
+        assert_eq!(result, Err(Error::NoAck { frame: 0, idx: 7 }));
         assert_eq!(fake.sent().len(), 1);
     }
 
@@ -864,7 +866,7 @@ mod tests {
         let (_main, screen, mut device) = pair();
         screen.ack_fault(0, AckFault::Drop);
         let result = device.send_screen_chunk(&chunk(7));
-        assert_eq!(result, Err(Error::NoAck { cmd: 0x0C, idx: 7 }));
+        assert_eq!(result, Err(Error::NoAck { frame: 0, idx: 7 }));
     }
 
     #[test]

@@ -19,7 +19,7 @@ These notes describe what the official RK app does, worked out by static analysi
 | `0x0C` | One chunk of screen data | Up to 512 bytes | Ack | no (pending) | No |
 | `0x0D` | Start or finish a screen upload | 5 bytes | Ack | no (pending) | No |
 | `0x0D` | Abort a screen upload | 5 bytes | Ack | no (pending) | No |
-| `0x82` | Read the 6-byte identity, to pair a second collection | None | Feature report | no (pending) | No: only `kind = 2` models use it |
+| `0x82` | Read the 6-byte identity, to pair a second collection | None | Feature report | no (pending): needs an N99 owner | No: only `kind = 2` models use it |
 
 What "observed" means here:
 
@@ -31,7 +31,7 @@ What "observed" means here:
 - Which collection: usage page `0xFF02`, usage 2. `kind = 2` models also have a second collection, usage page `0xFF03`, usage 2.
 - On Linux, when the system doesn't list usages, Unkludge takes interface 1, the one that holds this collection on the S85.
 - Everything sent is a **feature report of 520 bytes** including the report ID, which is always `0x09`. Whatever a report doesn't use is zero.
-- Acks arrive as 8-byte input reports. Depending on the platform the leading report ID may be missing.
+- Acks arrive as 8-byte input reports.
 
 ## Report layout
 
@@ -161,7 +161,7 @@ The slot is always 0.
 
 **Delay:** the finish carries the delay between frames in milliseconds. The start carries that less the model's `draw_frame_time`, and at least 0. So the two differ on the S85, where that value is 180.
 
-**Thinning out:** with more than 6 frames and a delay shorter than `draw_frame_time`, let `t = delay * frames`. If `t >= draw_frame_time`, only `t / draw_frame_time` frames get sent, evenly spaced and rounded to the nearest, keeping the first and last. The frame numbers on the wire then count those. Otherwise the frames stay as they are.
+**Thinning out:** with more than 6 frames and a delay shorter than `draw_frame_time`, let `t = delay * frames`. If `t >= draw_frame_time`, only `t / draw_frame_time` frames get sent, evenly spaced and rounded to the nearest, keeping the first and last, unless only one remains, which is the first. The frame numbers on the wire then count those. Otherwise the frames stay as they are.
 
 **Ack:**
 
@@ -185,7 +185,7 @@ The slot is always 0.
 
 Each ack wait lasts up to 8 s. An ack that doesn't accept a chunk sends the chunk again: the official app has no limit on that, and Unkludge stops after 5. No ack for a chunk in that time fails the upload and sends the abort.
 
-**`kind = 2` models** (`01B8`, `025E`, `025F`): `0x0D` goes to the main collection and waits for its ack, then goes to the second collection and waits for its ack. `0x0C` goes only to the second collection. The clock and the config stay on the main one. To find the second collection, each candidate must take 520-byte feature reports and answer `09 82 01 00 01 00 06 00` with the same 6 bytes as the main collection.
+**`kind = 2` models**, the N99 family (`01B8`, `025E`, `025F`): `0x0D` goes to the main collection and waits for its ack, then goes to the second collection and waits for its ack. `0x0C` goes only to the second collection. The clock and the config stay on the main one. To find the second collection, each candidate must take 520-byte feature reports and answer `09 82 01 00 01 00 06 00` with the same 6 bytes as the main collection.
 
 ## Never sent
 
@@ -202,6 +202,7 @@ It also never opens any collection but the ones under [Transport](#transport). O
 
 These are guesses or open questions. A capture or a test on hardware can settle them.
 
+- Whether acks can arrive without their leading report ID on some platform. Unkludge accepts both forms.
 - Whether the other 28 models have usage page `0xFF02`, usage 2, as the S85 ES does. The official app also accepts other usages, which Unkludge doesn't open until one is seen.
 - What the firmware does with the sleep byte. It may count in 30-second units, which fits the first three labels. What `0x3C` does is unknown, and it might be 30 minutes rather than no sleep.
 - That a colour in slot 0 of a palette entry is what the keyboard shows for that effect.
@@ -210,4 +211,4 @@ These are guesses or open questions. A capture or a test on hardware can settle 
 - Whether the firmware rotates the image on any model. Nothing on the computer's side does.
 - What the slot field in `0x0D` is for. It's always 0.
 - What a keyboard does if an upload just stops, with no abort, as when it's unplugged.
-- Anything on the `kind = 2` models and the `crc = true` models: their paths come only from the analysis, and none has been run on such a keyboard.
+- Anything on the `kind = 2` models and the `crc = true` models: their paths come only from the analysis, and none has been run on such a keyboard. Capturing `0x82` needs someone who owns an N99, as the S85 has no reason to send it.

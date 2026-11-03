@@ -10,7 +10,7 @@ use std::time::Duration;
 use super::{Animation, chunks_per_frame};
 use crate::device::AckOutcome;
 use crate::model::Model;
-use crate::packet::{MAX_DATA, ScreenState, cmd, screen_chunk, screen_control};
+use crate::packet::{MAX_DATA, ScreenState, screen_chunk, screen_control};
 use crate::transport::Transport;
 use crate::{Device, Error};
 
@@ -214,7 +214,6 @@ fn start<T: Transport>(
     cancel: &AtomicBool,
 ) -> Result<(), Error> {
     let report = screen_control(ScreenState::Start, frames, delay_ms);
-    let command = cmd::SCREEN_CONTROL.byte();
     for attempt in 0..START_TRIES {
         if attempt > 0 {
             device.sleep(START_RETRY_GAP);
@@ -222,19 +221,11 @@ fn start<T: Transport>(
         }
         match device.send_screen_control(&report)? {
             AckOutcome::Confirmed => return Ok(()),
-            AckOutcome::Rejected => {
-                return Err(Error::Rejected {
-                    cmd: command,
-                    idx: 0,
-                });
-            }
+            AckOutcome::Rejected => return Err(Error::StartRejected),
             AckOutcome::TimedOut => {}
         }
     }
-    Err(Error::NoAck {
-        cmd: command,
-        idx: 0,
-    })
+    Err(Error::StartNoAck)
 }
 
 /// Which frames to send, worked out as the official app does: an animation faster than
@@ -489,7 +480,7 @@ mod tests {
         let fake = FakeTransport::with_auto_ack();
         fake.ack_fault(5, AckFault::Drop);
         let result = upload(&fake, &red_blue());
-        assert_eq!(result, Err(Error::NoAck { cmd: 0x0C, idx: 4 }));
+        assert_eq!(result, Err(Error::NoAck { frame: 0, idx: 4 }));
 
         let sent = fake.sent();
         assert_eq!(sent.len(), 7);
@@ -518,11 +509,20 @@ mod tests {
     }
 
     #[test]
+    fn a_chunk_error_says_which_frame() {
+        // The start is ack 0, then frame 0 takes 215 acks.
+        let fake = FakeTransport::with_auto_ack();
+        fake.ack_fault(216, AckFault::Drop);
+        let result = upload(&fake, &red_blue());
+        assert_eq!(result, Err(Error::NoAck { frame: 1, idx: 0 }));
+    }
+
+    #[test]
     fn a_chunk_refused_every_time_aborts_and_returns_that_error() {
         let fake = FakeTransport::with_auto_ack();
         (1..7).for_each(|n| fake.ack_fault(n, AckFault::Reject));
         let result = upload(&fake, &red_blue());
-        assert_eq!(result, Err(Error::Rejected { cmd: 0x0C, idx: 0 }));
+        assert_eq!(result, Err(Error::Rejected { frame: 0, idx: 0 }));
         let sent = fake.sent();
         assert_eq!(sent.len(), 8);
         assert_eq!(&sent[7][..13], &fixture_abort());
@@ -534,13 +534,13 @@ mod tests {
         fake.ack_fault(1, AckFault::Drop);
         fake.ack_fault(2, AckFault::Drop);
         let result = upload(&fake, &red_blue());
-        assert_eq!(result, Err(Error::NoAck { cmd: 0x0C, idx: 0 }));
+        assert_eq!(result, Err(Error::NoAck { frame: 0, idx: 0 }));
 
         let fake = FakeTransport::with_auto_ack();
         fake.ack_fault(1, AckFault::Drop);
         fake.ack_fault(2, AckFault::Reject);
         let result = upload(&fake, &red_blue());
-        assert_eq!(result, Err(Error::NoAck { cmd: 0x0C, idx: 0 }));
+        assert_eq!(result, Err(Error::NoAck { frame: 0, idx: 0 }));
     }
 
     #[test]
@@ -642,7 +642,7 @@ mod tests {
         let fake = FakeTransport::with_auto_ack();
         fake.ack_fault(0, AckFault::Reject);
         let result = upload(&fake, &red_blue());
-        assert_eq!(result, Err(Error::Rejected { cmd: 0x0D, idx: 0 }));
+        assert_eq!(result, Err(Error::StartRejected));
         assert_eq!(fake.sent().len(), 1);
         assert_eq!(fake.sleeps(), [100, 25, 500].map(Duration::from_millis));
     }
@@ -652,7 +652,7 @@ mod tests {
         let fake = FakeTransport::with_auto_ack();
         (0..4).for_each(|n| fake.ack_fault(n, AckFault::Drop));
         let result = upload(&fake, &red_blue());
-        assert_eq!(result, Err(Error::NoAck { cmd: 0x0D, idx: 0 }));
+        assert_eq!(result, Err(Error::StartNoAck));
         let sent = fake.sent();
         assert_eq!(sent.len(), 4);
         assert!(sent.iter().all(|r| is_control(r, 0x40)));
@@ -1001,7 +1001,7 @@ mod tests {
         screen.ack_fault(0, AckFault::Reject);
         let result =
             animation(n99(), &[RED], 40).upload(&mut device, &AtomicBool::new(false), |_| {});
-        assert_eq!(result, Err(Error::Rejected { cmd: 0x0D, idx: 0 }));
+        assert_eq!(result, Err(Error::StartRejected));
         assert_eq!(main.sent().len(), 1);
         assert_eq!(screen.sent().len(), 1);
     }
@@ -1014,7 +1014,7 @@ mod tests {
         screen.ack_fault(1, AckFault::Drop);
         let result =
             animation(n99(), &[RED], 40).upload(&mut device, &AtomicBool::new(false), |_| {});
-        assert_eq!(result, Err(Error::NoAck { cmd: 0x0C, idx: 0 }));
+        assert_eq!(result, Err(Error::NoAck { frame: 0, idx: 0 }));
 
         let log = log.lock().unwrap();
         assert_eq!(log[log.len() - 2], (Collection::Main, 0x0D, 0x80));

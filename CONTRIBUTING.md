@@ -15,7 +15,9 @@ Every model in `unkludge models` starts as **experimental**, and most have never
 
 Close the RK app first (`DeviceDriver.exe`). It polls the keyboard and sends its own settings back to it, and `unkludge` warns if it finds it running.
 
-To see what a command would send, without opening anything, add `--dry-run --pid <PID>`, such as `unkludge --dry-run --pid 0265 clock`.
+To see what a command would send, without opening anything, add `--dry-run --pid <PID>`, such as `unkludge --dry-run --pid 0265 clock`. A dry run has no keyboard to read settings from, so it reads as if the lights were off: changing a brightness, speed or colour there also needs `--mode`.
+
+On Linux, not being able to open the keyboard most likely means permissions. `packaging/linux/70-unkludge.rules`, which comes with the app, grants them.
 
 Test in this order, from least to most risky, and stop at the first thing that looks wrong:
 
@@ -23,7 +25,7 @@ Test in this order, from least to most risky, and stop at the first thing that l
 2. **`unkludge light`**, with no options. Only reads.
 3. **`unkludge report`**. Only reads. Save the output: its config block lets you put your settings back by hand if a later step changes them.
 4. **`unkludge clock`**. Sends the time, and the keyboard doesn't answer. Look at its screen to see if it changed.
-5. **`unkludge light --mode 2`**, then a brightness, a speed, a colour and a sleep time. Each writes settings that stay on the keyboard. `--rgb` also resets the colours of the other effects to the defaults.
+5. **`unkludge light --mode 2`**, then a brightness, a speed, a colour and a sleep time. Each writes settings that stay on the keyboard. `--rgb` also gives the other effects Unkludge's default colours: any colours set in the RK app are replaced, as they can't be read first.
 6. **`unkludge screen <file>`**. Replaces what's on the screen. Start with one small image, then a short GIF. It can take minutes: add `--timing` to measure it.
 
 ### Is it safe?
@@ -33,7 +35,7 @@ As far as is known, but the honest answer is that nobody has tried most of this 
 - **Unkludge never updates firmware**, and never will. It has no command for that, nor for a factory reset, nor any way to send arbitrary bytes.
 - It only sends the commands in [docs/PROTOCOL.md](docs/PROTOCOL.md). No USB capture has confirmed them yet, and the table there says what has really been run, on which keyboard.
 - Settings are read first and written back with only what you asked to change. If the read fails or looks wrong, nothing is written.
-- `unkludge screen` has no cancel: stopping it with Ctrl+C, or unplugging the keyboard, leaves the upload unfinished. What a keyboard does then isn't known. Try unplugging it and plugging it back in, or uploading again, and say what happened.
+- Ctrl+C during `unkludge screen` tells the keyboard to abort, which can take a few seconds if it has stalled. A second Ctrl+C quits at once, which, like unplugging the keyboard, leaves the upload unfinished. What a keyboard does then isn't known. Try unplugging it and plugging it back in, or uploading again, and say what happened.
 - If a keyboard stops responding, unplug it and plug it back in, and say so in your report.
 
 The `kind = 2` models (`01B8`, `025E`, `025F`) and the models with `crc = true` (the M87 family) upload differently from the S85 and have never been run on real hardware.
@@ -42,7 +44,7 @@ The `kind = 2` models (`01B8`, `025E`, `025F`) and the models with `crc = true` 
 
 Open an issue with the output of `unkludge report`, the commands you ran and what the keyboard did, good or bad.
 
-The report contains the Unkludge version, the system, the model, its USB product ID and the config block in hex: lighting settings and other keyboard settings. No names, accounts or files.
+The report contains the Unkludge version, the system, whether the RK app is running, the USB IDs and HID collections of any Royal Kludge device the system lists, the model, and the config block in hex: lighting settings and other keyboard settings. No names, accounts or files. Listing the collections sends nothing to the keyboard.
 
 ### How a model becomes `tested`
 
@@ -53,14 +55,14 @@ Only what was really run counts. If a step wasn't tried or didn't work, the mode
 
 ## Capturing USB traffic
 
-Every command Unkludge sends must also appear in a capture of the RK app talking to a real keyboard before v0.1 is released. Captures of other models help too. This is on Windows, where the RK app runs.
+Every command Unkludge sends must also appear in a capture of the RK app talking to a real keyboard before v0.1 is released. Captures of other models help too. In particular, `0x82` is only used by the N99 family, so capturing it needs someone who owns an N99. This is on Windows, where the RK app runs.
 
 1. Install [Wireshark](https://www.wireshark.org/), and tick **USBPcap** when its installer offers it. Otherwise install it from [desowin.org/usbpcap](https://desowin.org/usbpcap/).
 2. **Reboot.** USBPcap's driver only starts working after that.
 3. Open Wireshark and start a capture on the USBPcap interface for the root hub your keyboard is on. If you don't know which, try each: the right one fills up when you press keys.
 4. **Don't type anything private during a capture**, and treat the file as private. A capture records the keyboard's key presses too.
 5. Open the RK app and wait for it to settle.
-6. Make **one change at a time**, with **10 seconds between changes**, and write down the time and what you did. The gaps tell the changes apart from what the app sends on its own. Good ones to do: an effect, a brightness, a speed, a colour, a sleep time, syncing the clock, a small GIF upload, and cancelling one.
+6. Make **one change at a time**, with **10 seconds between changes**, and write down the time and what you did. The gaps tell the changes apart from what the app sends on its own. Good ones to do: an effect, a brightness, a speed, a colour, a sleep time, replugging the keyboard with the app open and then changing the system volume, a small GIF upload, and cancelling one.
 7. Stop the capture and save it as `.pcapng`.
 
 To read it, the display filter `usb.idVendor == 0x258a` shows the keyboard's device address, and `usb.device_address == <address>` then shows only its traffic. Commands are control transfers (`SET_REPORT`, `GET_REPORT`), and acks arrive as interrupt transfers. Compare the bytes with what `unkludge --dry-run --verbose` prints for the same action.
@@ -93,4 +95,4 @@ To regenerate the model data, with the RK app installed:
 cargo run -p kbini2toml -- "C:\Program Files (x86)\RK Keyboard Software" data/models
 ```
 
-It writes every model as `experimental`, so check the diff and keep the `tested` lines.
+A model already marked `tested` stays that way.

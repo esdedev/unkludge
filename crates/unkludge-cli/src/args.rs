@@ -1,6 +1,7 @@
 //! The command line.
 
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use unkludge_protocol::config::SleepTime;
@@ -21,24 +22,42 @@ pub struct Cli {
     #[arg(long, global = true, help_heading = GLOBAL)]
     pub dry_run: bool,
 
-    /// Print the keyboard's acknowledgement latency at the end: min, median and max
+    /// Print how long sending and waiting for the keyboard took, with chunks per second
     #[arg(long, global = true, help_heading = GLOBAL)]
     pub timing: bool,
 
-    /// With --dry-run, print every report in full
-    #[arg(long, global = true, help_heading = GLOBAL, requires = "dry_run")]
+    /// Print every report in full with --dry-run, and every ack with --timing
+    #[arg(long, global = true, help_heading = GLOBAL)]
     pub verbose: bool,
 
     #[command(subcommand)]
     pub command: Command,
 }
 
+impl Cli {
+    /// What can't be left to the parser, which sees global options differently depending on which
+    /// side of the command they're on.
+    pub fn check(&self) -> Result<(), String> {
+        if self.verbose && !self.dry_run && !self.timing {
+            return Err("--verbose needs --dry-run or --timing".to_string());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Show the model, what it offers and its current settings. Only reads
-    Info,
+    #[command(flatten)]
+    Keyboard(KeyboardCommand),
     /// List the supported models
     Models,
+}
+
+/// The commands that need a keyboard.
+#[derive(Debug, Subcommand)]
+pub enum KeyboardCommand {
+    /// Show the model, what it offers and its current settings. Only reads
+    Info,
     /// Show the lighting settings, or change them. With no options it only reads
     Light(LightArgs),
     /// Set the keyboard's clock to the local time
@@ -56,18 +75,18 @@ pub struct LightArgs {
     pub mode: Option<ModeChoice>,
 
     /// Brightness byte, one of those `unkludge info` lists
-    #[arg(long, value_name = "BYTE")]
+    #[arg(long, value_name = "BYTE", value_parser = parse_number::<u8>)]
     pub brightness: Option<u8>,
 
     /// Speed, within the range `unkludge info` lists
-    #[arg(long, value_name = "N")]
+    #[arg(long, value_name = "N", value_parser = parse_number::<u8>)]
     pub speed: Option<u8>,
 
     /// Palette slot from 0 to 6, or "rainbow"
     #[arg(long, value_name = "SLOT|rainbow", value_parser = parse_color, conflicts_with = "rgb")]
     pub color: Option<ColorChoice>,
 
-    /// A colour of your own, as RRGGBB. The other effects' colours go back to the defaults
+    /// A colour of your own, as RRGGBB. The other effects get Unkludge's default colours
     #[arg(long, value_name = "RRGGBB", value_parser = parse_rgb)]
     pub rgb: Option<Rgb>,
 
@@ -99,7 +118,7 @@ pub struct ScreenArgs {
     pub fit: FitArg,
 
     /// Milliseconds per frame, instead of what the file says
-    #[arg(long, value_name = "MS")]
+    #[arg(long, value_name = "MS", value_parser = parse_number::<u16>)]
     pub delay: Option<u16>,
 
     /// Keep the frames that fit the keyboard's limit, instead of failing
@@ -143,6 +162,15 @@ fn is_hex(text: &str) -> bool {
     !text.is_empty() && text.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+/// A number written in plain digits. The standard parsers also allow a leading sign.
+fn parse_number<T: FromStr>(text: &str) -> Result<T, String> {
+    let digits = !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit());
+    digits
+        .then(|| text.parse().ok())
+        .flatten()
+        .ok_or_else(|| format!("{text:?} isn't a number in range"))
+}
+
 /// A product ID: up to four hex digits, with or without `0x`.
 pub fn parse_pid(text: &str) -> Result<u16, String> {
     let digits = text
@@ -152,8 +180,12 @@ pub fn parse_pid(text: &str) -> Result<u16, String> {
     if !is_hex(digits) {
         return Err(format!("{text:?} isn't a hex product ID, such as 0265"));
     }
-    u16::from_str_radix(digits, 16)
-        .map_err(|_| format!("{text:?} is too long for a product ID, which has four hex digits"))
+    if digits.len() > 4 {
+        return Err(format!(
+            "{text:?} is too long for a product ID, which has four hex digits"
+        ));
+    }
+    u16::from_str_radix(digits, 16).map_err(|error| error.to_string())
 }
 
 /// A colour as `RRGGBB`, with or without `#`.
@@ -171,7 +203,7 @@ pub fn parse_mode(text: &str) -> Result<ModeChoice, String> {
     if text.eq_ignore_ascii_case("off") {
         return Ok(ModeChoice::Off);
     }
-    text.parse()
+    parse_number(text)
         .map(ModeChoice::Effect)
         .map_err(|_| format!("{text:?} isn't an effect number or \"off\""))
 }
@@ -181,7 +213,7 @@ pub fn parse_color(text: &str) -> Result<ColorChoice, String> {
     if text.eq_ignore_ascii_case("rainbow") {
         return Ok(ColorChoice::Rainbow);
     }
-    match text.parse() {
+    match parse_number(text) {
         Ok(slot) if slot < PALETTE_SLOTS => Ok(ColorChoice::Slot(slot)),
         _ => Err(format!(
             "{text:?} isn't a palette slot from 0 to {} or \"rainbow\"",
@@ -213,7 +245,7 @@ mod tests {
 
     fn light(args: &[&str]) -> LightArgs {
         match parse(args).unwrap().command {
-            Command::Light(light) => light,
+            Command::Keyboard(KeyboardCommand::Light(light)) => light,
             other => panic!("not light: {other:?}"),
         }
     }
@@ -233,7 +265,9 @@ mod tests {
 
     #[test]
     fn other_pids_are_refused() {
-        for bad in ["", "0x", "xyz", "12345", "+265", "-265", "0265 ", "0x0x1"] {
+        for bad in [
+            "", "0x", "xyz", "12345", "00265", "0x00265", "+265", "-265", "0265 ", "0x0x1",
+        ] {
             assert!(parse_pid(bad).is_err(), "{bad:?}");
         }
     }
@@ -259,6 +293,8 @@ mod tests {
         assert_eq!(parse_mode("2"), Ok(ModeChoice::Effect(2)));
         assert!(parse_mode("solid").is_err());
         assert!(parse_mode("256").is_err());
+        assert!(parse_mode("+2").is_err());
+        assert!(parse_mode("").is_err());
     }
 
     #[test]
@@ -267,6 +303,7 @@ mod tests {
         assert_eq!(parse_color("0"), Ok(ColorChoice::Slot(0)));
         assert_eq!(parse_color("6"), Ok(ColorChoice::Slot(6)));
         assert!(parse_color("7").is_err());
+        assert!(parse_color("+1").is_err());
         assert!(parse_color("red").is_err());
     }
 
@@ -329,19 +366,69 @@ mod tests {
     }
 
     #[test]
-    fn verbose_needs_a_dry_run() {
-        let error = parse(&["--verbose", "--pid", "0265", "clock"]).unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
-        assert!(parse(&["--verbose", "--dry-run", "--pid", "0265", "clock"]).is_ok());
+    fn numbers_have_no_sign() {
+        for args in [
+            &["light", "--brightness", "+8"][..],
+            &["light", "--speed", "+2"][..],
+            &["light", "--brightness", "256"][..],
+            &["light", "--mode", "+2"][..],
+            &["screen", "a.gif", "--delay", "+50"][..],
+            &["screen", "a.gif", "--delay", "65536"][..],
+        ] {
+            assert!(parse(args).is_err(), "{args:?}");
+        }
+        assert_eq!(light(&["light", "--brightness", "8"]).brightness, Some(8));
+        assert_eq!(light(&["light", "--speed", "2"]).speed, Some(2));
+    }
+
+    #[test]
+    fn verbose_needs_a_dry_run_or_timing_in_any_order() {
+        for args in [
+            &["--verbose", "clock"][..],
+            &["clock", "--verbose"][..],
+            &["--verbose", "--pid", "0265", "clock"][..],
+            &["--verbose", "models"][..],
+        ] {
+            assert!(parse(args).unwrap().check().is_err(), "{args:?}");
+        }
+        for args in [
+            &["--verbose", "--dry-run", "clock"][..],
+            &["--dry-run", "--verbose", "clock"][..],
+            &["--verbose", "clock", "--dry-run"][..],
+            &["--dry-run", "clock", "--verbose"][..],
+            &["clock", "--verbose", "--dry-run"][..],
+            &["clock", "--dry-run", "--verbose"][..],
+            &["--verbose", "clock", "--timing"][..],
+            &["clock", "--timing", "--verbose"][..],
+            &["clock"][..],
+        ] {
+            assert!(parse(args).unwrap().check().is_ok(), "{args:?}");
+        }
     }
 
     #[test]
     fn global_options_go_on_either_side_of_the_command() {
-        let before = parse(&["--pid", "0265", "--dry-run", "--timing", "clock"]).unwrap();
-        let after = parse(&["clock", "--pid", "0265", "--dry-run", "--timing"]).unwrap();
+        let before = parse(&[
+            "--pid",
+            "0265",
+            "--dry-run",
+            "--timing",
+            "--verbose",
+            "clock",
+        ])
+        .unwrap();
+        let after = parse(&[
+            "clock",
+            "--pid",
+            "0265",
+            "--dry-run",
+            "--timing",
+            "--verbose",
+        ])
+        .unwrap();
         for cli in [before, after] {
             assert_eq!(cli.pid, Some(0x0265));
-            assert!(cli.dry_run && cli.timing && !cli.verbose);
+            assert!(cli.dry_run && cli.timing && cli.verbose);
         }
     }
 
@@ -357,7 +444,7 @@ mod tests {
             "--truncate",
         ])
         .unwrap();
-        let Command::Screen(screen) = cli.command else {
+        let Command::Keyboard(KeyboardCommand::Screen(screen)) = cli.command else {
             panic!("not screen");
         };
         assert_eq!(screen.file, PathBuf::from("a.gif"));
@@ -374,7 +461,7 @@ mod tests {
     #[test]
     fn screen_defaults_to_cover_and_the_files_own_delay() {
         let cli = parse(&["screen", "a.png"]).unwrap();
-        let Command::Screen(screen) = cli.command else {
+        let Command::Keyboard(KeyboardCommand::Screen(screen)) = cli.command else {
             panic!("not screen");
         };
         assert_eq!(screen.load_options(), LoadOptions::default());

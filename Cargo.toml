@@ -27,5 +27,7 @@ image = { version = "=0.25.10", default-features = false, features = ["gif", "pn
 serde = { version = "=1.0.229", features = ["derive"] }
 thiserror = "=2.0.21"
 toml = { version = "=1.1.8", default-features = false, features = ["std", "serde", "parse"] }
-# The process list on Windows. Already in the tree through hidapi.
+# The process list and Ctrl+C on Windows. Already in the tree through hidapi.
 windows-sys = "=0.61.2"
+# Ctrl+C on Linux. Already in the tree through hidapi.
+libc = "=0.2.191"

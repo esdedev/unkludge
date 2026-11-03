@@ -1,23 +1,25 @@
 //! `unkludge`, the command-line tool. Exits with 0 on success and 1 on an error, which goes to
 //! stderr.
 
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use clap::Parser;
-use unkludge_protocol::device::PacketEvent;
+use unkludge_protocol::device::list_collections;
 use unkludge_protocol::transport::Transport;
 use unkludge_protocol::{Device, Error, model};
 
-use crate::args::{Cli, Command};
-use crate::commands::Failure;
+use crate::args::{Cli, Command, KeyboardCommand};
+use crate::commands::{Failure, Options};
 use crate::output::Console;
-use crate::packets::{PacketPrinter, Timing};
+use crate::packets::Observer;
 
 mod args;
 mod commands;
 mod dry_run;
+mod interrupt;
 mod output;
 mod packets;
 mod rk_app;
@@ -44,138 +46,99 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: &Cli) -> Result<(), Failure> {
-    if let Command::Models = cli.command {
-        print_lines(output::models_table(model::supported()));
-        return Ok(());
-    }
-    if cli.dry_run {
-        run_dry(cli)
-    } else {
-        run_on_keyboard(cli)
+    cli.check()?;
+    match &cli.command {
+        Command::Models => {
+            Console::with_stdio(|console| {
+                console.lines(output::models_table(model::supported()));
+            });
+            Ok(())
+        }
+        Command::Keyboard(command) if cli.dry_run => run_dry(cli, command),
+        Command::Keyboard(command) => run_on_keyboard(cli, command),
     }
 }
 
 /// Opens nothing: the only device here is made of [`dry_run::DryRunTransport`]s.
-fn run_dry(cli: &Cli) -> Result<(), Failure> {
+fn run_dry(cli: &Cli, command: &KeyboardCommand) -> Result<(), Failure> {
     let pid = cli.pid.ok_or(
         "--dry-run needs --pid to choose a model, such as --pid 0265. `unkludge models` lists them",
     )?;
     let model = model::find(pid).ok_or(Error::Unsupported(pid))?;
     let device = dry_run::device(model)?;
-    let mut err = io::stderr();
-    let _ = writeln!(
-        err,
-        "Dry run for {} ({pid:04X}): no keyboard is opened and nothing is sent.",
-        model.name
-    );
-    if let Command::Info | Command::Light(_) | Command::Report = cli.command {
-        let _ = writeln!(
-            err,
-            "The config read gets a blank block, which reads as the lights being off."
-        );
-    }
-    drive(device, cli)
+    Console::with_stdio(|console| {
+        console.lines_err(commands::dry_run_notes(model, command, cli.timing));
+    });
+    let host = ["Collections: not listed in a dry run".to_string()];
+    drive(device, cli, command, &host)
 }
 
-fn run_on_keyboard(cli: &Cli) -> Result<(), Failure> {
-    if rk_app::running() {
-        let _ = writeln!(
-            io::stderr(),
-            "warning: DeviceDriver.exe, which may be RK's app, is running. It polls the keyboard \
-             and sends its own settings back, so close it first"
-        );
-    }
-    match (Device::open(cli.pid), &cli.command) {
-        (Ok(device), _) => drive(device, cli),
+fn run_on_keyboard(cli: &Cli, command: &KeyboardCommand) -> Result<(), Failure> {
+    let rk_app_running = rk_app::running();
+    Console::with_stdio(|console| commands::warn_if_rk_app(rk_app_running, console));
+
+    // Only a report needs this up front, and asking the system sends nothing to a keyboard.
+    let host = match command {
+        KeyboardCommand::Report => output::host_lines(rk_app_running, &list_collections()),
+        _ => Vec::new(),
+    };
+    match Device::open(cli.pid) {
+        Ok(device) => {
+            if let KeyboardCommand::Screen(_) = command {
+                interrupt::install();
+            }
+            drive(device, cli, command, &host)
+        }
         // Not being able to open the keyboard is just what a report should tell.
-        (Err(error), Command::Report) => {
-            print_lines(commands::report_header());
-            print_lines([format!("Keyboard: couldn't open it: {error}")]);
+        Err(error) if matches!(command, KeyboardCommand::Report) => {
+            Console::with_stdio(|console| {
+                console.lines(commands::report_header());
+                console.lines(&host);
+                console.line(format_args!("Keyboard: couldn't open it: {error}"));
+            });
             Ok(())
         }
-        (Err(Error::NotFound), _) => Err(format!(
-            "{}. Is it connected by USB cable? `unkludge models` lists the supported ones",
-            Error::NotFound
-        )
-        .into()),
-        (Err(error), _) => Err(error.into()),
+        Err(error) => {
+            let listed = list_collections().unwrap_or_default();
+            let linux = cfg!(target_os = "linux");
+            Err(commands::open_failure(&error, cli.pid, &listed, linux).into())
+        }
     }
 }
 
 /// Runs the command, with whatever was asked to be seen of its packets. That is shown even if the
-/// command fails.
-fn drive<T: Transport>(mut device: Device<T>, cli: &Cli) -> Result<(), Failure> {
-    let printer = cli
-        .dry_run
-        .then(|| PacketPrinter::new(cli.verbose, device.model().has_second_collection()));
-    let observer = Arc::new(Mutex::new(Observer {
-        printer,
-        timing: cli.timing.then(Timing::default),
-    }));
+/// command fails or gets cancelled.
+fn drive<T: Transport>(
+    mut device: Device<T>,
+    cli: &Cli,
+    command: &KeyboardCommand,
+    host: &[String],
+) -> Result<(), Failure> {
+    let two_collections = device.model().has_second_collection();
+    let observer = Arc::new(Mutex::new(Observer::new(
+        cli.dry_run,
+        cli.timing,
+        cli.verbose,
+        two_collections,
+    )));
     let hook = Arc::clone(&observer);
     device.on_packet = Some(Box::new(move |event| {
+        let at = Instant::now();
         if let Ok(mut observer) = hook.lock() {
-            observer.on_event(event);
+            Console::with_stdio(|console| observer.on_event(event, at, console));
         }
     }));
 
-    let (mut out, mut err) = (io::stdout(), io::stderr());
-    let mut console = Console {
-        out: &mut out,
-        err: &mut err,
+    let options = Options {
+        dry_run: cli.dry_run,
+        terminal: io::stderr().is_terminal(),
+        cancel: interrupt::flag(),
+        host,
     };
-    let result = commands::run(&mut device, &cli.command, cli.dry_run, &mut console);
+    let result =
+        Console::with_stdio(|console| commands::run(&mut device, command, &options, console));
     if let Ok(mut observer) = observer.lock() {
-        observer.finish();
+        Console::with_stdio(|console| observer.finish(console));
     }
     result
-}
-
-/// What's shown of the packets as they go by.
-struct Observer {
-    printer: Option<PacketPrinter>,
-    timing: Option<Timing>,
-}
-
-impl Observer {
-    fn on_event(&mut self, event: PacketEvent) {
-        match event {
-            PacketEvent::Sent { collection, report } => {
-                if let Some(printer) = &mut self.printer {
-                    print_lines(printer.on_sent(collection, report));
-                }
-            }
-            PacketEvent::Ack {
-                accepted, latency, ..
-            } => {
-                if let Some(timing) = &mut self.timing {
-                    timing.on_ack(accepted, latency);
-                }
-            }
-        }
-    }
-
-    fn finish(&mut self) {
-        if let Some(printer) = &mut self.printer {
-            print_lines(printer.finish());
-        }
-        if let Some(timing) = &self.timing {
-            print_lines([timing.summary()]);
-            if self.printer.is_some() && timing.has_acks() {
-                print_lines([
-                    "A dry run makes up its acks, so this says nothing about a keyboard."
-                        .to_string(),
-                ]);
-            }
-        }
-    }
-}
-
-/// Output that can't be written, as when a pipe has closed, is no reason to stop talking to a
-/// keyboard halfway through.
-fn print_lines(lines: impl IntoIterator<Item = String>) {
-    let mut out = io::stdout();
-    for line in lines {
-        let _ = writeln!(out, "{line}");
-    }
 }

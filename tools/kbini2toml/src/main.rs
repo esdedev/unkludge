@@ -1,7 +1,8 @@
 //! Generates `data/models/<PID>.toml` from an installed copy of the RK software.
 //!
 //! Usage: `kbini2toml <RK dir> <out dir>`. Reads `Cfg.ini` and `Dev/<PID>/KB.ini`, and only writes
-//! when every model passes validation. The output is sorted, so regenerating gives no diff.
+//! when every model passes validation. The output is sorted and a file's `tested` status stays, so
+//! regenerating gives no diff.
 
 mod ini;
 mod model;
@@ -114,8 +115,14 @@ fn run(rk_dir: &Path, out_dir: &Path, report: &mut Report) -> Result<(), String>
     std::fs::create_dir_all(out_dir).map_err(|e| format!("{}: {e}", out_dir.display()))?;
     for model in &models {
         let path = out_dir.join(file_name(model.pid));
-        std::fs::write(&path, model::to_toml(model))
-            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut text = model::to_toml(model);
+        // Nothing in the source files says which models have been tried.
+        let tested = std::fs::read_to_string(&path)
+            .is_ok_and(|old| old.lines().any(|line| line.trim() == "status = \"tested\""));
+        if tested {
+            text = text.replacen("status = \"experimental\"", "status = \"tested\"", 1);
+        }
+        std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
     }
     Ok(())
 }
@@ -285,6 +292,32 @@ mod tests {
         assert!(rk.generate().errors.is_empty());
         assert_eq!(fs::read(out.join("006B.toml")).unwrap(), first);
         assert_eq!(file_names(&out), ["006B.toml", "00C0.toml"]);
+    }
+
+    #[test]
+    fn regenerating_keeps_a_tested_status_and_nothing_else_of_the_old_file() {
+        let rk = TempDir::new("tested");
+        rk.add_model("0001", &kb("Fw=1"));
+        rk.add_model("0002", &kb("Fw=1"));
+        assert!(rk.generate().errors.is_empty());
+
+        let tested = rk.out().join("0001.toml");
+        let original = fs::read_to_string(&tested).unwrap();
+        let marked = original.replacen(
+            "status = \"experimental\"",
+            "status = \"tested\"\n# by hand",
+            1,
+        );
+        assert_ne!(marked, original);
+        fs::write(&tested, marked).unwrap();
+        let other = fs::read(rk.out().join("0002.toml")).unwrap();
+
+        assert!(rk.generate().errors.is_empty());
+        assert_eq!(
+            fs::read_to_string(&tested).unwrap(),
+            original.replacen("status = \"experimental\"", "status = \"tested\"", 1),
+        );
+        assert_eq!(fs::read(rk.out().join("0002.toml")).unwrap(), other);
     }
 
     #[test]

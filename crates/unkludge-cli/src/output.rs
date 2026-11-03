@@ -3,9 +3,11 @@
 use std::fmt::Display;
 use std::io::Write;
 
+use unkludge_protocol::Error;
 use unkludge_protocol::config::SleepTime;
+use unkludge_protocol::device::HidCollection;
 use unkludge_protocol::lighting::{ColorSetting, CurrentLighting, LightMode, SleepSetting};
-use unkludge_protocol::model::{Effect, Lighting, Model, Status};
+use unkludge_protocol::model::{Effect, Lighting, Model, Status, VID};
 
 use crate::packets::hex;
 
@@ -17,6 +19,15 @@ pub struct Console<'a> {
 }
 
 impl Console<'_> {
+    /// Runs `body` with a console on the real stdout and stderr.
+    pub fn with_stdio<R>(body: impl FnOnce(&mut Console) -> R) -> R {
+        let (mut out, mut err) = (std::io::stdout(), std::io::stderr());
+        body(&mut Console {
+            out: &mut out,
+            err: &mut err,
+        })
+    }
+
     pub fn line(&mut self, text: impl Display) {
         let _ = writeln!(self.out, "{text}");
     }
@@ -24,6 +35,13 @@ impl Console<'_> {
     pub fn lines(&mut self, lines: impl IntoIterator<Item = impl Display>) {
         for line in lines {
             self.line(line);
+        }
+    }
+
+    /// Lines that aren't the command's output: they go to stderr.
+    pub fn lines_err(&mut self, lines: impl IntoIterator<Item = impl Display>) {
+        for line in lines {
+            self.note(line);
         }
     }
 
@@ -39,6 +57,32 @@ impl Console<'_> {
     pub fn progress(&mut self, done: usize, total: usize) {
         let _ = write!(self.err, "\rSent {done} of {total}");
     }
+}
+
+/// What a report says about the computer: whether the official app is running, and every collection
+/// the system lists for this vendor.
+pub fn host_lines(
+    rk_app_running: bool,
+    collections: &Result<Vec<HidCollection>, Error>,
+) -> Vec<String> {
+    let yes_no = if rk_app_running { "yes" } else { "no" };
+    let mut lines = vec![format!("RK app running: {yes_no}")];
+    match collections {
+        Ok(collections) if collections.is_empty() => {
+            lines.push(format!("Collections for vendor {VID:04X}: none"));
+        }
+        Ok(collections) => {
+            lines.push(format!("Collections for vendor {VID:04X}:"));
+            lines.extend(collections.iter().map(|c| {
+                format!(
+                    "  PID {:04X}, usage page {:04X}, usage {:04X}, interface {}",
+                    c.pid, c.usage_page, c.usage, c.interface
+                )
+            }));
+        }
+        Err(error) => lines.push(format!("Collections: couldn't list them: {error}")),
+    }
+    lines
 }
 
 /// The supported models as a table, one per row after the heading.
@@ -166,6 +210,45 @@ pub fn config_lines(block: &[u8]) -> Vec<String> {
 mod tests {
     use super::*;
     use unkludge_protocol::model;
+
+    #[test]
+    fn host_lines_list_every_collection() {
+        let collections = vec![
+            HidCollection {
+                pid: 0x0265,
+                usage_page: 0xFF02,
+                usage: 2,
+                interface: 1,
+            },
+            HidCollection {
+                pid: 0x0265,
+                usage_page: 0x0001,
+                usage: 6,
+                interface: 0,
+            },
+        ];
+        assert_eq!(
+            host_lines(false, &Ok(collections)),
+            [
+                "RK app running: no",
+                "Collections for vendor 258A:",
+                "  PID 0265, usage page FF02, usage 0002, interface 1",
+                "  PID 0265, usage page 0001, usage 0006, interface 0",
+            ]
+        );
+    }
+
+    #[test]
+    fn host_lines_say_when_there_is_nothing_to_list() {
+        assert_eq!(
+            host_lines(true, &Ok(Vec::new())),
+            ["RK app running: yes", "Collections for vendor 258A: none"]
+        );
+        assert_eq!(
+            host_lines(false, &Err(Error::Hid("no access".to_string())))[1],
+            "Collections: couldn't list them: USB error: no access"
+        );
+    }
 
     #[test]
     fn the_table_has_a_row_per_supported_model() {

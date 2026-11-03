@@ -1,6 +1,6 @@
-//! Runs the real binary. Every test here is a dry run or `models`, which can't reach a keyboard.
-//! Nothing in this file may run another command without `--dry-run`, as it would open whatever is
-//! plugged in.
+//! Runs the real binary, as built for tests. That build has the protocol crate's `fake` feature on,
+//! so it can't open a keyboard. Even so, nothing here may run a command that writes without
+//! `--dry-run`, in case that ever stops being true.
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -118,6 +118,70 @@ fn timing_says_when_there_are_no_acks() {
     assert!(stdout(&output).contains("Acks: none"));
 }
 
+#[test]
+fn timing_is_reported_even_when_the_command_fails() {
+    let output = unkludge(&[
+        "--dry-run",
+        "--pid",
+        "0265",
+        "--timing",
+        "screen",
+        "no-such-file.gif",
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    let text = stdout(&output);
+    assert!(text.contains("Reports: none"), "{text}");
+    assert!(text.contains("Acks: none"), "{text}");
+    let errors = stderr(&output);
+    assert!(errors.contains("error: no-such-file.gif: "), "{errors}");
+    assert!(!errors.contains("image:"), "{errors}");
+}
+
+#[test]
+fn verbose_alone_is_an_error_on_either_side() {
+    for args in [&["--verbose", "models"][..], &["models", "--verbose"][..]] {
+        let output = unkludge(args);
+        assert_eq!(output.status.code(), Some(1), "{args:?}");
+        assert!(
+            stderr(&output).contains("--dry-run or --timing"),
+            "{args:?}"
+        );
+    }
+}
+
+#[test]
+fn this_test_build_cant_open_a_keyboard() {
+    // Reads at worst, so that nothing is lost if the build ever does get through.
+    let output = unkludge(&["info"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(stderr(&output).contains("error: "), "{}", stderr(&output));
+}
+
+#[test]
+fn a_report_says_what_it_can_with_no_keyboard_open() {
+    // This enumerates only: the test build can't open anything.
+    let output = unkludge(&["report"]);
+    assert_eq!(output.status.code(), Some(0));
+    let text = stdout(&output);
+    assert!(text.starts_with("Unkludge: "), "{text}");
+    assert!(text.contains("RK app running: "), "{text}");
+    assert!(text.contains("Collections"), "{text}");
+    assert!(text.contains("Keyboard: couldn't open it: "), "{text}");
+}
+
+#[test]
+fn a_dry_run_report_doesnt_look_at_the_system() {
+    let output = unkludge(&["--dry-run", "--pid", "0265", "report"]);
+    assert_eq!(output.status.code(), Some(0));
+    let text = stdout(&output);
+    assert!(
+        text.contains("Collections: not listed in a dry run"),
+        "{text}"
+    );
+    assert!(text.contains("Model: RK S85 ES"), "{text}");
+}
+
 /// Writes a small image to a file of this test's own.
 fn image_file(name: &str) -> PathBuf {
     use image::{ImageFormat, Rgba, RgbaImage};
@@ -143,13 +207,21 @@ fn screen_prints_a_summary_not_every_chunk() {
     std::fs::remove_file(&path).unwrap();
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let text = stdout(&output);
-    assert!(text.lines().count() < 12, "{text}");
+    assert!(text.lines().count() < 16, "{text}");
     assert!(
         text.contains("... 213 more chunks of frame 0 ..."),
         "{text}"
     );
     assert!(text.contains("Reports: 2 x 0x0D, 215 x 0x0C"), "{text}");
-    assert!(text.contains("Acks: 217, "), "{text}");
+    assert!(text.contains("Total: "), "{text}");
+    assert!(
+        text.contains("Chunks: 215 sent, 215 acknowledged"),
+        "{text}"
+    );
+    assert!(text.contains("Ack wait: min "), "{text}");
+    assert!(text.contains("Send: min "), "{text}");
+    assert!(text.ends_with("ms\n"), "{text}");
+    assert!(stderr(&output).contains("makes up its acks"));
 }
 
 #[test]
@@ -167,6 +239,30 @@ fn verbose_prints_every_chunk_in_full() {
     assert_eq!(output.status.code(), Some(0));
     let text = stdout(&output);
     assert_eq!(text.matches("09 0C 00 ").count(), 215, "chunks");
+}
+
+#[test]
+fn verbose_timing_prints_every_ack() {
+    let path = image_file("ack-lines");
+    let output = unkludge(&[
+        "--dry-run",
+        "--pid",
+        "0265",
+        "--timing",
+        "--verbose",
+        "screen",
+        path.to_str().unwrap(),
+    ]);
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let text = stdout(&output);
+    assert_eq!(
+        text.lines()
+            .filter(|l| l.starts_with("Ack ") && !l.starts_with("Ack wait"))
+            .count(),
+        217,
+        "chunks plus start and finish"
+    );
 }
 
 #[test]

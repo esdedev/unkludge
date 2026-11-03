@@ -54,6 +54,47 @@ struct Selection {
     screen_candidates: Vec<usize>,
 }
 
+/// One HID collection of the vendor's, for telling someone what the system sees.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HidCollection {
+    pub pid: u16,
+    pub usage_page: u16,
+    pub usage: u16,
+    pub interface: i32,
+}
+
+impl From<&HidEntry> for HidCollection {
+    fn from(entry: &HidEntry) -> HidCollection {
+        HidCollection {
+            pid: entry.pid,
+            usage_page: entry.usage_page,
+            usage: entry.usage,
+            interface: entry.interface,
+        }
+    }
+}
+
+/// The collections the system lists for this vendor. This only asks the system: no collection gets
+/// opened, and nothing reaches a keyboard.
+pub fn list_collections() -> Result<Vec<HidCollection>, Error> {
+    let api = HidApi::new().map_err(hid_error)?;
+    Ok(entries(&api).iter().map(HidCollection::from).collect())
+}
+
+fn entries(api: &HidApi) -> Vec<HidEntry> {
+    api.device_list()
+        .filter(|info| info.vendor_id() == VID)
+        .map(|info| HidEntry {
+            vid: info.vendor_id(),
+            pid: info.product_id(),
+            usage_page: info.usage_page(),
+            usage: info.usage(),
+            interface: info.interface_number(),
+            path: info.path().to_owned(),
+        })
+        .collect()
+}
+
 /// Picks the keyboard to open from the system's list, or the one with product ID `pid` if given.
 /// `usage_fallback` allows an entry without usages on the right interface. Only for Linux: on
 /// Windows those zeros can also mean that reading a collection's capabilities failed, and then it
@@ -178,20 +219,15 @@ fn pair_screen<T: Transport>(
 
 impl Device<HidTransport> {
     /// Opens the connected keyboard, or the one with product ID `pid` if given.
+    #[cfg_attr(feature = "fake", allow(unreachable_code, unused_variables))]
     pub fn open(pid: Option<u16>) -> Result<Self, Error> {
+        // Test builds get `fake` through dev-dependencies, in the binaries they run as well. So if
+        // a bug sent a dry run down this path, it still couldn't write to a keyboard plugged in.
+        #[cfg(feature = "fake")]
+        return Err(Error::NotFound);
+
         let api = HidApi::new().map_err(hid_error)?;
-        let entries: Vec<HidEntry> = api
-            .device_list()
-            .filter(|info| info.vendor_id() == VID)
-            .map(|info| HidEntry {
-                vid: info.vendor_id(),
-                pid: info.product_id(),
-                usage_page: info.usage_page(),
-                usage: info.usage(),
-                interface: info.interface_number(),
-                path: info.path().to_owned(),
-            })
-            .collect();
+        let entries = entries(&api);
 
         let selection = select(&entries, pid, cfg!(target_os = "linux"))?;
         let main = HidTransport::open(&api, &entries[selection.main].path)?;
@@ -269,6 +305,27 @@ mod tests {
 
     fn picked(entries: &[HidEntry], pid: Option<u16>) -> &HidEntry {
         &entries[select_windows(entries, pid).unwrap().main]
+    }
+
+    #[cfg(feature = "fake")]
+    #[test]
+    fn opening_is_refused_when_built_with_the_fake() {
+        assert_eq!(Device::open(None).err(), Some(Error::NotFound));
+        assert_eq!(Device::open(Some(S85_ES)).err(), Some(Error::NotFound));
+    }
+
+    #[test]
+    fn a_listed_collection_keeps_what_the_system_said() {
+        let entry = entry(VID, S85_ES, 0xFF02, 2, 1, "path");
+        assert_eq!(
+            HidCollection::from(&entry),
+            HidCollection {
+                pid: S85_ES,
+                usage_page: 0xFF02,
+                usage: 2,
+                interface: 1,
+            }
+        );
     }
 
     #[test]

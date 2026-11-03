@@ -110,6 +110,46 @@ mod tests {
     }
 
     #[test]
+    fn each_read_request_gets_one_answer() {
+        let transport = DryRunTransport::default();
+        let mut buf = [0xEE; 520];
+        transport
+            .send_feature(&[REPORT_ID, CONFIG_READ, 0, 0])
+            .unwrap();
+        assert_eq!(transport.get_feature(&mut buf), Ok(520));
+        assert_eq!(&buf[..8], &CONFIG_READ_HEADER);
+        assert_eq!(&buf[134..136], &[0x5A, 0xA5]);
+        assert!(buf[136..].iter().all(|&b| b == 0), "the rest is cleared");
+        assert!(transport.get_feature(&mut buf).is_err(), "only one answer");
+    }
+
+    #[test]
+    fn each_acked_report_gets_one_ack() {
+        let transport = DryRunTransport::default();
+        let mut buf = [0; 8];
+        transport
+            .send_feature(&[REPORT_ID, SCREEN_DATA, 0, 3, 7, 0x55, 0, 2])
+            .unwrap();
+        assert_eq!(transport.read_timeout(&mut buf, 0), Ok(8));
+        assert_eq!(buf, [REPORT_ID, 0x0A, 0x06, 1, 7, 0x55, 0, 0]);
+        assert_eq!(transport.read_timeout(&mut buf, 0), Ok(0), "only one ack");
+
+        transport
+            .send_feature(&[REPORT_ID, SCREEN_CONTROL, 0, 0, 1, 0, 5, 0])
+            .unwrap();
+        assert_eq!(transport.read_timeout(&mut buf, 0), Ok(8));
+        assert_eq!(buf, [REPORT_ID, 0x0A, 0x06, 1, 0, 0, 0, 0]);
+        assert_eq!(transport.read_timeout(&mut buf, 0), Ok(0), "only one ack");
+    }
+
+    #[test]
+    fn sleeping_takes_no_real_time() {
+        let start = Instant::now();
+        DryRunTransport::default().sleep(Duration::from_secs(30));
+        assert!(start.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
     fn generic_commands_get_no_ack() {
         let transport = DryRunTransport::default();
         transport.send_feature(&[REPORT_ID, 0x0B, 0, 0]).unwrap();
@@ -117,7 +157,7 @@ mod tests {
         assert_eq!(transport.read_timeout(&mut buf, 0), Ok(0));
     }
 
-    /// Anything left waiting would stop an upload for the 8 s of an ack timeout.
+    /// Anything left waiting for an ack would stop an upload for 8 s.
     #[test]
     fn a_whole_upload_takes_no_real_time() {
         let model = model::find(0x0265).unwrap();
