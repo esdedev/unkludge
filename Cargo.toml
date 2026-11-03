@@ -29,5 +29,10 @@ thiserror = "=2.0.21"
 toml = { version = "=1.1.8", default-features = false, features = ["std", "serde", "parse"] }
 # The process list and Ctrl+C on Windows. Already in the tree through hidapi.
 windows-sys = "=0.61.2"
+# The Windows interface: Direct2D, DirectWrite, the tray and the dialogs. Its COM object for screen
+# readers needs this crate rather than `windows-sys`.
+windows = "=0.62.2"
+windows-core = "=0.62.2"
+windows-numerics = "=0.3.1"
 # Ctrl+C on Linux. Already in the tree through hidapi.
 libc = "=0.2.191"

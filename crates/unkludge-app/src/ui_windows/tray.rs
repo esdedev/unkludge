@@ -1,0 +1,160 @@
+//! The tray icon and its menu, and the icon as the system wants it.
+
+use windows::Win32::Foundation::{HWND, POINT};
+use windows::Win32::Graphics::Gdi::{
+    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateBitmap, CreateDIBSection, DIB_RGB_COLORS,
+    DeleteObject,
+};
+use windows::Win32::UI::Shell::{
+    NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+    AppendMenuW, CreateIconIndirect, CreatePopupMenu, DestroyMenu, GetCursorPos, HICON, ICONINFO,
+    MF_CHECKED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, RegisterWindowMessageW, SetForegroundWindow,
+    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP,
+};
+use windows::core::{HSTRING, w};
+
+use super::App;
+use crate::i18n::t;
+
+pub const WM_TRAY: u32 = WM_APP + 1;
+
+const MENU_OPEN: usize = 1;
+const MENU_SYNC_CLOCK: usize = 2;
+const MENU_AUTOSTART: usize = 3;
+const MENU_QUIT: usize = 4;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuChoice {
+    None,
+    Open,
+    SyncClock,
+    Autostart,
+    Quit,
+}
+
+/// Explorer sends this when it makes the taskbar, at sign-in or on restarting. The new one doesn't
+/// know the icons there were, and if the app started first it never got its own.
+pub fn wm_taskbar_created() -> u32 {
+    static MESSAGE: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    // SAFETY: the string is NUL-terminated and static.
+    *MESSAGE.get_or_init(|| unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) })
+}
+
+/// The app's icon as the system wants it. Falls back to no icon rather than to no app.
+pub fn make_icon(size: i32) -> HICON {
+    let bitmap = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: size,
+            biHeight: -size, // Top row first.
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut bits = std::ptr::null_mut();
+    // SAFETY: the pointers are valid for the calls, the copy stays within the section of `size` by
+    // `size` pixels of 4 bytes, and the bitmaps can go once the icon has been made from them.
+    unsafe {
+        let Ok(color) = CreateDIBSection(None, &bitmap, DIB_RGB_COLORS, &mut bits, None, 0) else {
+            return HICON::default();
+        };
+        let pixels = crate::icon::pixels(size as usize);
+        std::ptr::copy_nonoverlapping(pixels.as_ptr(), bits.cast::<u8>(), pixels.len());
+        let mask_bits = vec![0u8; (((size + 15) / 16) * 2 * size) as usize];
+        let mask = CreateBitmap(size, size, 1, 1, Some(mask_bits.as_ptr().cast()));
+        let info = ICONINFO {
+            fIcon: true.into(),
+            xHotspot: 0,
+            yHotspot: 0,
+            hbmMask: mask,
+            hbmColor: color,
+        };
+        let icon = CreateIconIndirect(&info).unwrap_or_default();
+        let _ = DeleteObject(color.into());
+        let _ = DeleteObject(mask.into());
+        icon
+    }
+}
+
+impl App {
+    fn tray_data(&self) -> NOTIFYICONDATAW {
+        let mut data = NOTIFYICONDATAW {
+            cbSize: size_of::<NOTIFYICONDATAW>() as u32,
+            hWnd: self.hwnd,
+            uID: 1,
+            uFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
+            uCallbackMessage: WM_TRAY,
+            hIcon: self.tray_icon,
+            ..Default::default()
+        };
+        let tip = if self.is_demo() {
+            format!("Unkludge - {}", t().demo)
+        } else {
+            "Unkludge".to_string()
+        };
+        for (slot, unit) in data.szTip.iter_mut().zip(tip.encode_utf16()) {
+            *slot = unit;
+        }
+        data
+    }
+
+    pub fn add_tray(&self) {
+        // SAFETY: the structure is valid for the call, which copies what it needs.
+        unsafe {
+            let _ = Shell_NotifyIconW(NIM_ADD, &self.tray_data());
+        }
+    }
+
+    pub fn remove_tray(&self) {
+        // SAFETY: as in `add_tray`.
+        unsafe {
+            let _ = Shell_NotifyIconW(NIM_DELETE, &self.tray_data());
+        }
+    }
+}
+
+/// Shows the tray's menu and waits for a choice. It has a message loop of its own.
+pub fn menu(hwnd: HWND, autostart: bool) -> MenuChoice {
+    // SAFETY: the handles are valid for these calls, and the strings outlive them.
+    unsafe {
+        let Ok(menu) = CreatePopupMenu() else {
+            return MenuChoice::None;
+        };
+        let open = HSTRING::from(t().tray_open);
+        let sync = HSTRING::from(t().tray_sync_clock);
+        let start = HSTRING::from(t().start_with_system);
+        let quit = HSTRING::from(t().tray_quit);
+        let checked = if autostart { MF_CHECKED } else { MF_UNCHECKED };
+        let _ = AppendMenuW(menu, MF_STRING, MENU_OPEN, &open);
+        let _ = AppendMenuW(menu, MF_STRING, MENU_SYNC_CLOCK, &sync);
+        let _ = AppendMenuW(menu, MF_STRING | checked, MENU_AUTOSTART, &start);
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+        let _ = AppendMenuW(menu, MF_STRING, MENU_QUIT, &quit);
+        let mut point = POINT::default();
+        let _ = GetCursorPos(&mut point);
+        // Without this, clicking elsewhere doesn't close the menu.
+        let _ = SetForegroundWindow(hwnd);
+        let id = TrackPopupMenu(
+            menu,
+            TPM_RETURNCMD | TPM_RIGHTBUTTON,
+            point.x,
+            point.y,
+            None,
+            hwnd,
+            None,
+        );
+        let _ = DestroyMenu(menu);
+        match id.0 as usize {
+            MENU_OPEN => MenuChoice::Open,
+            MENU_SYNC_CLOCK => MenuChoice::SyncClock,
+            MENU_AUTOSTART => MenuChoice::Autostart,
+            MENU_QUIT => MenuChoice::Quit,
+            _ => MenuChoice::None,
+        }
+    }
+}
