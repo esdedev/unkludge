@@ -162,6 +162,7 @@ pub struct Tr {
 
     err_not_found: &'static str,
     err_unsupported: &'static str,
+    err_no_usable_collection: &'static str,
     err_usb: &'static str,
     err_device_busy: &'static str,
     err_lock_failed: &'static str,
@@ -302,6 +303,7 @@ const EN: Tr = Tr {
 
     err_not_found: "No supported keyboard found",
     err_unsupported: "Keyboard {pid} isn't supported",
+    err_no_usable_collection: "{name} is connected, but not with the HID collections Unkludge can use",
     err_usb: "USB error: {detail}",
     err_device_busy: "Another Unkludge program is using the keyboard",
     err_lock_failed: "The lock that keeps Unkludge programs off the keyboard at the same time failed: {detail}",
@@ -442,6 +444,7 @@ const ES: Tr = Tr {
 
     err_not_found: "No se ha encontrado ningún teclado compatible",
     err_unsupported: "El teclado {pid} no es compatible",
+    err_no_usable_collection: "{name} está conectado, pero no con las colecciones HID que Unkludge puede usar",
     err_usb: "Error de USB: {detail}",
     err_device_busy: "Otro programa de Unkludge está usando el teclado",
     err_lock_failed: "Ha fallado el bloqueo que evita que dos programas de Unkludge usen el teclado a la vez: {detail}",
@@ -480,6 +483,9 @@ impl Tr {
         match error {
             Error::NotFound => self.err_not_found.to_string(),
             Error::Unsupported(pid) => self.err_unsupported.replace("{pid}", &format!("{pid:04X}")),
+            Error::NoUsableCollection(pid) => self
+                .err_no_usable_collection
+                .replace("{name}", &keyboard_name(*pid)),
             Error::Hid(detail) => self.err_usb.replace("{detail}", detail),
             Error::DeviceBusy => self.err_device_busy.to_string(),
             Error::LockFailed(detail) => self.err_lock_failed.replace("{detail}", detail),
@@ -624,6 +630,14 @@ impl Tr {
         } else {
             format!("{} h {} min", minutes / 60, minutes % 60)
         }
+    }
+}
+
+/// A keyboard's name and product ID, or the ID alone if it isn't in the table.
+fn keyboard_name(pid: u16) -> String {
+    match unkludge_protocol::model::find(pid) {
+        Some(model) => format!("{} ({pid:04X})", model.name),
+        None => format!("{pid:04X}"),
     }
 }
 

@@ -187,6 +187,40 @@ fn takes_full_reports<T: Transport>(candidate: &T) -> bool {
         .is_ok_and(|descriptor| feature_report_len(&descriptor, REPORT_ID) == Some(REPORT_LEN))
 }
 
+/// Refuses a keyboard's main collection if its feature reports aren't the full length. That covers
+/// a descriptor with no report 9 or that makes no sense, and one that can't be read at all. A report
+/// of unknown length is the same risk as one known to be wrong: on Windows a config write could be
+/// cut short and still say it worked. And what's lost is small, as a system that can't give the
+/// descriptor of a device it just opened is rare. So nothing goes out, and the message says which
+/// of the two it was.
+fn check_main<T: Transport>(main: &T, pid: u16) -> Result<(), Error> {
+    if let Err(error) = main.report_descriptor() {
+        return Err(Error::Hid(format!(
+            "can't read the keyboard's report descriptor, so its report length is unknown: {error}"
+        )));
+    }
+    if takes_full_reports(main) {
+        Ok(())
+    } else {
+        Err(Error::NoUsableCollection(pid))
+    }
+}
+
+/// Makes a device of what was opened, once it's clear that it's safe to send anything.
+fn assemble<T: Transport>(
+    main: T,
+    candidates: impl IntoIterator<Item = Result<T, Error>>,
+    model: &'static Model,
+) -> Result<Device<T>, Error> {
+    check_main(&main, model.pid)?;
+    let screen = if model.has_second_collection() {
+        Some(pair_screen(&main, candidates)?)
+    } else {
+        None
+    };
+    Device::new(main, screen, model)
+}
+
 /// Finds the keyboard's second collection: the first candidate with full-length feature reports
 /// reporting the same identity. If none is found and some could not be opened, says so, since one
 /// of those may be the one.
@@ -231,16 +265,11 @@ impl Device<HidTransport> {
 
         let selection = select(&entries, pid, cfg!(target_os = "linux"))?;
         let main = HidTransport::open(&api, &entries[selection.main].path)?;
-        let screen = if selection.model.has_second_collection() {
-            let candidates = selection
-                .screen_candidates
-                .iter()
-                .map(|&i| HidTransport::open(&api, &entries[i].path));
-            Some(pair_screen(&main, candidates)?)
-        } else {
-            None
-        };
-        Device::new(main, screen, selection.model)
+        let candidates = selection
+            .screen_candidates
+            .iter()
+            .map(|&i| HidTransport::open(&api, &entries[i].path));
+        assemble(main, candidates, selection.model)
     }
 }
 
@@ -746,12 +775,97 @@ mod tests {
         assert!(malformed.sent().is_empty());
     }
 
+    // The keyboard's own collection.
+
+    fn no_candidates() -> [Result<FakeTransport, Error>; 0] {
+        []
+    }
+
+    fn s85() -> &'static Model {
+        model::find(S85_ES).unwrap()
+    }
+
     #[test]
-    fn the_keyboards_own_collection_needs_no_descriptor() {
-        // Its usage page and usage have already ruled out the other kinds of collection.
-        let main = answers(&ID);
+    fn a_main_collection_with_full_length_reports_opens_with_nothing_sent() {
+        let main = FakeTransport::new();
+        main.set_report_descriptor(&descriptor(519));
+        let device = assemble(main.clone(), no_candidates(), s85()).unwrap();
+        assert_eq!(device.model().pid, S85_ES);
+        assert!(main.sent().is_empty());
+    }
+
+    #[test]
+    fn a_main_collection_of_another_length_is_refused_with_nothing_sent() {
+        for feature_bytes in [0, 64, 518, 520, 1031] {
+            let main = FakeTransport::new();
+            main.set_report_descriptor(&descriptor(feature_bytes));
+            let result = assemble(main.clone(), no_candidates(), s85());
+            assert_eq!(
+                result.err(),
+                Some(Error::NoUsableCollection(S85_ES)),
+                "{feature_bytes}"
+            );
+            assert!(main.sent().is_empty(), "{feature_bytes}");
+        }
+    }
+
+    #[test]
+    fn a_main_collection_with_no_report_9_or_a_broken_descriptor_is_refused() {
+        // Report 5 only, as a collection of another kind could have.
+        let other_report = [
+            0x06, 0x02, 0xFF, 0x09, 0x02, 0xA1, 0x01, 0x85, 0x05, 0x75, 0x08, 0x96, 0x07, 0x02,
+            0x09, 0x01, 0xB1, 0x02, 0xC0,
+        ];
+        let cut_off = [0x96, 0x07];
+        for bytes in [&other_report[..], &cut_off[..]] {
+            let main = FakeTransport::new();
+            main.set_report_descriptor(bytes);
+            let result = assemble(main.clone(), no_candidates(), s85());
+            assert_eq!(result.err(), Some(Error::NoUsableCollection(S85_ES)));
+            assert!(main.sent().is_empty());
+        }
+    }
+
+    #[test]
+    fn a_main_collection_whose_descriptor_cant_be_read_is_refused_and_says_so() {
+        let main = FakeTransport::new();
         assert!(main.report_descriptor().is_err());
-        pair_screen(&main, [Ok(candidate(&ID))]).unwrap();
+        let Err(Error::Hid(message)) = assemble(main.clone(), no_candidates(), s85()) else {
+            panic!("should have been refused");
+        };
+        assert!(message.contains("report descriptor"), "{message}");
+        assert!(main.sent().is_empty());
+    }
+
+    #[test]
+    fn a_main_collection_is_checked_before_pairing_asks_it_anything() {
+        let main = answers(&ID);
+        main.set_report_descriptor(&descriptor(64));
+        let screen = candidate(&ID);
+        let result = assemble(
+            main.clone(),
+            [Ok(screen.clone())],
+            model::find(N99).unwrap(),
+        );
+        assert_eq!(result.err(), Some(Error::NoUsableCollection(N99)));
+        assert!(main.sent().is_empty());
+        assert!(screen.sent().is_empty());
+    }
+
+    #[test]
+    fn a_model_with_two_collections_is_paired_after_the_check() {
+        let main = answers(&ID);
+        main.set_report_descriptor(&descriptor(519));
+        let screen = candidate(&ID);
+        assemble(
+            main.clone(),
+            [Ok(screen.clone())],
+            model::find(N99).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(main.events()[0], FakeEvent::ReadDescriptor);
+        assert_eq!(main.sent().len(), 1);
+        assert_eq!(screen.sent().len(), 1);
     }
 
     fn denied() -> Result<FakeTransport, Error> {

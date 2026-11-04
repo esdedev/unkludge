@@ -7,6 +7,13 @@ pub enum Error {
     NotFound,
     #[error("keyboard {0:04X} isn't supported")]
     Unsupported(u16),
+    /// A supported keyboard is there, and none of its HID collections is one Unkludge can use.
+    #[error(
+        "{} is connected, but not with the HID collections Unkludge can use. `unkludge report` lists \
+         them",
+        keyboard_name(*.0)
+    )]
+    NoUsableCollection(u16),
     #[error("USB error: {0}")]
     Hid(String),
     /// Another Unkludge program has the keyboard. See `unkludge_shared::device_lock`.
@@ -46,6 +53,14 @@ pub enum Error {
     TooManyFrames { got: usize, max: usize },
 }
 
+/// A keyboard's name and product ID, or the ID alone if it isn't in the table.
+fn keyboard_name(pid: u16) -> String {
+    match crate::model::find(pid) {
+        Some(model) => format!("{} ({pid:04X})", model.name),
+        None => format!("Keyboard {pid:04X}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -55,6 +70,16 @@ mod tests {
         assert_eq!(
             Error::Unsupported(0x01FA).to_string(),
             "keyboard 01FA isn't supported"
+        );
+        assert_eq!(
+            Error::NoUsableCollection(0x0265).to_string(),
+            "RK S85 ES (0265) is connected, but not with the HID collections Unkludge can use. \
+             `unkludge report` lists them"
+        );
+        assert!(
+            Error::NoUsableCollection(0xFFFE)
+                .to_string()
+                .starts_with("Keyboard FFFE is connected")
         );
         let busy = Error::DeviceBusy.to_string();
         assert!(busy.contains("quit it first"), "{busy}");

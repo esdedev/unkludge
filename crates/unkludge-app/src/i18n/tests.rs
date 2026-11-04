@@ -18,6 +18,10 @@ fn errors_read_in_english_with_each_detail_in_its_place() {
     let cases = [
         (Error::NotFound, "No supported keyboard found"),
         (Error::Unsupported(0x01FA), "Keyboard 01FA isn't supported"),
+        (
+            Error::NoUsableCollection(0x0265),
+            "RK S85 ES (0265) is connected, but not with the HID collections Unkludge can use",
+        ),
         (Error::Hid("gone".to_string()), "USB error: gone"),
         (
             Error::DeviceBusy,
@@ -73,6 +77,10 @@ fn errors_read_in_spanish_with_each_detail_in_its_place() {
         (
             Error::Unsupported(0x01FA),
             "El teclado 01FA no es compatible",
+        ),
+        (
+            Error::NoUsableCollection(0x0265),
+            "RK S85 ES (0265) está conectado, pero no con las colecciones HID que Unkludge puede usar",
         ),
         (Error::Hid("gone".to_string()), "Error de USB: gone"),
         (
