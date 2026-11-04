@@ -342,7 +342,6 @@ impl State {
     fn lost_keyboard(&mut self) {
         self.lighting = None;
         self.upload = Upload::Idle;
-        self.pending = LightingChange::default();
         self.message = None;
         if let Some(file) = &mut self.file {
             file.loaded = None;

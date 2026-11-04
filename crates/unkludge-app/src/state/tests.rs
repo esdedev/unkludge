@@ -630,7 +630,7 @@ fn losing_the_keyboard_ends_an_upload() {
 }
 
 #[test]
-fn losing_the_keyboard_forgets_slider_values_on_their_way() {
+fn a_keyboard_coming_back_shows_what_it_says_not_what_was_on_its_way() {
     let (mut state, mut settings) = with_lights(LightMode::Effect(2));
     state.adjust_brightness(5).unwrap();
     state.apply(Event::Disconnected, &mut settings);
