@@ -427,7 +427,7 @@ mod tests {
             b"no equals sign",
             b"future_setting=1\n",
             // UTF-16 with no BOM, as nothing says what it is.
-            b"a\0u\0t\0o\0_\0c\0l\0o\0c\0k\0=\00\0",
+            b"a\0u\0t\0o\0_\0c\0l\0o\0c\0k\0=\x000\0",
             b"AUTO_CLOCK=0\n",
         ];
         for bytes in cases {
