@@ -362,7 +362,9 @@ fn a_demo_report_doesnt_list_the_systems_devices() {
 fn a_report_opens_its_folder_unless_scripted() {
     let dir = TempDir::new("report-open");
     let outcome = demo().report_ready(&data(), Some(&dir.0));
-    assert_eq!(outcome.note.text, t().report_saved);
+    let file = dir.0.join(report::DEMO_FILE_NAME);
+    assert_eq!(outcome.note.text, t().report_saved(&file));
+    assert!(outcome.note.text.contains(&*file.to_string_lossy()));
     assert_eq!(outcome.open, std::slice::from_ref(&dir.0));
 
     let scripted = Session::new(Some(DemoArgs {
@@ -370,7 +372,9 @@ fn a_report_opens_its_folder_unless_scripted() {
         ..DemoArgs::default()
     }));
     let outcome = scripted.report_ready(&data(), Some(&dir.0));
-    assert_eq!(outcome.note.text, t().report_saved);
+    let file = dir.0.join(report::DEMO_FILE_NAME);
+    assert_eq!(outcome.note.text, t().report_saved(&file));
+    assert!(outcome.note.text.contains(&*file.to_string_lossy()));
     assert!(outcome.open.is_empty());
 }
 
@@ -399,4 +403,14 @@ fn the_real_app_says_how_granting_access_went() {
         asked(Err(sys::GrantError::Cancelled)),
         Err(sys::GrantError::Cancelled)
     );
+}
+
+#[test]
+fn a_folder_that_wont_open_says_so_and_where_the_report_is() {
+    let folder = Path::new("/some/folder");
+    let note = folder_not_opened(folder, &io::Error::other("no such program"));
+    assert!(note.text.contains("/some/folder"), "{}", note.text);
+    assert!(note.text.contains("no such program"), "{}", note.text);
+    assert_eq!(note.tone, Tone::Bad);
+    assert!(!note.fades());
 }

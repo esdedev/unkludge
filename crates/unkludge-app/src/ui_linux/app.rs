@@ -21,7 +21,7 @@ use crate::demo::Script;
 use crate::drive::{Drained, MESSAGE_TIME, PROGRESS_PAINT_GAP, Parts};
 use crate::i18n::t;
 use crate::layout;
-use crate::session::{Session, SystemAutostart};
+use crate::session::{Session, SystemAutostart, folder_not_opened};
 use crate::settings::Settings;
 use crate::state::{Note, Slider, State, Tone};
 use crate::worker::{Cmd, Event, WorkerHandle};
@@ -312,7 +312,7 @@ impl App {
         }
         for target in &drained.to_open {
             if let Err(error) = sys::open(target) {
-                log::error(&format!("the report's folder can't be opened: {error}"));
+                self.state.message = Some(folder_not_opened(target, &error));
             }
         }
         if drained.image_changed {

@@ -184,7 +184,7 @@ impl Session {
                     open.extend(report::FORM_URL.map(PathBuf::from));
                 }
                 ReportOutcome {
-                    note: Note::new(t().report_saved, Tone::Neutral),
+                    note: Note::new(t().report_saved(&path), Tone::Neutral),
                     open,
                 }
             }
@@ -252,6 +252,13 @@ impl Session {
             }
         }
     }
+}
+
+/// What to say when the folder of a report that was saved can't be opened. It stays, as nothing else
+/// says where the report is by then.
+pub fn folder_not_opened(folder: &Path, error: &io::Error) -> Note {
+    log::error(&format!("the report's folder can't be opened: {error}"));
+    Note::new(t().report_folder_not_opened(folder, error), Tone::Bad)
 }
 
 /// What the real app opens: the first supported keyboard. When there's none, a device of the same

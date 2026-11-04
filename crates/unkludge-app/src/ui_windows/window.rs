@@ -30,7 +30,7 @@ use crate::i18n::t;
 use crate::layout::{
     Frame, PixelRect, WIDTH, centered_in_work_area, effective_dpi, keep_in_work_area, pixels,
 };
-use crate::session::{Session, SystemAutostart, open_real_keyboard};
+use crate::session::{Session, SystemAutostart, folder_not_opened, open_real_keyboard};
 use crate::settings::Settings;
 use crate::state::{Slider, State};
 use crate::worker::{Cmd, Notify};
@@ -731,8 +731,11 @@ impl App {
             Err(_) => return,
         };
         for target in waiting {
-            if let Err(error) = sys::open(&target) {
-                log::error(&format!("the report's folder can't be opened: {error}"));
+            if let Err(error) = sys::open(&target)
+                && let Ok(mut app) = cell.try_borrow_mut()
+            {
+                app.state.message = Some(folder_not_opened(&target, &error));
+                app.invalidate();
             }
         }
     }

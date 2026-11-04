@@ -2,6 +2,8 @@
 //! missing from one of them. The protocol crate's own messages are in English: the common ones get
 //! translated in [`Tr::error`], and those that come with details of their own go through as they are.
 
+use std::io;
+use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -85,8 +87,8 @@ pub struct Tr {
     pub cannot_open_short: &'static str,
     pub experimental: &'static str,
     pub send_report: &'static str,
-    /// The report was saved and its folder opened.
-    pub report_saved: &'static str,
+    report_saved: &'static str,
+    report_folder_not_opened: &'static str,
     /// Before why a report couldn't be saved.
     pub report_failed: &'static str,
     /// Under [`Self::connect_keyboard`].
@@ -228,7 +230,8 @@ const EN: Tr = Tr {
     cannot_open_short: "Can't open it",
     experimental: "EXPERIMENTAL",
     send_report: "Send report",
-    report_saved: "Report saved: send the file in the folder that just opened",
+    report_saved: "Report saved in {path}: send that file",
+    report_folder_not_opened: "The report is saved in {path}, but that folder couldn't be opened: {error}",
     report_failed: "The report couldn't be saved",
     connect_hint: "It shows up here by itself as soon as it's plugged in",
     demo: "DEMO",
@@ -372,7 +375,8 @@ const ES: Tr = Tr {
     cannot_open_short: "No se puede abrir",
     experimental: "EXPERIMENTAL",
     send_report: "Enviar informe",
-    report_saved: "Informe guardado: envía el archivo de la carpeta que se acaba de abrir",
+    report_saved: "Informe guardado en {path}: envía ese archivo",
+    report_folder_not_opened: "El informe está guardado en {path}, pero no se ha podido abrir esa carpeta: {error}",
     report_failed: "No se ha podido guardar el informe",
     connect_hint: "Aparecerá aquí en cuanto lo enchufes",
     demo: "DEMO",
@@ -523,6 +527,19 @@ impl Tr {
             Problem::UnusableConfig => self.unusable_config.to_string(),
             Problem::Device(error) => self.error(error),
         }
+    }
+
+    /// A report was saved in this file.
+    pub fn report_saved(&self, path: &Path) -> String {
+        self.report_saved
+            .replace("{path}", &path.display().to_string())
+    }
+
+    /// A report was saved in this folder, and the system wouldn't open it.
+    pub fn report_folder_not_opened(&self, folder: &Path, error: &io::Error) -> String {
+        self.report_folder_not_opened
+            .replace("{path}", &folder.display().to_string())
+            .replace("{error}", &error.to_string())
     }
 
     /// For a file with more frames than the keyboard's limit, of which `frames` get used.
