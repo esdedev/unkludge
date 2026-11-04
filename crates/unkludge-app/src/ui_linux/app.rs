@@ -77,7 +77,11 @@ pub fn finish() {
     if let Some(mut app) = app {
         app.save_settings();
         if let Some(worker) = app.worker.take() {
-            worker.shutdown();
+            if sys::end_asked() {
+                worker.shutdown_within(crate::worker::SYSTEM_END_WAIT);
+            } else {
+                worker.shutdown();
+            }
         }
     }
 }

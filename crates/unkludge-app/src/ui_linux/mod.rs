@@ -35,6 +35,8 @@ const APP_ID: &str = "unkludge";
 
 /// Runs the app until it's told to quit.
 pub fn run(args: Args) {
+    // First, as whatever starts a thread after this keeps these from reaching it.
+    sys::listen_for_end_signals();
     let session = Session::new(args.demo);
     if session.claims_single_instance() && !sys::claim_single_instance() {
         if Session::shows_other_copy(args.tray) {

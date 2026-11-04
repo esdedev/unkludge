@@ -124,7 +124,8 @@ impl Animation {
     ///
     /// A cancel isn't noticed during an ack wait, which goes on until the ack or its timeout, and
     /// then the abort has an ack wait of its own. On a stalled keyboard that's up to 16 s, so a UI
-    /// should show that it's cancelling.
+    /// should show that it's cancelling. Whatever sets `cancel` from a signal has to keep that signal
+    /// away from this thread: a wait that gets interrupted comes back as a USB error.
     pub fn upload<T: Transport>(
         &self,
         device: &mut Device<T>,

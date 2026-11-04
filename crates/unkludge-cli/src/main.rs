@@ -24,6 +24,8 @@ mod dry_run;
 mod interrupt;
 mod output;
 mod packets;
+#[cfg(all(test, not(windows)))]
+mod signal_tests;
 
 /// See the top of this file.
 const EXIT_UNCONFIRMED: u8 = 2;
@@ -99,12 +101,7 @@ fn run_on_keyboard(cli: &Cli, command: &KeyboardCommand) -> Result<(), Failure> 
         _ => Vec::new(),
     };
     match device_lock::open_locked(device_lock::COMMAND_WAIT, || Device::open(cli.pid)) {
-        Ok(device) => {
-            if let KeyboardCommand::Screen(_) = command {
-                interrupt::install();
-            }
-            drive(device, cli, command, &host)
-        }
+        Ok(device) => drive(device, cli, command, &host),
         // Not being able to open the keyboard is just what a report should tell.
         Err(error) if matches!(command, KeyboardCommand::Report) => {
             Console::with_stdio(|console| {
@@ -129,6 +126,9 @@ fn drive<T: Transport>(
     command: &KeyboardCommand,
     host: &[String],
 ) -> Result<(), Failure> {
+    if let KeyboardCommand::Screen(_) = command {
+        interrupt::install();
+    }
     let two_collections = device.model().has_second_collection();
     let observer = Arc::new(Mutex::new(Observer::new(
         cli.dry_run,
@@ -162,6 +162,32 @@ fn drive<T: Transport>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_upload_listens_for_being_told_to_stop_and_says_when_its_over() {
+        use unkludge_protocol::transport::fake::FakeTransport;
+
+        let path = std::env::temp_dir().join(format!("unkludge-drive-{}.png", std::process::id()));
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([255, 0, 0, 255]))
+            .save(&path)
+            .unwrap();
+        let cli = Cli::try_parse_from(["unkludge", "screen", path.to_str().unwrap()]).unwrap();
+        let Command::Keyboard(command) = &cli.command else {
+            unreachable!();
+        };
+        let fake = FakeTransport::with_auto_ack();
+        let mut block = vec![0x09, 0x84, 0, 0, 1, 0, 0x80, 0];
+        block.extend([0; 126]);
+        block.extend([0x5A, 0xA5]);
+        fake.queue_feature_reply(&block);
+        let device = Device::new(fake.clone(), None, model::find(0x0265).unwrap()).unwrap();
+        assert!(!interrupt::is_installed());
+        assert!(!interrupt::has_finished());
+        let _ = drive(device, &cli, command, &[]);
+        std::fs::remove_file(&path).unwrap();
+        assert!(interrupt::is_installed());
+        assert!(interrupt::has_finished());
+    }
 
     #[test]
     fn each_way_of_ending_has_its_exit_code() {

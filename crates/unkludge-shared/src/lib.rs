@@ -4,6 +4,8 @@
 
 pub mod device_lock;
 #[cfg(not(windows))]
+pub mod end_signals;
+#[cfg(not(windows))]
 pub mod linux_dirs;
 pub mod local_time;
 pub mod report_lines;

@@ -118,6 +118,7 @@ fn starting_normally_shows_the_window_before_the_worker_starts() {
     assert!(window.window().is_visible());
     assert_eq!(View::get(&window).get_footer().message, t().demo_name);
     with_app_ref(|app| assert!(app.watching_for_sleep()));
+    with_app_ref(|app| assert!(app.watching_for_end()));
     drop(take_app());
 }
 

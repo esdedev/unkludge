@@ -35,7 +35,7 @@ As far as is known, but the honest answer is that nobody has tried most of this 
 - **Unkludge never updates firmware**, and never will. It has no command for that, nor for a factory reset, nor any way to send arbitrary bytes.
 - It only sends the commands in [docs/PROTOCOL.md](docs/PROTOCOL.md). No USB capture has confirmed them yet, and the table there says what has really been run, on which keyboard.
 - Settings are read first and written back with only what you asked to change. If the read fails or looks wrong, nothing is written: not settings, not the clock, not a screen upload.
-- Ctrl+C during `unkludge screen` tells the keyboard to abort, which can take a few seconds if it has stalled. Closing the terminal or logging off does the same, as far as the system leaves time. A second Ctrl+C quits at once, which, like unplugging the keyboard, leaves the upload unfinished. What a keyboard does then isn't known. Try unplugging it and plugging it back in, or uploading again, and say what happened.
+- Ctrl+C during `unkludge screen` tells the keyboard to abort, which can take a few seconds if it has stalled. Closing the terminal does the same, as far as the system leaves time. A second Ctrl+C quits at once, which, like unplugging the keyboard, leaves the upload unfinished. What a keyboard does then isn't known. Try unplugging it and plugging it back in, or uploading again, and say what happened.
 - If a keyboard stops responding, unplug it and plug it back in, and say so in your report.
 
 The `kind = 2` models (`01B8`, `025E`, `025F`) and the models with `crc = true` (the M87 family) upload differently from the S85 and have never been run on real hardware.

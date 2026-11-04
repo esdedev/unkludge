@@ -36,8 +36,6 @@ pub(in crate::ui_linux) trait Outside {
     fn hook_window(&self, window: &AppWindow);
     fn start_worker(&self, app: &mut App);
     fn data_dir(&self) -> Option<PathBuf>;
-    /// For the whole process, so not something for a test to do.
-    fn listen_for_end_signals(&self) {}
 }
 
 /// The real thing.
@@ -62,10 +60,6 @@ impl Outside for RealOutside {
 
     fn data_dir(&self) -> Option<PathBuf> {
         sys::data_dir()
-    }
-
-    fn listen_for_end_signals(&self) {
-        sys::listen_for_end_signals();
     }
 }
 
@@ -128,8 +122,6 @@ impl App {
             self.refresh();
         }
         self.watch_for_sleep();
-        outside.listen_for_end_signals();
-        self.watch_for_end();
         // The window only appears once the event loop is going, and what the worker says waits for
         // that too. Its first write to a keyboard, which is the clock, can come before that.
         outside.start_worker(self);
@@ -146,7 +138,9 @@ impl App {
         outside.start_worker(self);
     }
 
-    fn exit_when_told(&self) {
+    /// Asked by a demo's arguments, or by the system.
+    fn exit_when_told(&mut self) {
+        self.watch_for_end();
         if let Some(after) = self.session.demo_args().and_then(|args| args.exit_after) {
             Timer::single_shot(after, || with_app(App::quit));
         }
@@ -208,6 +202,11 @@ impl App {
         if self.sleep_watch.woke_up(asleep) {
             self.send(Some(crate::worker::Cmd::Resumed));
         }
+    }
+
+    #[cfg(test)]
+    pub(in crate::ui_linux) fn watching_for_end(&self) -> bool {
+        self.end_timer.running()
     }
 
     #[cfg(test)]

@@ -33,7 +33,7 @@ use crate::layout::{
 use crate::session::{Session, SystemAutostart, folder_not_opened, open_real_keyboard};
 use crate::settings::Settings;
 use crate::state::{Slider, State};
-use crate::worker::{Cmd, Notify};
+use crate::worker::{Cmd, Notify, SYSTEM_END_WAIT};
 use crate::{log, sys};
 
 pub(super) const CLASS: PCWSTR = w!("UnkludgeWindow");
@@ -633,7 +633,7 @@ impl App {
                 // its abort, which is what the moment this waits is for. The system ends the process
                 // soon after this returns, so everything has to be done by then.
                 if let Some(worker) = self.worker.take() {
-                    worker.shutdown();
+                    worker.shutdown_within(SYSTEM_END_WAIT);
                 }
                 Some(0)
             }

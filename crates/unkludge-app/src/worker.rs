@@ -67,6 +67,14 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const SETTLE_TIME: Duration = Duration::from_millis(300);
 /// How many errors a report can list.
 const MAX_ERRORS: usize = 20;
+/// How long [`WorkerHandle::shutdown_within`] should give an upload to abort when the system is ending
+/// the program, as stopping it halfway is the alternative, and it only waits for as long as the abort
+/// takes. Windows gives about 5 seconds, and it isn't known how long a Linux session gives.
+#[cfg(windows)]
+pub const SYSTEM_END_WAIT: Duration = Duration::from_millis(4500);
+/// See above. A session on Linux usually leaves far longer, so a stalled keyboard's 16 s fit.
+#[cfg(not(windows))]
+pub const SYSTEM_END_WAIT: Duration = Duration::from_secs(20);
 
 /// How long things take when nothing is being tested.
 const TIMINGS: Timings = Timings {
@@ -301,18 +309,20 @@ impl WorkerHandle {
     /// moment to abort, so that the keyboard isn't left waiting for the rest of it, but a stalled
     /// keyboard doesn't hold up quitting.
     pub fn shutdown(self) {
+        let wait = self.shutdown_wait;
+        self.shutdown_within(wait);
+    }
+
+    /// [`WorkerHandle::shutdown`], waiting this long at most.
+    pub fn shutdown_within(self, wait: Duration) {
         self.shared.request_cancel(&self.emitter);
         let WorkerHandle {
-            cmds,
-            thread,
-            beat,
-            shutdown_wait,
-            ..
+            cmds, thread, beat, ..
         } = self;
         drop(cmds);
         beat.close();
         let Some(thread) = thread else { return };
-        let deadline = Instant::now() + shutdown_wait;
+        let deadline = Instant::now() + wait;
         while !thread.is_finished() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(10));
         }
