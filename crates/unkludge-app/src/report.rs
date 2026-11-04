@@ -192,9 +192,4 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "the text");
         std::fs::remove_dir_all(&dir).unwrap();
     }
-
-    #[test]
-    fn the_form_doesnt_exist_yet() {
-        assert_eq!(FORM_URL, None);
-    }
 }

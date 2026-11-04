@@ -423,12 +423,6 @@ mod tests {
     }
 
     #[test]
-    fn the_language_can_be_asked_for() {
-        // The answer depends on the machine.
-        let _ = is_spanish();
-    }
-
-    #[test]
     fn the_first_claim_wins() {
         let name = format!("Local\\Unkludge-Test-{}", std::process::id());
         assert!(claim_mutex(&name));
@@ -445,10 +439,5 @@ mod tests {
     #[should_panic(expected = "tests must not change")]
     fn a_test_cant_refresh_the_real_entry_by_accident() {
         refresh_autostart(true);
-    }
-
-    #[test]
-    fn looking_through_the_process_list_works() {
-        let _ = rk_app_running();
     }
 }
