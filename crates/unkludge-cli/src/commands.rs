@@ -1,6 +1,7 @@
 //! The commands, on any transport. `info`, `report` and `light` with no options only read.
 
 use std::error::Error as StdError;
+use std::fmt::{self, Display, Formatter};
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
@@ -18,6 +19,22 @@ use crate::args::{KeyboardCommand, LightArgs, ScreenArgs};
 use crate::output::{self, Console};
 
 pub type Failure = Box<dyn StdError>;
+
+/// The keyboard took every frame but didn't acknowledge the finish. It may have worked, so this has
+/// an exit code of its own, and it may not have, so that isn't the code for success.
+#[derive(Debug)]
+pub struct Unconfirmed;
+
+impl Display for Unconfirmed {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(
+            "the keyboard took every frame but didn't acknowledge the finish, so it may not show \
+             the new animation",
+        )
+    }
+}
+
+impl StdError for Unconfirmed {}
 
 /// How a command runs, apart from the device it runs on.
 pub struct Options<'a> {
@@ -222,10 +239,7 @@ fn screen<T: Transport>(
     }
 
     if !uploaded?.finish_confirmed {
-        console.warn(
-            "the keyboard took every frame but didn't acknowledge the finish, so it may not show \
-             the new animation",
-        );
+        return Err(Unconfirmed.into());
     }
     console.line("Done");
     Ok(())
@@ -912,7 +926,7 @@ mod tests {
     }
 
     #[test]
-    fn a_finish_the_keyboard_doesnt_confirm_is_a_warning() {
+    fn a_finish_the_keyboard_doesnt_confirm_isnt_done_and_isnt_success() {
         let path = temp_gif("finish", 1);
         let fake = FakeTransport::with_auto_ack();
         fake.queue_feature_reply(&config_reply(true));
@@ -922,10 +936,8 @@ mod tests {
         let screen = command(&["screen", path.to_str().unwrap()]);
         let (result, outcome) = on_device(&mut device, &screen);
         std::fs::remove_file(&path).unwrap();
-        result.unwrap();
-        assert!(outcome.err.contains("warning: "), "{}", outcome.err);
-        assert!(outcome.err.contains("finish"), "{}", outcome.err);
-        assert!(outcome.out.ends_with("Done\n"), "{}", outcome.out);
+        assert!(result.unwrap_err().is::<Unconfirmed>());
+        assert!(!outcome.out.contains("Done"), "{}", outcome.out);
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! `unkludge`, the command-line tool. Exits with 0 on success and 1 on an error, which goes to
-//! stderr.
+//! stderr. An upload that the keyboard took but didn't confirm the end of exits with 2, with a warning
+//! on stderr, as it's neither of those.
 
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
@@ -13,7 +14,7 @@ use unkludge_protocol::{Device, Error, model};
 use unkludge_shared::{device_lock, report_lines, rk_app};
 
 use crate::args::{Cli, Command, KeyboardCommand};
-use crate::commands::{Failure, Options};
+use crate::commands::{Failure, Options, Unconfirmed};
 use crate::output::Console;
 use crate::packets::Observer;
 
@@ -23,6 +24,9 @@ mod dry_run;
 mod interrupt;
 mod output;
 mod packets;
+
+/// See the top of this file.
+const EXIT_UNCONFIRMED: u8 = 2;
 
 fn main() -> ExitCode {
     let cli = match Cli::try_parse() {
@@ -36,12 +40,21 @@ fn main() -> ExitCode {
             };
         }
     };
-    match run(&cli) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            let _ = writeln!(io::stderr(), "error: {error}");
-            ExitCode::FAILURE
+    let (line, code) = ending(&run(&cli));
+    if let Some(line) = line {
+        let _ = writeln!(io::stderr(), "{line}");
+    }
+    ExitCode::from(code)
+}
+
+/// What to say last, and the exit code.
+fn ending(result: &Result<(), Failure>) -> (Option<String>, u8) {
+    match result {
+        Ok(()) => (None, 0),
+        Err(error) if error.is::<Unconfirmed>() => {
+            (Some(format!("warning: {error}")), EXIT_UNCONFIRMED)
         }
+        Err(error) => (Some(format!("error: {error}")), 1),
     }
 }
 
@@ -143,4 +156,26 @@ fn drive<T: Transport>(
         Console::with_stdio(|console| observer.finish(console));
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_way_of_ending_has_its_exit_code() {
+        assert_eq!(ending(&Ok(())), (None, 0));
+        let (line, code) = ending(&Err("it broke".into()));
+        assert_eq!(line.as_deref(), Some("error: it broke"));
+        assert_eq!(code, 1);
+    }
+
+    #[test]
+    fn an_upload_nobody_confirmed_is_neither_a_success_nor_an_error() {
+        let (line, code) = ending(&Err(Unconfirmed.into()));
+        let line = line.unwrap();
+        assert!(line.starts_with("warning: "), "{line}");
+        assert!(line.contains("finish"), "{line}");
+        assert_eq!(code, 2);
+    }
 }

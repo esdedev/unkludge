@@ -173,6 +173,8 @@ unkludge [--pid <HEX>] [--dry-run] [--timing] [--verbose] <COMMAND>
 
 With more than 6 frames and a delay shorter than the model's draw time (180 ms on the S85 ES), only some of the frames get sent. The output says how many. Ctrl+C during `screen` asks the keyboard to abort, which can take a few seconds if it has stalled. A second Ctrl+C quits at once and leaves the upload unfinished.
 
+`unkludge` exits with 0 when all went well and 1 on an error. If the keyboard took every frame of an upload but didn't acknowledge the finish, it prints a warning and exits with 2: the keyboard may or may not show the new animation.
+
 Options for every command:
 
 | Option | What it does |

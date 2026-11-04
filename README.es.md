@@ -173,6 +173,8 @@ Opciones de `screen`:
 
 Con más de 6 fotogramas y un tiempo por fotograma menor que el tiempo de dibujo del modelo (180 ms en el S85 ES), solo se envía parte de los fotogramas. La salida dice cuántos. Ctrl+C durante `screen` le pide al teclado que aborte, lo que puede tardar unos segundos si se ha quedado parado. Un segundo Ctrl+C sale al momento y deja la subida a medias.
 
+`unkludge` termina con 0 si todo ha ido bien y con 1 si hay un error. Si el teclado recibió todos los fotogramas de una subida pero no confirmó el final, imprime un aviso y termina con 2: puede que el teclado muestre la animación nueva o puede que no.
+
 Opciones de todos los comandos:
 
 | Opción | Qué hace |

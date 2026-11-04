@@ -107,6 +107,8 @@ impl Model {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     /// The udev rule grants access to these models and no others, so it has to agree with the table.
     #[test]
     fn the_udev_rule_lists_the_supported_models_and_no_others() {
@@ -124,14 +126,12 @@ mod tests {
             })
             .collect();
         in_rule.sort();
-        let mut in_table: Vec<String> = super::supported()
+        let mut in_table: Vec<String> = supported()
             .map(|model| format!("{:04x}", model.pid))
             .collect();
         in_table.sort();
         assert_eq!(in_rule, in_table);
     }
-
-    use super::*;
 
     #[test]
     fn all_218_models_are_in_the_table() {
