@@ -69,8 +69,10 @@ component FocusArea {
         by-keyboard = true;
     }
 
+    // Not `enabled` on the scope for this: one that's disabled doesn't notice losing the focus, and
+    // would go on showing its ring for good. What it's for checks by itself whether it can be used.
     scope := FocusScope {
-        enabled: root.enabled;
+        focus-on-tab-navigation: root.enabled;
         focus-on-click: false;
         focus-gained(reason) => {
             if (reason == FocusReason.tab-navigation) {
@@ -136,6 +138,8 @@ export component Pressable {
     }
 
     focus := FocusArea {
+        width: 100%;
+        height: 100%;
         enabled: root.usable;
         ring-radius: root.ring-radius;
         key(event) => {
@@ -375,10 +379,14 @@ export component Slider {
     }
     focus := FocusArea {
         y: root.track-y - 12px;
+        width: 100%;
         height: 24px;
         enabled: root.usable;
         // These are meant to repeat, and the worker waits for them to settle before writing.
         key(event) => {
+            if (!root.usable) {
+                return reject;
+            }
             if (event.text == Key.RightArrow || event.text == Key.UpArrow) {
                 self.keyboard-used();
                 root.nudged(1);

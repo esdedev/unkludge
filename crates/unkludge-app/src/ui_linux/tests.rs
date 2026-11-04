@@ -22,7 +22,7 @@ use slint::{Color, ComponentHandle, Global, LogicalPosition, PhysicalSize, Share
 use super::app::{
     App, press, set_app, take_app, wanted_preview_timer, wire_for_tests as wire, with_app,
 };
-use super::{Actions, AppWindow, DialogKind, Palette, View, shot};
+use super::{Actions, AppWindow, Area, DialogKind, Palette, View, shot};
 use crate::args::DemoArgs;
 use crate::i18n::t;
 use crate::session::Session;

@@ -196,3 +196,94 @@ fn a_file_being_chosen_does_nothing_when_the_user_changes_their_mind() {
     assert!(!View::get(&fixture.window).get_screen().has_file);
     assert_eq!(View::get(&fixture.window).get_dialog(), DialogKind::None);
 }
+
+/// Everything named `labels` lies inside the dialog's card, which is 460 wide in the middle.
+fn on_the_card(fixture: &Fixture, labels: &[&str]) {
+    let (left, right) = ((900.0 - 460.0) / 2.0, (900.0 + 460.0) / 2.0);
+    for label in labels {
+        let found = labelled(&fixture.window, label);
+        assert!(!found.is_empty(), "{label}");
+        for element in found {
+            let (at, size) = (element.absolute_position(), element.size());
+            assert!(
+                at.x >= left && at.x + size.width <= right,
+                "{label}: {at:?} {size:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn what_a_dialog_has_stays_on_its_card() {
+    let fixture = Fixture::connected(None);
+    let linux = &t().linux;
+    with_app(|app| app.open_color_dialog(false));
+    on_the_card(
+        &fixture,
+        &[
+            linux.red,
+            linux.blue,
+            linux.color_code,
+            linux.use_color,
+            t().cancel,
+        ],
+    );
+    with_app(App::dialog_dismissed);
+    with_app(|app| app.file_picked(crate::ui_linux::dialogs::Picked::NoProgram, false));
+    on_the_card(&fixture, &[linux.path_field, linux.open_file, t().cancel]);
+    with_app(App::dialog_dismissed);
+    with_app(|app| app.open_dialog(DialogKind::Note, false));
+    on_the_card(&fixture, &[linux.ok]);
+}
+
+#[test]
+fn the_focus_ring_goes_around_what_has_the_focus() {
+    let fixture = Fixture::connected(None);
+    let areas: Vec<ElementHandle> =
+        ElementHandle::find_by_element_type_name(&fixture.window, "FocusArea").collect();
+    assert!(areas.len() > 25, "{}", areas.len());
+    for area in areas {
+        let size = area.size();
+        assert!(size.width > 10.0 && size.height > 10.0, "{size:?}");
+    }
+}
+
+/// The pixels of a part of the window.
+fn pixels_of(fixture: &Fixture, area: &Area) -> Vec<slint::Rgba8Pixel> {
+    let picture = fixture.window.window().take_snapshot().unwrap();
+    let width = picture.width() as usize;
+    let (x0, y0) = (area.x as usize - 4, area.y as usize - 4);
+    let (x1, y1) = (x0 + area.w as usize + 8, y0 + area.h as usize + 8);
+    (y0..y1)
+        .flat_map(|y| picture.as_slice()[y * width + x0..y * width + x1].to_vec())
+        .collect()
+}
+
+#[test]
+fn losing_the_focus_to_a_dialog_doesnt_leave_a_ring_behind() {
+    let fixture = Fixture::connected(None);
+    let file = View::get(&fixture.window).get_frame().file;
+    let plain = pixels_of(&fixture, &file);
+    fixture.window.invoke_focus_choose_file();
+    assert_ne!(pixels_of(&fixture, &file), plain, "the ring shows");
+    with_app(|app| app.open_color_dialog(false));
+    with_app(App::dialog_dismissed);
+    assert_eq!(pixels_of(&fixture, &file), plain);
+}
+
+#[test]
+fn moving_on_from_what_an_upload_disabled_doesnt_leave_a_ring_behind() {
+    let fixture = Fixture::connected(Some(2));
+    let view = View::get(&fixture.window);
+    let chip = slint::Model::row_data(&view.get_sleeps(), 3).unwrap().area;
+    let plain = pixels_of(&fixture, &chip);
+    // By keyboard to that chip, which the upload then disables under the focus.
+    let frame = view.get_frame();
+    fixture.click(frame.clock.x + frame.clock.w - 40.0, frame.clock.y + 20.0);
+    fixture.key(Key::Backtab);
+    assert_ne!(pixels_of(&fixture, &chip), plain, "the ring shows");
+    with_app(|app| app.upload(false));
+    fixture.key(Key::Tab);
+    fixture.say(Event::UploadCancelled);
+    assert_eq!(pixels_of(&fixture, &chip), plain);
+}

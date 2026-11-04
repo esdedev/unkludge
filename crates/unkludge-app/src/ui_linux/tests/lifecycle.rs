@@ -335,6 +335,22 @@ fn a_file_being_asked_for_leaves_nothing_usable_behind_it() {
 }
 
 #[test]
+fn a_slider_that_has_the_focus_doesnt_move_while_a_file_is_being_asked_for() {
+    let fixture = Fixture::connected(None);
+    let frame = View::get(&fixture.window).get_frame();
+    fixture.click(frame.speed.x + 8.0, frame.speed.y + frame.speed.h - 11.0);
+    with_app(|app| {
+        app.begin_choosing();
+    });
+    let before = fixture.sent().len();
+    fixture.key(Key::RightArrow);
+    assert_eq!(fixture.sent().len(), before, "{:?}", fixture.sent());
+    with_app(|app| app.file_picked(crate::ui_linux::dialogs::Picked::Cancelled, false));
+    fixture.key(Key::RightArrow);
+    assert_eq!(fixture.sent().last(), Some(&"adjust lights"));
+}
+
+#[test]
 fn a_file_chosen_gets_loaded() {
     let fixture = Fixture::connected(None);
     with_app(|app| {

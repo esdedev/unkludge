@@ -8,6 +8,8 @@ import { Palette, Pressable, Slider, TextButton } from "parts.slint";
 component DialogFrame {
     in property <string> title;
     in property <length> card-h;
+    // What's inside the card goes by this, as its parent in here is this whole frame.
+    out property <length> card-w: 460px;
     x: 0;
     y: 0;
     width: 100%;
@@ -30,7 +32,7 @@ component DialogFrame {
         Rectangle {
             x: (root.width - self.width) / 2;
             y: (root.height - self.height) / 2;
-            width: 460px;
+            width: root.card-w;
             height: root.card-h;
             background: Palette.card;
             border-radius: 14px;
@@ -134,7 +136,7 @@ component ColorPicker inherits DialogFrame {
     if root.warned: Text {
         x: 20px;
         y: 42px;
-        width: parent.width - 40px;
+        width: root.card-w - 40px;
         height: 64px;
         text: View.color-dialog.warning;
         color: Palette.amber;
@@ -191,7 +193,7 @@ component ColorPicker inherits DialogFrame {
         }
     }
     TextButton {
-        x: parent.width - 20px - 150px - 10px - 100px;
+        x: root.card-w - 20px - 150px - 10px - 100px;
         y: root.top + 154px;
         width: 100px;
         height: 36px;
@@ -202,7 +204,7 @@ component ColorPicker inherits DialogFrame {
         }
     }
     TextButton {
-        x: parent.width - 20px - 150px;
+        x: root.card-w - 20px - 150px;
         y: root.top + 154px;
         width: 150px;
         height: 36px;
@@ -226,7 +228,7 @@ component PathEntry inherits DialogFrame {
     Text {
         x: 20px;
         y: 44px;
-        width: parent.width - 40px;
+        width: root.card-w - 40px;
         height: 36px;
         text: View.t.path-hint;
         color: Palette.muted;
@@ -236,7 +238,7 @@ component PathEntry inherits DialogFrame {
     field := Field {
         x: 20px;
         y: 88px;
-        width: parent.width - 40px;
+        width: root.card-w - 40px;
         height: 34px;
         name: View.t.path-field;
         enabled: View.dialog == DialogKind.path;
@@ -245,7 +247,7 @@ component PathEntry inherits DialogFrame {
         }
     }
     TextButton {
-        x: parent.width - 20px - 100px - 10px - 100px;
+        x: root.card-w - 20px - 100px - 10px - 100px;
         y: 142px;
         width: 100px;
         height: 36px;
@@ -256,7 +258,7 @@ component PathEntry inherits DialogFrame {
         }
     }
     TextButton {
-        x: parent.width - 20px - 100px;
+        x: root.card-w - 20px - 100px;
         y: 142px;
         width: 100px;
         height: 36px;
@@ -280,7 +282,7 @@ component TrayNote inherits DialogFrame {
     Text {
         x: 20px;
         y: 44px;
-        width: parent.width - 40px;
+        width: root.card-w - 40px;
         height: 64px;
         text: View.t.note-text;
         color: Palette.silver;
@@ -288,7 +290,7 @@ component TrayNote inherits DialogFrame {
         wrap: word-wrap;
     }
     ok := TextButton {
-        x: parent.width - 20px - 100px;
+        x: root.card-w - 20px - 100px;
         y: 116px;
         width: 100px;
         height: 36px;
