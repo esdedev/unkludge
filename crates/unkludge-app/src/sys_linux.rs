@@ -453,15 +453,16 @@ mod tests {
     }
 
     #[test]
-    fn the_rule_is_the_one_that_gives_access_to_this_vendor() {
+    fn the_rule_is_the_packaged_one_and_grants_by_vendor_and_product() {
+        // The model table's own test checks which products.
         let lines: Vec<&str> = UDEV_RULE
             .lines()
             .filter(|line| !line.starts_with('#') && !line.is_empty())
             .collect();
-        assert_eq!(
-            lines,
-            [r#"KERNEL=="hidraw*", ATTRS{idVendor}=="258a", TAG+="uaccess""#]
-        );
+        assert_eq!(lines.len(), 29);
+        assert!(lines.contains(
+            &r#"KERNEL=="hidraw*", ATTRS{idVendor}=="258a", ATTRS{idProduct}=="0265", TAG+="uaccess""#
+        ));
         assert!(!UDEV_RULE.contains('\r'));
     }
 
@@ -469,7 +470,7 @@ mod tests {
     fn the_root_script_is_fixed_text() {
         assert!(!UDEV_RULE.contains('\''), "the rule goes in single quotes");
         let script = grant_script();
-        assert!(script.contains(r#"ATTRS{idVendor}=="258a""#));
+        assert!(script.contains(r#"ATTRS{idVendor}=="258a", ATTRS{idProduct}=="0265""#));
         assert!(script.contains("> /etc/udev/rules.d/70-unkludge.rules &&"));
         assert!(
             !script.contains('$') && !script.contains('`'),

@@ -126,13 +126,13 @@ sudo install -m 0644 packaging/linux/70-unkludge.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=hidraw --action=change
 ```
 
-**Hasta dónde llega la regla.** Es una sola línea:
+**Hasta dónde llega la regla.** Tiene una línea por cada uno de los 29 modelos compatibles, como esta:
 
 ```
-KERNEL=="hidraw*", ATTRS{idVendor}=="258a", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="258a", ATTRS{idProduct}=="0265", TAG+="uaccess"
 ```
 
-Cubre todos los nodos hidraw de todos los dispositivos con el ID de fabricante USB `258A`, sean de la marca o el modelo que sean, y no solo la colección que usa Unkludge. Eso incluye las interfaces por las que pasan las pulsaciones de teclas. Con la regla instalada, cualquier programa que se ejecute con el usuario que esté delante del ordenador puede abrir esos nodos, no solo Unkludge. Unkludge abre solo el nodo que necesita e ignora lo que llegue por él que no sea una confirmación. En Linux un nodo es la interfaz entera, así que lo que lo mantiene alejado del resto de esa interfaz es la lista de comandos que envía.
+Cubre todos los nodos hidraw de esos modelos, y no solo la colección que usa Unkludge. Eso incluye las interfaces por las que pasan las pulsaciones de teclas. No elige interfaces porque en qué interfaz están las colecciones que necesita Unkludge solo se sabe en el S85 ES, y la segunda colección de la familia N99 no se conoce en absoluto. Los demás dispositivos con el ID de fabricante `258A` se quedan fuera. Con la regla instalada, cualquier programa que se ejecute con el usuario que esté delante del ordenador puede abrir esos nodos, no solo Unkludge. Unkludge abre solo el nodo que necesita e ignora lo que llegue por él que no sea una confirmación. En Linux un nodo es la interfaz entera, así que lo que lo mantiene alejado del resto de esa interfaz es la lista de comandos que envía.
 
 Para quitar la regla, borra ese archivo y ejecuta la segunda orden de arriba.
 

@@ -126,13 +126,13 @@ sudo install -m 0644 packaging/linux/70-unkludge.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=hidraw --action=change
 ```
 
-**What the rule reaches.** The rule is one line:
+**What the rule reaches.** The rule has one line for each of the 29 supported models, such as:
 
 ```
-KERNEL=="hidraw*", ATTRS{idVendor}=="258a", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="258a", ATTRS{idProduct}=="0265", TAG+="uaccess"
 ```
 
-It covers every hidraw node of every device with USB vendor ID `258A`, whatever its brand or model, not only the collection Unkludge uses. That includes the interfaces that carry key presses. While the rule is installed, any program running as the user at the computer can open those nodes, not just Unkludge. Unkludge opens only the node it needs and ignores any input there that isn't an ack. On Linux a node is the whole interface, so the list of commands it sends is what keeps it away from the rest of that interface.
+It covers every hidraw node of those models, not only the collection Unkludge uses. That includes the interfaces that carry key presses. It doesn't pick interfaces because which interface holds the collections Unkludge needs is only known on the S85 ES, and the second collection of the N99 family isn't known at all. Other devices with vendor ID `258A` are left out. While the rule is installed, any program running as the user at the computer can open those nodes, not just Unkludge. Unkludge opens only the node it needs and ignores any input there that isn't an ack. On Linux a node is the whole interface, so the list of commands it sends is what keeps it away from the rest of that interface.
 
 To remove the rule, delete that file and run the second command above.
 

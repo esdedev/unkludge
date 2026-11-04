@@ -107,6 +107,30 @@ impl Model {
 
 #[cfg(test)]
 mod tests {
+    /// The udev rule grants access to these models and no others, so it has to agree with the table.
+    #[test]
+    fn the_udev_rule_lists_the_supported_models_and_no_others() {
+        let rule = include_str!("../../../packaging/linux/70-unkludge.rules");
+        let mut in_rule: Vec<String> = rule
+            .lines()
+            .filter(|line| !line.starts_with('#') && !line.is_empty())
+            .map(|line| {
+                line.strip_prefix(
+                    r#"KERNEL=="hidraw*", ATTRS{idVendor}=="258a", ATTRS{idProduct}==""#,
+                )
+                .and_then(|rest| rest.strip_suffix(r#"", TAG+="uaccess""#))
+                .unwrap_or_else(|| panic!("a line of another shape: {line}"))
+                .to_string()
+            })
+            .collect();
+        in_rule.sort();
+        let mut in_table: Vec<String> = super::supported()
+            .map(|model| format!("{:04x}", model.pid))
+            .collect();
+        in_table.sort();
+        assert_eq!(in_rule, in_table);
+    }
+
     use super::*;
 
     #[test]
