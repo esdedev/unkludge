@@ -8,6 +8,17 @@ fn the_language_chooses_the_table() {
 }
 
 #[test]
+fn a_screen_reader_gets_the_caveat_on_the_chip_it_is_about() {
+    for table in [&EN, &ES] {
+        let name = table.sleep_chip_name(SleepTime::NoSleep);
+        assert!(name.contains(table.no_sleep), "{name}");
+        assert!(name.contains(table.sleep_caveat), "{name}");
+        let other = table.sleep_chip_name(SleepTime::Min5);
+        assert!(!other.contains(table.sleep_caveat), "{other}");
+    }
+}
+
+#[test]
 fn the_system_language_gives_one_of_the_tables() {
     let table = t().no_keyboard;
     assert!(table == EN.no_keyboard || table == ES.no_keyboard);

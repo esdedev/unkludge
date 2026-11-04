@@ -278,14 +278,12 @@ impl App {
             R::new(area.x0, area.y0, area.x0 + 120.0, area.y0 + 17.0),
             if enabled { SILVER } else { DIM },
         );
-        if let SleepSetting::Unknown(raw) = sleep {
-            d.text(
-                &t().sleep_other(raw),
-                &self.fonts.small_r,
-                R::new(area.x0 + 120.0, area.y0, area.x1, area.y0 + 17.0),
-                MUTED,
-            );
-        }
+        d.text(
+            &self.state.sleep_note(),
+            &self.fonts.small_r,
+            R::new(area.x0 + 120.0, area.y0, area.x1, area.y0 + 17.0),
+            MUTED,
+        );
         let row = (area.x0, area.y0, area.x1, area.y1);
         for (choice, part) in SleepTime::ALL
             .iter()
@@ -303,7 +301,7 @@ impl App {
             self.item(
                 part.into(),
                 hit,
-                t().labelled(t().sleep, label),
+                t().sleep_chip_name(*choice),
                 Role::Choice,
                 on,
                 enabled,

@@ -1,7 +1,7 @@
 //! What the state reads as, for an interface to show. Both interfaces show the same words, so which
 //! words follow from what is decided here.
 
-use unkludge_protocol::lighting::LightMode;
+use unkludge_protocol::lighting::{LightMode, SleepSetting};
 use unkludge_protocol::screen::Fit;
 
 use super::{State, Upload, percent};
@@ -51,6 +51,16 @@ impl State {
             Some(LightMode::Custom) => t().custom_mode_note,
             Some(LightMode::Unknown(_)) => t().unknown_effect_note,
             _ => "",
+        }
+    }
+
+    /// What goes next to the sleep times' name: a value that isn't one of them if the keyboard has
+    /// one, and otherwise what's not known about the last of them, before anyone chooses it.
+    pub fn sleep_note(&self) -> String {
+        match self.light_controls().sleep {
+            Some(SleepSetting::Unknown(raw)) => t().sleep_other(raw),
+            Some(SleepSetting::Known(_)) => t().sleep_caveat.to_string(),
+            None => String::new(),
         }
     }
 
@@ -129,6 +139,18 @@ mod tests {
         let model = model::find(0x0265).unwrap();
         state.apply(Event::Connected { model }, &mut settings);
         state
+    }
+
+    #[test]
+    fn the_caveat_about_no_sleep_shows_before_anyone_chooses_it() {
+        // `with_mode` gives a sleep value that isn't one of the choices, which comes first.
+        let mut state = with_mode(LightMode::Off);
+        assert_eq!(state.sleep_note(), t().sleep_other(0));
+        if let Some(lighting) = &mut state.lighting {
+            lighting.sleep = SleepSetting::Known(unkludge_protocol::config::SleepTime::Min5);
+        }
+        assert_eq!(state.sleep_note(), t().sleep_caveat);
+        assert_eq!(State::default().sleep_note(), "");
     }
 
     fn with_mode(mode: LightMode) -> State {

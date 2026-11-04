@@ -277,7 +277,7 @@ pub fn sleeps(state: &State, frame: &layout::Frame) -> Vec<Choice> {
             Choice {
                 area: area(part),
                 label: text(label),
-                name: t().labelled(t().sleep, label).into(),
+                name: t().sleep_chip_name(*choice).into(),
                 on: sleep == SleepSetting::Known(*choice),
             }
         })
@@ -313,10 +313,7 @@ pub fn lights(state: &State) -> LightsView {
         has_rainbow: has_effect && controls.rainbow,
         rainbow_on: controls.color == Some(ColorSetting::Rainbow),
         has_sleep: controls.sleep.is_some(),
-        sleep_other: match controls.sleep {
-            Some(SleepSetting::Unknown(raw)) => t().sleep_other(raw).into(),
-            _ => SharedString::new(),
-        },
+        sleep_note: state.sleep_note().into(),
     }
 }
 
