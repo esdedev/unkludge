@@ -96,3 +96,9 @@ cargo run -p kbini2toml -- "C:\Program Files (x86)\RK Keyboard Software" data/mo
 ```
 
 A model already marked `tested` stays that way.
+
+[docs/MODELS.md](docs/MODELS.md) is generated from that data, and a test fails if it's out of date. After changing a model, regenerate it:
+
+```
+cargo run -p unkludge-cli -- models --markdown > docs/MODELS.md
+```

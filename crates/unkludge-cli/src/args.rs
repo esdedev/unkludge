@@ -50,7 +50,14 @@ pub enum Command {
     #[command(flatten)]
     Keyboard(KeyboardCommand),
     /// List the supported models
-    Models,
+    Models(ModelsArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ModelsArgs {
+    /// Print the list as Markdown, which is what docs/MODELS.md holds
+    #[arg(long)]
+    pub markdown: bool,
 }
 
 /// The commands that need a keyboard.
@@ -430,6 +437,18 @@ mod tests {
             assert_eq!(cli.pid, Some(0x0265));
             assert!(cli.dry_run && cli.timing && cli.verbose);
         }
+    }
+
+    #[test]
+    fn models_can_ask_for_markdown() {
+        let Command::Models(plain) = parse(&["models"]).unwrap().command else {
+            panic!("not models");
+        };
+        assert!(!plain.markdown);
+        let Command::Models(markdown) = parse(&["models", "--markdown"]).unwrap().command else {
+            panic!("not models");
+        };
+        assert!(markdown.markdown);
     }
 
     #[test]

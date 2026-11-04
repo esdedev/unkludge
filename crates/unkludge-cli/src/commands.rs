@@ -350,7 +350,7 @@ mod tests {
         let cli = Cli::try_parse_from(std::iter::once("unkludge").chain(args.iter().copied()));
         match cli.unwrap().command {
             Command::Keyboard(command) => command,
-            Command::Models => panic!("not a keyboard command"),
+            Command::Models(_) => panic!("not a keyboard command"),
         }
     }
 

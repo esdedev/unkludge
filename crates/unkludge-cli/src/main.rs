@@ -48,10 +48,13 @@ fn main() -> ExitCode {
 fn run(cli: &Cli) -> Result<(), Failure> {
     cli.check()?;
     match &cli.command {
-        Command::Models => {
-            Console::with_stdio(|console| {
-                console.lines(output::models_table(model::supported()));
-            });
+        Command::Models(args) => {
+            let lines = if args.markdown {
+                output::models_markdown(model::supported())
+            } else {
+                output::models_table(model::supported())
+            };
+            Console::with_stdio(|console| console.lines(lines));
             Ok(())
         }
         Command::Keyboard(command) if cli.dry_run => run_dry(cli, command),

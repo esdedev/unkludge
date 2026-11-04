@@ -7,3 +7,4 @@ packaging/aur/** text eol=lf
 packaging/deb/* text eol=lf
 # Generated: regenerating on any OS must give no diff
 data/models/*.toml text eol=lf
+docs/MODELS.md text eol=lf
