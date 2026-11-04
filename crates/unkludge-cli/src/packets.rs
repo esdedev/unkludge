@@ -6,14 +6,13 @@ use std::time::{Duration, Instant};
 use unkludge_protocol::device::{Collection, PacketEvent};
 use unkludge_shared::report_lines::hex;
 
+use unkludge_protocol::HEADER_LEN;
+#[cfg(test)]
+use unkludge_protocol::command_byte::SCREEN_CONTROL;
+use unkludge_protocol::command_byte::SCREEN_DATA;
+
 use crate::output::Console;
 
-/// The command byte of screen data chunks.
-pub const SCREEN_DATA: u8 = 0x0C;
-/// The command byte of screen control reports.
-pub const SCREEN_CONTROL: u8 = 0x0D;
-
-const HEADER_LEN: usize = 8;
 /// How much of a screen chunk gets shown, header included, unless it's asked for in full.
 const CHUNK_PREVIEW: usize = 24;
 

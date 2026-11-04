@@ -4,15 +4,14 @@
 use std::cell::Cell;
 use std::time::Duration;
 
-use unkludge_protocol::config::CONFIG_LEN;
+use unkludge_protocol::command_byte::{CONFIG_READ, SCREEN_CONTROL, SCREEN_DATA};
+use unkludge_protocol::config::{CONFIG_LEN, END_MARKER_BYTES};
 use unkludge_protocol::model::Model;
 use unkludge_protocol::transport::Transport;
-use unkludge_protocol::{Device, Error, REPORT_ID};
+use unkludge_protocol::{Device, Error, HEADER_LEN, REPORT_ID};
 
-use crate::packets::{SCREEN_CONTROL, SCREEN_DATA};
-
-const CONFIG_READ: u8 = 0x84;
-const CONFIG_READ_HEADER: [u8; 8] = [REPORT_ID, CONFIG_READ, 0, 0, 1, 0, CONFIG_LEN as u8, 0];
+const CONFIG_READ_HEADER: [u8; HEADER_LEN] =
+    [REPORT_ID, CONFIG_READ, 0, 0, 1, 0, CONFIG_LEN as u8, 0];
 const ACK_LEN: usize = 8;
 
 /// Takes reports, answers as a keyboard would and doesn't wait.
@@ -42,7 +41,7 @@ impl Transport for DryRunTransport {
         buf.fill(0);
         buf[..CONFIG_READ_HEADER.len()].copy_from_slice(&CONFIG_READ_HEADER);
         let end = CONFIG_READ_HEADER.len() + CONFIG_LEN;
-        buf[end - 2..end].copy_from_slice(&[0x5A, 0xA5]);
+        buf[end - 2..end].copy_from_slice(&END_MARKER_BYTES);
         Ok(buf.len())
     }
 

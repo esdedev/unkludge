@@ -5,12 +5,11 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use unkludge_protocol::command_byte::SCREEN_DATA;
 use unkludge_protocol::device::PacketEvent;
 
 use super::{Emitter, Event};
 
-/// The command byte of screen data chunks.
-const SCREEN_DATA: u8 = 0x0C;
 /// The time per chunk to assume until one has been measured: uploads were measured at 5 to 6 chunks
 /// a second on an S85 ES.
 pub(super) const DEFAULT_CHUNK_TIME: Duration = Duration::from_millis(180);

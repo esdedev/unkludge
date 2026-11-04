@@ -22,12 +22,12 @@ use crate::{Device, Error};
 /// Size of the config block.
 pub const CONFIG_LEN: usize = 128;
 
-const CUSTOM_FLAG: usize = 0x09;
-const EFFECT: usize = 0x0A;
-const SLEEP: usize = 0x18;
-const EFFECT_SETTINGS: usize = 0x38;
-const END_MARKER: usize = 0x7E;
-const END_MARKER_BYTES: [u8; 2] = [0x5A, 0xA5];
+pub const CUSTOM_FLAG: usize = 0x09;
+pub const EFFECT: usize = 0x0A;
+pub const SLEEP: usize = 0x18;
+pub const EFFECT_SETTINGS: usize = 0x38;
+pub const END_MARKER: usize = 0x7E;
+pub const END_MARKER_BYTES: [u8; 2] = [0x5A, 0xA5];
 
 /// The effect number of the custom mode, which this version doesn't offer but must recognize.
 const CUSTOM_EFFECT: u8 = 18;

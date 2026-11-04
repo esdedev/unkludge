@@ -14,18 +14,16 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use unkludge_protocol::config::CONFIG_LEN;
+use unkludge_protocol::command_byte::{CONFIG_READ, CONFIG_WRITE, SCREEN_CONTROL, SCREEN_DATA};
+use unkludge_protocol::config::{
+    CONFIG_LEN, CUSTOM_FLAG, EFFECT, EFFECT_SETTINGS, END_MARKER, END_MARKER_BYTES, SLEEP,
+};
 use unkludge_protocol::model::Model;
 use unkludge_protocol::transport::Transport;
-use unkludge_protocol::{Device, Error, REPORT_ID};
+use unkludge_protocol::{Device, Error, HEADER_LEN, REPORT_ID};
 
 use crate::worker::Event;
 
-const CONFIG_WRITE: u8 = 0x04;
-const CONFIG_READ: u8 = 0x84;
-const SCREEN_DATA: u8 = 0x0C;
-const SCREEN_CONTROL: u8 = 0x0D;
-const HEADER_LEN: usize = 8;
 const ACK_LEN: usize = 8;
 const CONFIG_READ_HEADER: [u8; HEADER_LEN] =
     [REPORT_ID, CONFIG_READ, 0, 0, 1, 0, CONFIG_LEN as u8, 0];
@@ -34,13 +32,6 @@ const LONGEST_PAUSE: Duration = Duration::from_millis(2);
 const STALL_SETTLES: Duration = Duration::from_millis(250);
 /// An older model, which is known and not supported.
 const UNSUPPORTED_PID: u16 = 0x002A;
-
-/// Byte offsets of the config block, as in the protocol's docs.
-const EFFECT: usize = 0x0A;
-const CUSTOM_FLAG: usize = 0x09;
-const SLEEP: usize = 0x18;
-const EFFECT_SETTINGS: usize = 0x38;
-const END_MARKER: usize = 0x7E;
 
 /// What the demo can be asked to show.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -249,7 +240,7 @@ fn starting_config(model: &Model, state: DemoState) -> [u8; CONFIG_LEN] {
     } else {
         0x14
     };
-    bytes[END_MARKER..].copy_from_slice(&[0x5A, 0xA5]);
+    bytes[END_MARKER..].copy_from_slice(&END_MARKER_BYTES);
     bytes
 }
 

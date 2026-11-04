@@ -5,7 +5,7 @@ use crate::Error;
 /// Size of every report sent, report ID included.
 pub const REPORT_LEN: usize = 520;
 /// Size of the header at the start of each report.
-pub(crate) const HEADER_LEN: usize = 8;
+pub const HEADER_LEN: usize = 8;
 /// Data bytes that fit in one report.
 pub(crate) const MAX_DATA: usize = REPORT_LEN - HEADER_LEN;
 /// Report ID of every report sent.
@@ -14,10 +14,24 @@ pub const REPORT_ID: u8 = 0x09;
 /// One report, ready to send.
 pub(crate) type Report = [u8; REPORT_LEN];
 
+/// The bytes that name each command, for whatever needs to recognise a report, as a dry run does.
+/// They're only numbers: nothing outside this crate can put one in a report or reach a transport.
+pub mod command_byte {
+    pub const CONFIG_WRITE: u8 = 0x04;
+    pub const PALETTES: u8 = 0x0A;
+    pub const CLOCK: u8 = 0x0B;
+    pub const SCREEN_DATA: u8 = 0x0C;
+    pub const SCREEN_CONTROL: u8 = 0x0D;
+    pub const PAIR_ID_READ: u8 = 0x82;
+    pub const CONFIG_READ: u8 = 0x84;
+}
+
 /// The commands this crate can send. These are the only ones that exist here: [`cmd::Cmd`] and
 /// [`cmd::ReadCmd`] can't be made from a byte outside this module, so no other command can reach
 /// a report. Writes and reads are separate types, so a read can't put a write on the wire.
 pub(crate) mod cmd {
+    use super::command_byte;
+
     /// A command that sends data to the keyboard.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(crate) struct Cmd(u8);
@@ -39,20 +53,20 @@ pub(crate) mod cmd {
     }
 
     /// Writes the 128-byte config block.
-    pub(crate) const CONFIG: Cmd = Cmd(0x04);
+    pub(crate) const CONFIG: Cmd = Cmd(command_byte::CONFIG_WRITE);
     /// Writes the effect palettes.
-    pub(crate) const PALETTES: Cmd = Cmd(0x0A);
+    pub(crate) const PALETTES: Cmd = Cmd(command_byte::PALETTES);
     /// Writes the clock.
-    pub(crate) const CLOCK: Cmd = Cmd(0x0B);
+    pub(crate) const CLOCK: Cmd = Cmd(command_byte::CLOCK);
     /// One chunk of screen image data.
-    pub(crate) const SCREEN_DATA: Cmd = Cmd(0x0C);
+    pub(crate) const SCREEN_DATA: Cmd = Cmd(command_byte::SCREEN_DATA);
     /// Starts, finishes or aborts a screen upload.
-    pub(crate) const SCREEN_CONTROL: Cmd = Cmd(0x0D);
+    pub(crate) const SCREEN_CONTROL: Cmd = Cmd(command_byte::SCREEN_CONTROL);
 
     /// Reads the config block.
-    pub(crate) const CONFIG_READ: ReadCmd = ReadCmd(0x84);
+    pub(crate) const CONFIG_READ: ReadCmd = ReadCmd(command_byte::CONFIG_READ);
     /// Reads the 6-byte identity used to pair a second collection with the keyboard.
-    pub(crate) const PAIR_ID_READ: ReadCmd = ReadCmd(0x82);
+    pub(crate) const PAIR_ID_READ: ReadCmd = ReadCmd(command_byte::PAIR_ID_READ);
 
     /// Every command byte above, for tests to check outgoing reports against.
     #[cfg(any(test, feature = "fake"))]

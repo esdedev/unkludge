@@ -12,7 +12,7 @@ pub mod transport;
 
 pub use device::Device;
 pub use error::Error;
-pub use packet::{REPORT_ID, REPORT_LEN};
+pub use packet::{HEADER_LEN, REPORT_ID, REPORT_LEN, command_byte};
 
 #[cfg(test)]
 mod allow_list_tests {
