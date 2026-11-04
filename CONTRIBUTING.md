@@ -13,7 +13,7 @@ Unkludge is unofficial and not affiliated with Royal Kludge.
 
 Every model in `unkludge models` starts as **experimental**, and most have never been tried with Unkludge. Owning one is the most useful thing you can bring.
 
-Close the RK app first (`DeviceDriver.exe`). It polls the keyboard and sends its own settings back to it, and `unkludge` warns if it finds it running.
+Close the RK app first (`DeviceDriver.exe`). It polls the keyboard and sends its own settings back to it, and `unkludge` warns if it finds it running. Quit Unkludge's own app too, if it's running: it keeps a lock on the keyboard while connected, and `unkludge` refuses until it's gone.
 
 To see what a command would send, without opening anything, add `--dry-run --pid <PID>`, such as `unkludge --dry-run --pid 0265 clock`. A dry run has no keyboard to read settings from, so it reads as if the lights were off: changing a brightness, speed or colour there also needs `--mode`.
 

@@ -4,6 +4,9 @@
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
+use std::time::Duration;
+
+use unkludge_shared::device_lock::{DeviceLock, Place};
 
 fn unkludge(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_unkludge"))
@@ -181,6 +184,48 @@ fn this_test_build_cant_open_a_keyboard() {
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
     assert!(stderr(&output).contains("error: "), "{}", stderr(&output));
+}
+
+/// The real lock, as the real app would hold it. If the app really is running here it has the lock
+/// already, and a command must refuse all the same.
+fn hold_the_lock() -> Option<DeviceLock> {
+    let place = Place::system().unwrap();
+    DeviceLock::take(&place, Duration::from_secs(5)).ok()
+}
+
+#[test]
+fn a_command_refuses_while_the_app_has_the_keyboard_and_says_to_quit_it() {
+    let _lock = hold_the_lock();
+    for args in [&["info"][..], &["light"][..], &["clock"][..]] {
+        let output = unkludge(args);
+        assert_eq!(output.status.code(), Some(1), "{args:?}");
+        assert!(output.stdout.is_empty(), "{args:?}");
+        let text = stderr(&output);
+        assert!(text.contains("quit it first"), "{args:?}: {text}");
+    }
+}
+
+#[test]
+fn a_report_says_the_keyboard_is_taken_and_still_succeeds() {
+    let _lock = hold_the_lock();
+    let output = unkludge(&["report"]);
+    assert_eq!(output.status.code(), Some(0));
+    let text = stdout(&output);
+    assert!(text.contains("Keyboard: couldn't open it: "), "{text}");
+    assert!(text.contains("quit it first"), "{text}");
+}
+
+#[test]
+fn a_dry_run_takes_no_lock() {
+    let _lock = hold_the_lock();
+    let output = unkludge(&["--dry-run", "--pid", "0265", "info"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+}
+
+#[test]
+fn listing_the_models_takes_no_lock() {
+    let _lock = hold_the_lock();
+    assert_eq!(unkludge(&["models"]).status.code(), Some(0));
 }
 
 #[test]

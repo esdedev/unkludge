@@ -11,6 +11,7 @@ use unkludge_protocol::lighting::{ColorChoice, ColorSetting, LightMode, ModeChoi
 use unkludge_protocol::model;
 use unkludge_protocol::screen::LoadOptions;
 use unkludge_protocol::transport::fake::{AckFault, FakeTransport};
+use unkludge_shared::device_lock::{DeviceLock, Place, open_locked_at};
 
 use super::timing::DEFAULT_CHUNK_TIME;
 use super::*;
@@ -143,6 +144,18 @@ impl Rig {
         fake.queue_feature_reply(&reply(&block()));
         rig.step(0);
         rig.drain();
+        rig
+    }
+
+    /// A keyboard opened as the real one is, with the lock first.
+    fn locked(fake: &FakeTransport, place: Place) -> Rig {
+        let mut rig = Rig::with_opens(VecDeque::new(), false, Arc::new(|| {}));
+        let fake = fake.clone();
+        rig.worker.open = Box::new(move || {
+            open_locked_at(&place, Duration::ZERO, || {
+                Device::new(fake.clone(), None, s85())
+            })
+        });
         rig
     }
 
@@ -371,6 +384,99 @@ fn a_keyboard_that_wont_open_is_told_once_per_error() {
     // Unplugged: the message has to go away.
     rig.step(4000);
     assert_eq!(rig.drain(), [Event::Disconnected]);
+}
+
+/// What another program sees. On Windows a mutex comes back to the thread that has it, so even here
+/// this asks from another thread.
+fn take_from_elsewhere(place: &Place) -> Result<(), Error> {
+    let place = place.clone();
+    thread::spawn(move || DeviceLock::take(&place, Duration::ZERO).map(drop))
+        .join()
+        .unwrap()
+}
+
+/// Another program holding the lock, until this is dropped.
+struct Holder {
+    let_go: Sender<()>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Holder {
+    fn new(place: &Place) -> Holder {
+        let place = place.clone();
+        let (held_tx, held) = channel();
+        let (let_go, wait) = channel::<()>();
+        let thread = thread::spawn(move || {
+            let lock = DeviceLock::take(&place, Duration::ZERO).unwrap();
+            held_tx.send(()).unwrap();
+            let _ = wait.recv();
+            drop(lock);
+        });
+        held.recv().unwrap();
+        Holder {
+            let_go,
+            thread: Some(thread),
+        }
+    }
+
+    fn let_go(mut self) {
+        let _ = self.let_go.send(());
+        self.thread.take().unwrap().join().unwrap();
+    }
+}
+
+#[test]
+fn the_worker_holds_the_lock_for_as_long_as_it_has_the_keyboard() {
+    let place = Place::scratch("worker-holds");
+    let fake = FakeTransport::new();
+    queue_reads(&fake, 1);
+    let mut rig = Rig::locked(&fake, place.clone());
+    rig.step(0);
+    assert!(rig.drain().contains(&Event::Connected { model: s85() }));
+    assert_eq!(take_from_elsewhere(&place), Err(Error::DeviceBusy));
+
+    // Polls don't let go of it.
+    queue_reads(&fake, 1);
+    rig.step(REFRESH_MS);
+    assert_eq!(take_from_elsewhere(&place), Err(Error::DeviceBusy));
+
+    fake.disconnect();
+    rig.step(2 * REFRESH_MS);
+    assert!(rig.drain().contains(&Event::Disconnected));
+    assert_eq!(take_from_elsewhere(&place), Ok(()));
+}
+
+#[test]
+fn a_keyboard_a_command_has_isnt_an_unplug_and_gets_looked_at_again() {
+    let place = Place::scratch("worker-busy");
+    let holder = Holder::new(&place);
+    let fake = FakeTransport::new();
+    let mut rig = Rig::locked(&fake, place);
+    rig.step(0);
+    assert_eq!(
+        rig.drain(),
+        [
+            Event::RkAppRunning(false),
+            Event::CannotOpen(Error::DeviceBusy)
+        ]
+    );
+    assert!(fake.sent().is_empty(), "nothing goes out without the lock");
+
+    // Told once, however long it lasts.
+    rig.step(2000);
+    assert_eq!(rig.drain(), []);
+    assert!(fake.sent().is_empty());
+
+    holder.let_go();
+    queue_reads(&fake, 1);
+    rig.step(4000);
+    assert_eq!(
+        rig.drain(),
+        [
+            Event::Connected { model: s85() },
+            Event::Lighting(current())
+        ]
+    );
 }
 
 #[test]

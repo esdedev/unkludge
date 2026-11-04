@@ -10,7 +10,7 @@ use clap::Parser;
 use unkludge_protocol::device::list_collections;
 use unkludge_protocol::transport::Transport;
 use unkludge_protocol::{Device, Error, model};
-use unkludge_shared::{report_lines, rk_app};
+use unkludge_shared::{device_lock, report_lines, rk_app};
 
 use crate::args::{Cli, Command, KeyboardCommand};
 use crate::commands::{Failure, Options};
@@ -85,7 +85,7 @@ fn run_on_keyboard(cli: &Cli, command: &KeyboardCommand) -> Result<(), Failure> 
         KeyboardCommand::Report => report_lines::host_lines(rk_app_running, &list_collections()),
         _ => Vec::new(),
     };
-    match Device::open(cli.pid) {
+    match device_lock::open_locked(device_lock::COMMAND_WAIT, || Device::open(cli.pid)) {
         Ok(device) => {
             if let KeyboardCommand::Screen(_) = command {
                 interrupt::install();

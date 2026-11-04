@@ -653,6 +653,7 @@ impl State {
             Link::Searching => Note::new(t().looking, Tone::Neutral),
             Link::Absent => Note::new(t().disconnected, Tone::Bad),
             Link::Blocked(Error::Unsupported(_)) => Note::new(t().unsupported_short, Tone::Warning),
+            Link::Blocked(Error::DeviceBusy) => Note::new(t().in_use_short, Tone::Warning),
             Link::Blocked(_) => Note::new(t().cannot_open_short, Tone::Bad),
             Link::Connected(_) => Note::new(t().connected, Tone::Good),
         }
@@ -679,6 +680,11 @@ impl State {
             Link::Blocked(Error::Unsupported(pid)) => view(
                 t().unsupported_title,
                 t().unsupported_detail(*pid),
+                Tone::Warning,
+            ),
+            Link::Blocked(Error::DeviceBusy) => view(
+                t().in_use_title,
+                t().in_use_detail.to_string(),
                 Tone::Warning,
             ),
             Link::Blocked(error) => view(t().cannot_open, t().error(error), Tone::Bad),

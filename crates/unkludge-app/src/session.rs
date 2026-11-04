@@ -6,11 +6,13 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
+use std::time::Duration;
 
 use unkludge_protocol::device::{HidCollection, list_collections};
 use unkludge_protocol::model;
 use unkludge_protocol::transport::Transport;
 use unkludge_protocol::{Device, Error};
+use unkludge_shared::device_lock;
 
 use crate::args::DemoArgs;
 use crate::demo::{DemoKeyboard, Script};
@@ -254,9 +256,10 @@ impl Session {
 
 /// What the real app opens: the first supported keyboard. When there's none, a device of the same
 /// vendor that this version can't use is worth saying so about. It's only read from the system's
-/// list, and never opened.
+/// list, and never opened. The device keeps the lock for as long as it's open, and if a `unkludge`
+/// command has it now, that gets said and the worker looks again in a moment.
 pub fn open_real_keyboard() -> Result<Device, Error> {
-    match Device::open(None) {
+    match device_lock::open_locked(Duration::ZERO, || Device::open(None)) {
         Err(Error::NotFound) => {
             let listed = list_collections().unwrap_or_default();
             Err(unsupported_device(&listed).map_or(Error::NotFound, Error::Unsupported))

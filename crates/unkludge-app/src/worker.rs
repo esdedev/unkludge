@@ -6,6 +6,11 @@
 //! device comes from is up to a factory, which is also how a demo build gets a keyboard that doesn't
 //! exist.
 //!
+//! **The lock on the keyboard** comes with the real factory, in the device it returns, so the worker
+//! holds it for exactly as long as it has the device. A factory that says [`Error::DeviceBusy`] isn't
+//! a keyboard going away: it's told like anything else that blocks a keyboard, and looked at again at
+//! the next look.
+//!
 //! **During an upload** the worker is inside the upload. It sees commands between steps, and those
 //! that come during the upload's last pauses right after it, all under these rules:
 //! - A lighting change, or another upload, is refused with [`Problem::Busy`], and nothing about it

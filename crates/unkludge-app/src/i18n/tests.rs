@@ -20,6 +20,15 @@ fn errors_read_in_english_with_each_detail_in_its_place() {
         (Error::Unsupported(0x01FA), "Keyboard 01FA isn't supported"),
         (Error::Hid("gone".to_string()), "USB error: gone"),
         (
+            Error::DeviceBusy,
+            "Another Unkludge program is using the keyboard",
+        ),
+        (
+            Error::LockFailed("no folder".to_string()),
+            "The lock that keeps Unkludge programs off the keyboard at the same time failed: no \
+             folder",
+        ),
+        (
             Error::StartNoAck,
             "The keyboard didn't acknowledge the start of the upload",
         ),
@@ -66,6 +75,15 @@ fn errors_read_in_spanish_with_each_detail_in_its_place() {
             "El teclado 01FA no es compatible",
         ),
         (Error::Hid("gone".to_string()), "Error de USB: gone"),
+        (
+            Error::DeviceBusy,
+            "Otro programa de Unkludge está usando el teclado",
+        ),
+        (
+            Error::LockFailed("no folder".to_string()),
+            "Ha fallado el bloqueo que evita que dos programas de Unkludge usen el teclado a la \
+             vez: no folder",
+        ),
         (
             Error::StartNoAck,
             "El teclado no confirmó el inicio de la subida",

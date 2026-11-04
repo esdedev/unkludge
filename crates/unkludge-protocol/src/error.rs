@@ -9,6 +9,15 @@ pub enum Error {
     Unsupported(u16),
     #[error("USB error: {0}")]
     Hid(String),
+    /// Another Unkludge program has the keyboard. See `unkludge_shared::device_lock`.
+    #[error(
+        "another Unkludge program is using the keyboard. If the Unkludge app is running, quit it first \
+         (right-click its tray icon, Quit). If a unkludge command is running, wait for it to end"
+    )]
+    DeviceBusy,
+    /// Nothing can tell whether another Unkludge program has the keyboard, so it stays closed.
+    #[error("the lock that keeps Unkludge programs off the keyboard at the same time failed: {0}")]
+    LockFailed(String),
     #[error("the keyboard didn't acknowledge the start of the upload")]
     StartNoAck,
     #[error("the keyboard refused the start of the upload")]
@@ -46,6 +55,12 @@ mod tests {
         assert_eq!(
             Error::Unsupported(0x01FA).to_string(),
             "keyboard 01FA isn't supported"
+        );
+        let busy = Error::DeviceBusy.to_string();
+        assert!(busy.contains("quit it first"), "{busy}");
+        assert_eq!(
+            Error::LockFailed("no folder".to_string()).to_string(),
+            "the lock that keeps Unkludge programs off the keyboard at the same time failed: no folder"
         );
         assert_eq!(
             Error::NoAck { frame: 2, idx: 7 }.to_string(),

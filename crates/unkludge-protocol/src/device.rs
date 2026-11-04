@@ -5,6 +5,7 @@
 //! same way and then wait for an ack. Screen data chunks wait for an ack with no pause between
 //! them, so the keyboard's answer sets the pace.
 
+use std::any::Any;
 use std::time::Duration;
 
 use crate::Error;
@@ -92,6 +93,8 @@ pub struct Device<T: Transport = HidTransport> {
     pub(crate) retries: u32,
     /// Called for each report sent and each ack received.
     pub on_packet: Option<OnPacket>,
+    /// Last, as fields go in this order: it outlives the transports.
+    kept: Option<Box<dyn Any>>,
 }
 
 impl<T: Transport> Device<T> {
@@ -120,7 +123,13 @@ impl<T: Transport> Device<T> {
             ack_timeout: ACK_TIMEOUT,
             retries: RESENDS,
             on_packet: None,
+            kept: None,
         })
+    }
+
+    /// Holds on to something until the device is closed, as the lock that says who has the keyboard.
+    pub fn keep_until_closed(&mut self, kept: Box<dyn Any>) {
+        self.kept = Some(kept);
     }
 
     /// The model of this keyboard.
