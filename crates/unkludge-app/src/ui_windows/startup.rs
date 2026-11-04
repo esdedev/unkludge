@@ -27,7 +27,7 @@ use super::{App, tray};
 use crate::args::Args;
 use crate::i18n::t;
 use crate::session::{Session, SystemAutostart};
-use crate::settings::{self, Settings};
+use crate::settings;
 use crate::sys;
 
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
@@ -126,14 +126,12 @@ pub fn run(args: Args) {
     }
     let installed =
         std::env::current_exe().is_ok_and(|exe| settings::starts_with_system_on_first_launch(&exe));
-    let data_dir = sys::data_dir();
-    let settings = session.load_settings(data_dir.as_deref(), &SystemAutostart, installed);
-    if let Err(error) = run_window(settings, session, args.tray) {
+    if let Err(error) = run_window(session, args.tray, installed) {
         panic!("the window can't be made: {error}");
     }
 }
 
-fn run_window(settings: Settings, session: Session, start_hidden: bool) -> Result<()> {
+fn run_window(session: Session, start_hidden: bool, installed: bool) -> Result<()> {
     let class = if session.is_demo() { DEMO_CLASS } else { CLASS };
     let title = if session.is_demo() {
         HSTRING::from(format!("Unkludge - {}", t().demo))
@@ -172,6 +170,10 @@ fn run_window(settings: Settings, session: Session, start_hidden: bool) -> Resul
             Some(instance.into()),
             None,
         )?;
+        // Only now, as a first launch makes the app start with the system, which a copy that can't
+        // make a window shouldn't do.
+        let data_dir = sys::data_dir();
+        let settings = session.load_settings(data_dir.as_deref(), &SystemAutostart, installed);
         let dark: i32 = 1;
         let _ = DwmSetWindowAttribute(
             hwnd,
