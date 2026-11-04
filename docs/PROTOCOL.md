@@ -188,7 +188,7 @@ The slot is always 0.
 
 Each ack wait lasts up to 8 s. An ack that doesn't accept a chunk sends the chunk again: the official app has no limit on that, and Unkludge stops after 5. No ack for a chunk in that time fails the upload and sends the abort.
 
-**`kind = 2` models**, the N99 family (`01B8`, `025E`, `025F`): `0x0D` goes to the main collection and waits for its ack, then goes to the second collection and waits for its ack. `0x0C` goes only to the second collection. The clock and the config stay on the main one. To find the second collection, each candidate must take 520-byte feature reports and answer `09 82 01 00 01 00 06 00` with the same 6 bytes as the main collection.
+**`kind = 2` models**, the N99 family (`01B8`, `025E`, `025F`): `0x0D` goes to the main collection and waits for its ack, then goes to the second collection and waits for its ack. `0x0C` goes only to the second collection. The clock and the config stay on the main one. To find the second collection, each candidate must take 520-byte feature reports and answer `09 82 01 00 01 00 06 00` with the same 6 bytes as the main collection. Those 6 bytes are what ties the two together in the official app, which asks every collection of that usage on any device. Unkludge only asks collections on the same device: the same USB device on Linux, and the same vendor and product IDs on Windows, as far as the system can tell. Where it can't tell, it asks nothing.
 
 ## Never sent
 
@@ -214,4 +214,5 @@ These are guesses or open questions. A capture or a test on hardware can settle 
 - Whether the firmware rotates the image on any model. Nothing on the computer's side does.
 - What the slot field in `0x0D` is for. It's always 0.
 - What a keyboard does if an upload just stops, with no abort, as when it's unplugged.
+- Whether a `kind = 2` model's second collection is on the same USB device as its main one. Unkludge assumes so. If it isn't, such a keyboard is found but not used, and says so.
 - Anything on the `kind = 2` models and the `crc = true` models: their paths come only from the analysis, and none has been run on such a keyboard. Capturing `0x82` needs someone who owns an N99, as the S85 has no reason to send it.

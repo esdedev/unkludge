@@ -7,6 +7,8 @@
 //! there too. What protects those is the allow-list of commands.
 
 use std::ffi::{CStr, CString};
+#[cfg(target_os = "linux")]
+use std::path::Path;
 
 use hidapi::HidApi;
 
@@ -98,11 +100,12 @@ fn entries(api: &HidApi) -> Vec<HidEntry> {
 /// Picks the keyboard to open from the system's list, or the one with product ID `pid` if given.
 /// `usage_fallback` allows an entry without usages on the right interface. Only for Linux: on
 /// Windows those zeros can also mean that reading a collection's capabilities failed, and then it
-/// could be any collection.
+/// could be any collection. `device_of` says which device a collection is on: see [`device_of`].
 fn select(
     entries: &[HidEntry],
     pid: Option<u16>,
     usage_fallback: bool,
+    device_of: &dyn Fn(&CStr) -> Option<String>,
 ) -> Result<Selection, Error> {
     if let Some(pid) = pid
         && !model::find(pid).is_some_and(Model::is_supported)
@@ -130,7 +133,7 @@ fn select(
 
     let model = model::find(entries[main].pid).ok_or(Error::NotFound)?;
     let screen_candidates = if model.has_second_collection() {
-        screen_candidates(entries, &entries[main])
+        screen_candidates(entries, &entries[main], device_of)
     } else {
         Vec::new()
     };
@@ -142,38 +145,67 @@ fn select(
     })
 }
 
-/// The second collection's product ID isn't known, so any collection of the right usage and vendor
-/// could be it. Where the paths show some with the keyboard's vendor and product IDs, only those.
-fn screen_candidates(entries: &[HidEntry], main: &HidEntry) -> Vec<usize> {
-    let candidates: Vec<usize> = (0..entries.len())
+/// The collections that may be the keyboard's second one: of the right usage, and on the same device
+/// as far as [`device_of`] can tell. Each one gets asked for its identity, which goes nowhere near a
+/// device that isn't this keyboard. The official app has no such limit and asks any collection of
+/// that usage, which is what the identity is for: there it's all that tells them apart. So if a second
+/// collection ever turns up on a device of its own, this won't find it, and the keyboard gets refused
+/// with a message rather than something else getting asked.
+fn screen_candidates(
+    entries: &[HidEntry],
+    main: &HidEntry,
+    device_of: &dyn Fn(&CStr) -> Option<String>,
+) -> Vec<usize> {
+    let Some(device) = device_of(&main.path) else {
+        return Vec::new();
+    };
+    (0..entries.len())
         .filter(|&i| {
             let entry = &entries[i];
-            entry.vid == VID && entry.usages() == SCREEN_USAGE && entry.path != main.path
+            entry.vid == VID
+                && entry.usages() == SCREEN_USAGE
+                && entry.path != main.path
+                && device_of(&entry.path).as_ref() == Some(&device)
         })
-        .collect();
+        .collect()
+}
 
-    let Some(prefix) = vid_pid_prefix(&main.path) else {
-        return candidates;
-    };
-    let same_device: Vec<usize> = candidates
-        .iter()
-        .copied()
-        .filter(|&i| vid_pid_prefix(&entries[i].path).as_ref() == Some(&prefix))
-        .collect();
-    if same_device.is_empty() {
-        candidates
-    } else {
-        same_device
-    }
+/// What tells which device a collection is on, from its path, as far as the system lets on. On
+/// Linux that's the USB device itself. On Windows nothing hidapi gives goes further than the vendor
+/// and product IDs, so two keyboards of one model look alike, and that's left to the identity read.
+fn device_of(path: &CStr) -> Option<String> {
+    vid_pid_prefix(path).or_else(|| usb_device_of(path))
 }
 
 /// The part of a Windows device path before the interface and collection numbers. It holds only
-/// the vendor and product IDs, so it doesn't tell apart two keyboards of one model: that's left to
-/// the identity read. Other systems' paths don't have one.
+/// the vendor and product IDs. Other systems' paths don't have one.
 fn vid_pid_prefix(path: &CStr) -> Option<String> {
     let path = path.to_string_lossy().to_lowercase();
     let end = path.find("&mi_").or_else(|| path.find("&col"))?;
     Some(path[..end].to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn usb_device_of(path: &CStr) -> Option<String> {
+    usb_device_in_sysfs(Path::new("/sys"), path)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn usb_device_of(_path: &CStr) -> Option<String> {
+    None
+}
+
+/// The USB device a hidraw node belongs to: the first folder up from the node's own device, in
+/// sysfs, that says what its vendor is. Interfaces of one device, and nothing else, share it.
+#[cfg(target_os = "linux")]
+fn usb_device_in_sysfs(sysfs: &Path, node: &CStr) -> Option<String> {
+    let node = Path::new(node.to_str().ok()?).file_name()?;
+    let device = sysfs.join("class/hidraw").join(node).join("device");
+    let device = std::fs::canonicalize(device).ok()?;
+    let usb_device = device
+        .ancestors()
+        .find(|folder| folder.join("idVendor").is_file())?;
+    Some(usb_device.to_string_lossy().into_owned())
 }
 
 /// The keyboard's identity. A read only.
@@ -272,7 +304,7 @@ impl Device<HidTransport> {
         let api = HidApi::new().map_err(hid_error)?;
         let entries = entries(&api);
 
-        let selection = select(&entries, pid, cfg!(target_os = "linux"))?;
+        let selection = select(&entries, pid, cfg!(target_os = "linux"), &device_of)?;
         let main = HidTransport::open(&api, &entries[selection.main].path)?;
         let candidates = selection
             .screen_candidates
@@ -334,11 +366,22 @@ mod tests {
     }
 
     fn select_windows(entries: &[HidEntry], pid: Option<u16>) -> Result<Selection, Error> {
-        select(entries, pid, false)
+        select(entries, pid, false, &vid_pid_prefix)
+    }
+
+    /// Where the nodes numbered up to 5 are on one USB device, and the others on another.
+    fn linux_device(path: &CStr) -> Option<String> {
+        let number: u32 = path
+            .to_str()
+            .ok()?
+            .strip_prefix("/dev/hidraw")?
+            .parse()
+            .ok()?;
+        Some(if number <= 5 { "one" } else { "other" }.to_string())
     }
 
     fn select_linux(entries: &[HidEntry], pid: Option<u16>) -> Result<Selection, Error> {
-        select(entries, pid, true)
+        select(entries, pid, true, &linux_device)
     }
 
     fn picked(entries: &[HidEntry], pid: Option<u16>) -> &HidEntry {
@@ -610,7 +653,7 @@ mod tests {
     }
 
     #[test]
-    fn candidates_on_the_same_usb_device_win_where_the_path_can_tell() {
+    fn only_a_candidate_on_the_same_device_counts() {
         let mut list = vec![entry(
             VID,
             0x01FA,
@@ -626,21 +669,65 @@ mod tests {
     }
 
     #[test]
-    fn all_vendor_candidates_stay_when_the_path_cant_tell() {
-        // Linux paths say nothing about the USB device.
+    fn a_collection_on_another_device_is_never_asked_even_if_it_is_all_there_is() {
+        let mut list = windows_list(N99);
+        list.push(entry(
+            VID,
+            0x0150,
+            0xFF03,
+            0x0002,
+            0,
+            &windows_path(0x0150, 0, 1),
+        ));
+        assert!(
+            select_windows(&list, None)
+                .unwrap()
+                .screen_candidates
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn on_linux_the_usb_device_decides_whatever_the_product_id_says() {
         let list = vec![
             entry(VID, N99, 0xFF02, 0x0002, 1, "/dev/hidraw3"),
             entry(VID, N99, 0xFF03, 0x0002, 2, "/dev/hidraw4"),
-            entry(VID, 0x01FA, 0xFF03, 0x0002, 2, "/dev/hidraw7"),
+            entry(VID, N99, 0xFF03, 0x0002, 2, "/dev/hidraw7"),
+            entry(VID, 0x01FA, 0xFF03, 0x0002, 2, "/dev/hidraw8"),
         ];
-        assert_eq!(select_linux(&list, None).unwrap().screen_candidates, [1, 2]);
+        assert_eq!(select_linux(&list, None).unwrap().screen_candidates, [1]);
+    }
+
+    #[test]
+    fn nothing_is_asked_where_the_system_cant_say_which_device_a_collection_is_on() {
+        let list = vec![
+            entry(VID, N99, 0xFF02, 0x0002, 1, "unknown-main"),
+            entry(VID, N99, 0xFF03, 0x0002, 2, "unknown-a"),
+            entry(VID, N99, 0xFF03, 0x0002, 2, "/dev/hidraw4"),
+        ];
+        assert!(
+            select_linux(&list, None)
+                .unwrap()
+                .screen_candidates
+                .is_empty()
+        );
+        let list = vec![
+            entry(VID, N99, 0xFF02, 0x0002, 1, "/dev/hidraw3"),
+            entry(VID, N99, 0xFF03, 0x0002, 2, "unknown-a"),
+        ];
+        assert!(
+            select_linux(&list, None)
+                .unwrap()
+                .screen_candidates
+                .is_empty()
+        );
     }
 
     #[test]
     fn on_linux_only_the_vendor_keeps_another_vendors_collection_out() {
         let list = vec![
             entry(VID, N99, 0xFF02, 0x0002, 1, "/dev/hidraw3"),
-            entry(0x1234, N99, 0xFF03, 0x0002, 2, "/dev/hidraw9"),
+            entry(0x1234, N99, 0xFF03, 0x0002, 2, "/dev/hidraw2"),
             entry(VID, N99, 0xFF03, 0x0002, 2, "/dev/hidraw4"),
         ];
         assert_eq!(select_linux(&list, None).unwrap().screen_candidates, [2]);
@@ -656,18 +743,41 @@ mod tests {
         assert_eq!(select_linux(&list, None).unwrap().screen_candidates, [2]);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
-    fn all_vendor_candidates_stay_when_none_shares_the_path_prefix() {
-        let mut list = windows_list(N99);
-        list.push(entry(
-            VID,
-            0x0150,
-            0xFF03,
-            0x0002,
-            0,
-            &windows_path(0x0150, 0, 1),
-        ));
-        assert_eq!(select_windows(&list, None).unwrap().screen_candidates, [5]);
+    fn sysfs_says_which_usb_device_a_node_is_on() {
+        use std::os::unix::fs::symlink;
+
+        let sysfs = std::env::temp_dir().join(format!("unkludge-sysfs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&sysfs);
+        let usb = sysfs.join("devices/pci0000:00/usb1/1-2");
+        let usb_other = sysfs.join("devices/pci0000:00/usb1/1-3");
+        // Nodes 3 and 4 on interfaces of one device, node 7 on another, and node 9 on no USB at all.
+        for (device, node) in [
+            (usb.join("1-2:1.1/0003:258A:01B8.0005"), "hidraw3"),
+            (usb.join("1-2:1.2/0003:258A:01B8.0006"), "hidraw4"),
+            (usb_other.join("1-3:1.1/0003:258A:01B8.0007"), "hidraw7"),
+            (sysfs.join("devices/virtual/0005:258A:01B8.0008"), "hidraw9"),
+        ] {
+            std::fs::create_dir_all(&device).unwrap();
+            let class = sysfs.join("class/hidraw").join(node);
+            std::fs::create_dir_all(&class).unwrap();
+            symlink(&device, class.join("device")).unwrap();
+        }
+        std::fs::write(usb.join("idVendor"), "258a\n").unwrap();
+        std::fs::write(usb_other.join("idVendor"), "258a\n").unwrap();
+
+        let device_of = |node: &str| {
+            let node = CString::new(format!("/dev/{node}")).unwrap();
+            usb_device_in_sysfs(&sysfs, &node)
+        };
+        assert!(device_of("hidraw3").is_some());
+        assert_eq!(device_of("hidraw3"), device_of("hidraw4"));
+        assert!(device_of("hidraw7").is_some());
+        assert_ne!(device_of("hidraw3"), device_of("hidraw7"));
+        assert_eq!(device_of("hidraw9"), None);
+        assert_eq!(device_of("hidraw1"), None);
+        std::fs::remove_dir_all(&sysfs).unwrap();
     }
 
     #[test]
