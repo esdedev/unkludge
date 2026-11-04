@@ -33,7 +33,7 @@ use crate::layout::{
 use crate::session::{Session, SystemAutostart, folder_not_opened, open_real_keyboard};
 use crate::settings::Settings;
 use crate::state::{Slider, State};
-use crate::worker::{Cmd, Notify, SYSTEM_END_WAIT};
+use crate::worker::{Cmd, Notify, SYSTEM_END_WAIT, UploadStopper};
 use crate::{log, sys};
 
 pub(super) const CLASS: PCWSTR = w!("UnkludgeWindow");
@@ -144,6 +144,8 @@ impl App {
         );
         match started {
             Ok(running) => {
+                let stopper = running.worker.upload_stopper();
+                UPLOAD_STOPPER.with_borrow_mut(|slot| *slot = Some(stopper));
                 self.worker = Some(running.worker);
                 self.events = Some(running.events);
                 self.script = running.script;
@@ -628,13 +630,7 @@ impl App {
                 Some(0)
             }
             WM_ENDSESSION if session_is_ending(wp) => {
-                self.save_settings();
-                // Logging off or shutting down. The worker cancels an upload and the keyboard gets
-                // its abort, which is what the moment this waits is for. The system ends the process
-                // soon after this returns, so everything has to be done by then.
-                if let Some(worker) = self.worker.take() {
-                    worker.shutdown_within(SYSTEM_END_WAIT);
-                }
+                self.end_session();
                 Some(0)
             }
             tray::WM_TRAY => {
@@ -646,6 +642,16 @@ impl App {
                 Some(0)
             }
             _ => None,
+        }
+    }
+
+    /// Logging off or shutting down. The worker cancels an upload and the keyboard gets its abort,
+    /// which is what the moment this waits is for. The system ends the process soon after this returns,
+    /// so everything has to be done by then.
+    fn end_session(&mut self) {
+        self.save_settings();
+        if let Some(worker) = self.worker.take() {
+            worker.shutdown_within(SYSTEM_END_WAIT);
         }
     }
 
@@ -765,8 +771,22 @@ impl App {
 }
 
 /// Whether a `WM_ENDSESSION` means it's really happening. It can also say that it won't after all.
-fn session_is_ending(wp: WPARAM) -> bool {
+pub(super) fn session_is_ending(wp: WPARAM) -> bool {
     wp.0 != 0
+}
+
+thread_local! {
+    /// The running worker's way to stop an upload, for when the app can't be borrowed.
+    static UPLOAD_STOPPER: RefCell<Option<UploadStopper>> = const { RefCell::new(None) };
+}
+
+/// The session is ending and the app is busy further up the stack.
+pub(super) fn stop_upload_for_session_end() {
+    UPLOAD_STOPPER.with_borrow(|stopper| {
+        if let Some(stopper) = stopper {
+            stopper.stop_within(SYSTEM_END_WAIT);
+        }
+    });
 }
 
 pub(super) fn trim_memory() {
@@ -779,10 +799,81 @@ pub(super) fn trim_memory() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::args::DemoArgs;
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 
     #[test]
     fn only_a_session_that_is_really_ending_counts() {
         assert!(session_is_ending(WPARAM(1)));
         assert!(!session_is_ending(WPARAM(0)));
+    }
+
+    extern "system" fn only_the_default(
+        hwnd: HWND,
+        msg: u32,
+        wp: WPARAM,
+        lp: LPARAM,
+    ) -> windows::Win32::Foundation::LRESULT {
+        // SAFETY: passes on what the system passed in.
+        unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
+    }
+
+    /// A real window, never shown, with the app on it as a demo, and its worker running. A settings
+    /// file that couldn't be read means nothing gets written anywhere.
+    fn app_on_a_window() -> App {
+        // SAFETY: the class's name is a constant, and the window is this test's own.
+        let hwnd = unsafe {
+            let instance = GetModuleHandleW(None).unwrap();
+            let class = w!("UnkludgeTestWindow");
+            let wc = WNDCLASSEXW {
+                cbSize: size_of::<WNDCLASSEXW>() as u32,
+                lpfnWndProc: Some(only_the_default),
+                hInstance: instance.into(),
+                lpszClassName: class,
+                ..Default::default()
+            };
+            RegisterClassExW(&wc);
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                class,
+                w!(""),
+                WS_OVERLAPPED,
+                0,
+                0,
+                100,
+                100,
+                None,
+                None,
+                Some(instance.into()),
+                None,
+            )
+            .unwrap()
+        };
+        let settings = Settings {
+            read_error: Some("a test keeps out of the real folder".to_string()),
+            ..Settings::default()
+        };
+        let session = Session::Demo(DemoArgs::default());
+        let mut app = App::new(hwnd, settings, session).unwrap();
+        app.start_worker();
+        assert!(app.worker.is_some());
+        app
+    }
+
+    #[test]
+    fn the_session_really_ending_stops_the_worker() {
+        let mut app = app_on_a_window();
+        assert_eq!(app.handle(WM_ENDSESSION, WPARAM(1), LPARAM(0)), Some(0));
+        assert!(app.worker.is_none());
+    }
+
+    #[test]
+    fn a_session_that_isnt_ending_after_all_leaves_the_worker_alone() {
+        let mut app = app_on_a_window();
+        app.handle(WM_ENDSESSION, WPARAM(0), LPARAM(0));
+        assert!(app.worker.is_some());
+        if let Some(worker) = app.worker.take() {
+            worker.shutdown();
+        }
     }
 }

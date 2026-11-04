@@ -21,7 +21,7 @@ use windows::core::{HSTRING, PCWSTR, Result};
 
 use super::window::{
     CLASS, DEMO_CLASS, SHOT_GIVE_UP_MS, TIMER_EXIT, TIMER_SHOT_GIVE_UP, WM_SHOWAPP, WM_WORKER,
-    trim_memory,
+    session_is_ending, stop_upload_for_session_end, trim_memory,
 };
 use super::{App, tray};
 use crate::args::Args;
@@ -48,6 +48,12 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             Err(_) => match when_busy(msg) {
                 WhenBusy::PostAgain => {
                     let _ = PostMessageW(Some(hwnd), msg, wp, lp);
+                    Some(0)
+                }
+                WhenBusy::EndSession => {
+                    if session_is_ending(wp) {
+                        stop_upload_for_session_end();
+                    }
                     Some(0)
                 }
                 WhenBusy::Default => None,
@@ -86,11 +92,16 @@ enum WhenBusy {
     /// It has to reach the app, and would be lost otherwise. The worker's wake-up is one: no other
     /// comes until it's been answered, so losing it would leave the window deaf.
     PostAgain,
+    /// The session is ending, and the process with it soon after this returns, so waiting for later
+    /// won't do. The app can't be reached, so the settings stay as last saved, which is whenever they
+    /// changed. An upload can still be stopped, as that doesn't go through the app.
+    EndSession,
 }
 
 fn when_busy(msg: u32) -> WhenBusy {
     match msg {
         WM_WORKER | WM_CLOSE => WhenBusy::PostAgain,
+        WM_ENDSESSION => WhenBusy::EndSession,
         _ => WhenBusy::Default,
     }
 }
@@ -288,6 +299,11 @@ mod tests {
     #[test]
     fn closing_the_window_is_never_lost() {
         assert_eq!(when_busy(WM_CLOSE), WhenBusy::PostAgain);
+    }
+
+    #[test]
+    fn the_session_ending_is_never_put_off() {
+        assert_eq!(when_busy(WM_ENDSESSION), WhenBusy::EndSession);
     }
 
     #[test]

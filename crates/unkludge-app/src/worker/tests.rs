@@ -644,6 +644,81 @@ fn waking_up_gets_the_clock_whatever_was_held_back() {
 }
 
 #[test]
+fn a_stopper_with_no_upload_to_stop_returns_at_once_and_says_nothing() {
+    let fake = FakeTransport::new();
+    let mut rig = Rig::connected(&fake);
+    let handle = rig.handle();
+    handle.upload_stopper().stop_within(Duration::from_secs(60));
+    rig.step(1);
+    assert_eq!(rig.drain(), []);
+}
+
+#[test]
+fn a_stopper_cancels_the_upload_and_waits_for_it_to_end() {
+    let fake = FakeTransport::new();
+    let rig = Rig::connected(&fake);
+    let shared = Arc::clone(&rig.worker.shared);
+    shared.begin_upload();
+    let ending = Arc::clone(&shared);
+    let ends = thread::spawn(move || {
+        while !ending.cancelled() {
+            thread::sleep(Duration::from_millis(1));
+        }
+        thread::sleep(Duration::from_millis(50));
+        ending.end_upload();
+    });
+    let started = Instant::now();
+    rig.handle()
+        .upload_stopper()
+        .stop_within(Duration::from_secs(60));
+    assert!(started.elapsed() >= Duration::from_millis(50));
+    assert!(started.elapsed() < Duration::from_secs(30));
+    ends.join().unwrap();
+    assert_eq!(rig.drain(), [Event::Cancelling]);
+}
+
+#[test]
+fn a_stopper_doesnt_wait_past_its_time() {
+    let fake = FakeTransport::new();
+    let rig = Rig::connected(&fake);
+    rig.worker.shared.begin_upload();
+    rig.handle()
+        .upload_stopper()
+        .stop_within(Duration::from_millis(30));
+    assert!(rig.worker.shared.cancelled());
+}
+
+#[test]
+fn an_upload_that_fails_on_a_keyboard_that_still_answers_stays_connected() {
+    let fake = FakeTransport::new();
+    let mut rig = Rig::connected(&fake);
+    // The start's three tries fail, and its ack doesn't come, which is the send's error then.
+    refuse_next_send(&fake);
+    queue_reads(&fake, 1);
+    rig.send(Cmd::UploadScreen(still()));
+    rig.step(1);
+    let events = without_progress(rig.drain());
+    assert!(
+        matches!(events.last(), Some(Event::UploadFailed(Error::Hid(_)))),
+        "{events:?}"
+    );
+    assert!(!events.contains(&Event::Disconnected), "{events:?}");
+    assert!(rig.worker.device.is_some());
+}
+
+#[test]
+fn an_upload_that_fails_on_a_keyboard_that_has_gone_is_an_unplug() {
+    let fake = FakeTransport::new();
+    let mut rig = Rig::connected(&fake);
+    refuse_next_send(&fake);
+    rig.send(Cmd::UploadScreen(still()));
+    rig.step(1);
+    let events = without_progress(rig.drain());
+    assert!(events.contains(&Event::Disconnected), "{events:?}");
+    assert!(rig.worker.device.is_none());
+}
+
+#[test]
 fn a_keyboard_someone_has_isnt_an_unplug_and_connects_when_they_let_go() {
     let fake = FakeTransport::new();
     let opens = VecDeque::from([

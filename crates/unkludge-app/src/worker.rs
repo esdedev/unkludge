@@ -274,6 +274,14 @@ impl Shared {
         self.cancel.load(Ordering::SeqCst)
     }
 
+    #[cfg_attr(not(windows), allow(dead_code))]
+    fn uploading(&self) -> bool {
+        *self
+            .uploading
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Returns whether a cancel had been asked for.
     fn end_upload(&self) -> bool {
         let mut uploading = self
@@ -309,6 +317,15 @@ impl WorkerHandle {
         }
     }
 
+    /// What cancels an upload from where this handle can't be reached.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn upload_stopper(&self) -> UploadStopper {
+        UploadStopper {
+            shared: Arc::clone(&self.shared),
+            emitter: self.emitter.clone(),
+        }
+    }
+
     /// Stops the worker, for quitting. A slider that hasn't settled gets written. An upload gets a
     /// moment to abort, so that the keyboard isn't left waiting for the rest of it, but a stalled
     /// keyboard doesn't hold up quitting.
@@ -328,6 +345,25 @@ impl WorkerHandle {
         let Some(thread) = thread else { return };
         let deadline = Instant::now() + wait;
         while !thread.is_finished() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+
+/// Cancels an upload, for when the session is ending and only this is left to reach it with.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub struct UploadStopper {
+    shared: Arc<Shared>,
+    emitter: Emitter,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl UploadStopper {
+    /// Returns when no upload is running any more, or when this long has gone by.
+    pub fn stop_within(&self, wait: Duration) {
+        self.shared.request_cancel(&self.emitter);
+        let deadline = Instant::now() + wait;
+        while self.shared.uploading() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(10));
         }
     }
