@@ -47,7 +47,7 @@ impl HidEntry {
     }
 }
 
-/// What to open, as indexes into the list given to [`select`].
+/// What to open, as indexes into the list given to [`selections`].
 #[derive(Debug, PartialEq, Eq)]
 struct Selection {
     main: usize,
@@ -107,7 +107,8 @@ fn is_not_usb(bus: BusType) -> bool {
     }
 }
 
-/// Picks the keyboard to open from the system's list, or the one with product ID `pid` if given.
+/// The keyboards that could be opened, from the system's list, best first, or those with product ID
+/// `pid` if given. The first one that really opens is the one: see [`first_that_opens`].
 /// `usage_fallback` allows an entry without usages on the right interface. Only for Linux: on
 /// Windows those zeros can also mean that reading a collection's capabilities failed, and then it
 /// could be any collection. `device_of` says which device a collection is on: see [`device_of`].
@@ -115,12 +116,12 @@ fn is_not_usb(bus: BusType) -> bool {
 /// A keyboard the system says isn't on USB is refused, for reading too: the official app won't upload
 /// over wireless, and nothing here has been looked at for it. Where the system doesn't know, it's
 /// taken as it comes.
-fn select(
+fn selections(
     entries: &[HidEntry],
     pid: Option<u16>,
     usage_fallback: bool,
     device_of: &dyn Fn(&CStr) -> Option<String>,
-) -> Result<Selection, Error> {
+) -> Result<Vec<Selection>, Error> {
     if let Some(pid) = pid
         && !model::find(pid).is_some_and(Model::is_supported)
     {
@@ -132,39 +133,61 @@ fn select(
             && pid.is_none_or(|pid| pid == e.pid)
             && model::find(e.pid).is_some_and(Model::is_supported)
     };
-    let position_of = |wanted: fn(&HidEntry) -> bool| {
-        entries
-            .iter()
-            .position(|e| keyboard(e) && !e.not_usb && wanted(e))
-    };
-    let main = position_of(|e| e.usages() == MAIN_USAGE)
-        .or_else(|| {
-            position_of(|e| e.usages() == (0, 0) && e.interface == FALLBACK_INTERFACE)
-                .filter(|_| usage_fallback)
+    let usable = |e: &HidEntry| keyboard(e) && !e.not_usb;
+    let by_usage =
+        (0..entries.len()).filter(|&i| usable(&entries[i]) && entries[i].usages() == MAIN_USAGE);
+    let by_interface = (0..entries.len()).filter(|&i| {
+        usage_fallback
+            && usable(&entries[i])
+            && entries[i].usages() == (0, 0)
+            && entries[i].interface == FALLBACK_INTERFACE
+    });
+    let found: Vec<Selection> = by_usage
+        .chain(by_interface)
+        .filter_map(|main| {
+            let model = model::find(entries[main].pid)?;
+            let screen_candidates = if model.has_second_collection() {
+                screen_candidates(entries, &entries[main], device_of)
+            } else {
+                Vec::new()
+            };
+            Some(Selection {
+                main,
+                model,
+                screen_candidates,
+            })
         })
-        .ok_or_else(|| {
-            let mut present = entries.iter().filter(|e| keyboard(e));
-            let on_usb = present.clone().find(|e| !e.not_usb);
-            match (on_usb, present.next()) {
-                // It's there, so asking to connect it would only send someone looking for a cable.
-                (Some(entry), _) => Error::NoUsableCollection(entry.pid),
-                (None, Some(entry)) => Error::NotOnUsb(entry.pid),
-                (None, None) => Error::NotFound,
-            }
-        })?;
+        .collect();
+    if !found.is_empty() {
+        return Ok(found);
+    }
 
-    let model = model::find(entries[main].pid).ok_or(Error::NotFound)?;
-    let screen_candidates = if model.has_second_collection() {
-        screen_candidates(entries, &entries[main], device_of)
-    } else {
-        Vec::new()
-    };
-
-    Ok(Selection {
-        main,
-        model,
-        screen_candidates,
+    let mut present = entries.iter().filter(|e| keyboard(e));
+    let on_usb = present.clone().find(|e| !e.not_usb);
+    Err(match (on_usb, present.next()) {
+        // It's there, so asking to connect it would only send someone looking for a cable.
+        (Some(entry), _) => Error::NoUsableCollection(entry.pid),
+        (None, Some(entry)) => Error::NotOnUsb(entry.pid),
+        (None, None) => Error::NotFound,
     })
+}
+
+/// The first of these that opens. A keyboard that can't be used shouldn't hide one that can, and if
+/// none of them can be, the first one's reason is the one to tell.
+fn first_that_opens<S, D>(
+    selections: Vec<S>,
+    mut open: impl FnMut(&S) -> Result<D, Error>,
+) -> Result<D, Error> {
+    let mut first_failure = None;
+    for selection in &selections {
+        match open(selection) {
+            Ok(device) => return Ok(device),
+            Err(error) => {
+                first_failure.get_or_insert(error);
+            }
+        }
+    }
+    Err(first_failure.unwrap_or(Error::NotFound))
 }
 
 /// The collections that may be the keyboard's second one: of the right usage, and on the same device
@@ -326,13 +349,15 @@ impl Device<HidTransport> {
         let api = HidApi::new().map_err(hid_error)?;
         let entries = entries(&api);
 
-        let selection = select(&entries, pid, cfg!(target_os = "linux"), &device_of)?;
-        let main = HidTransport::open(&api, &entries[selection.main].path)?;
-        let candidates = selection
-            .screen_candidates
-            .iter()
-            .map(|&i| HidTransport::open(&api, &entries[i].path));
-        assemble(main, candidates, selection.model)
+        let selections = selections(&entries, pid, cfg!(target_os = "linux"), &device_of)?;
+        first_that_opens(selections, |selection| {
+            let main = HidTransport::open(&api, &entries[selection.main].path)?;
+            let candidates = selection
+                .screen_candidates
+                .iter()
+                .map(|&i| HidTransport::open(&api, &entries[i].path));
+            assemble(main, candidates, selection.model)
+        })
     }
 }
 
@@ -391,6 +416,16 @@ mod tests {
             entry(VID, pid, 0, 0, 1, "/dev/hidraw3"),
             entry(VID, pid, 0, 0, 2, "/dev/hidraw4"),
         ]
+    }
+
+    /// The one that gets tried first.
+    fn select(
+        entries: &[HidEntry],
+        pid: Option<u16>,
+        usage_fallback: bool,
+        device_of: &dyn Fn(&CStr) -> Option<String>,
+    ) -> Result<Selection, Error> {
+        selections(entries, pid, usage_fallback, device_of).map(|mut found| found.remove(0))
     }
 
     fn select_windows(entries: &[HidEntry], pid: Option<u16>) -> Result<Selection, Error> {
@@ -659,6 +694,65 @@ mod tests {
             &windows_path(N99, 4, 1),
         )));
         assert_eq!(select_windows(&list, None).unwrap().screen_candidates, [5]);
+    }
+
+    #[test]
+    fn every_keyboard_that_could_be_opened_gets_its_turn() {
+        let mut list = windows_list(0x01FA);
+        list.extend(windows_list(S85_ES));
+        let found = selections(&list, None, false, &vid_pid_prefix).unwrap();
+        let pids: Vec<u16> = found.iter().map(|s| list[s.main].pid).collect();
+        assert_eq!(pids, [0x01FA, S85_ES]);
+    }
+
+    #[test]
+    fn keyboards_with_usages_come_before_those_found_by_interface() {
+        let list = vec![
+            entry(VID, 0x01FA, 0, 0, 1, "/dev/hidraw3"),
+            entry(VID, S85_ES, 0xFF02, 0x0002, 1, "/dev/hidraw4"),
+        ];
+        let found = selections(&list, None, true, &linux_device).unwrap();
+        let mains: Vec<usize> = found.iter().map(|s| s.main).collect();
+        assert_eq!(mains, [1, 0]);
+    }
+
+    fn opener(results: Vec<Result<u16, Error>>) -> impl FnMut(&usize) -> Result<u16, Error> {
+        move |&at| results[at].clone()
+    }
+
+    #[test]
+    fn a_keyboard_that_cant_be_used_doesnt_hide_one_that_can() {
+        for refused in [
+            Error::NoUsableCollection(0x01FA),
+            Error::DeviceBusy,
+            Error::Hid("denied".to_string()),
+        ] {
+            let open = opener(vec![Err(refused), Ok(S85_ES)]);
+            assert_eq!(first_that_opens(vec![0, 1], open), Ok(S85_ES));
+        }
+    }
+
+    #[test]
+    fn with_none_usable_the_first_ones_reason_is_told() {
+        let open = opener(vec![
+            Err(Error::NoUsableCollection(0x01FA)),
+            Err(Error::DeviceBusy),
+        ]);
+        assert_eq!(
+            first_that_opens(vec![0, 1], open),
+            Err(Error::NoUsableCollection(0x01FA))
+        );
+    }
+
+    #[test]
+    fn the_first_that_opens_ends_the_looking() {
+        let mut tries = 0;
+        let found = first_that_opens(vec![0, 1], |_: &usize| {
+            tries += 1;
+            Ok::<u16, Error>(S85_ES)
+        });
+        assert_eq!(found, Ok(S85_ES));
+        assert_eq!(tries, 1);
     }
 
     #[test]
