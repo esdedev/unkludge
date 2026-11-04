@@ -1,12 +1,12 @@
 use super::*;
+use std::sync::atomic::AtomicBool;
+use std::time::Instant;
 use unkludge_protocol::config::{Config, SleepTime};
 use unkludge_protocol::lighting::{
     self, ColorChoice, LightMode, LightingChange, ModeChoice, Palettes, Rgb, SleepSetting,
 };
 use unkludge_protocol::model;
 use unkludge_protocol::screen::{Animation, LoadOptions};
-use std::sync::atomic::AtomicBool;
-use std::time::Instant;
 
 fn s85() -> &'static Model {
     model::find(0x0265).unwrap()

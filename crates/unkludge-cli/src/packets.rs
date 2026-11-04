@@ -356,8 +356,8 @@ impl Observer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use unkludge_protocol::REPORT_LEN;
     use std::sync::OnceLock;
+    use unkludge_protocol::REPORT_LEN;
 
     const MS: fn(u64) -> Duration = Duration::from_millis;
 

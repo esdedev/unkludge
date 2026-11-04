@@ -9,11 +9,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
-use unkludge_protocol::lighting::Rgb;
-use unkludge_protocol::screen::Animation;
 use ksni::blocking::Handle;
 use slint::platform::Key;
 use slint::{ComponentHandle, Global, Model, ModelRc, Timer, TimerMode, VecModel};
+use unkludge_protocol::lighting::Rgb;
+use unkludge_protocol::screen::Animation;
 
 use super::tray::Tray;
 use super::{AppWindow, Banner, Choice, DialogKind, Swatch, View, dialogs, resume, shot, view};

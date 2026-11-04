@@ -1,7 +1,7 @@
 //! The dialogs the window draws for itself. See `slint/dialogs.slint`.
 
-use unkludge_protocol::lighting::ColorChoice;
 use slint::Global;
+use unkludge_protocol::lighting::ColorChoice;
 
 use super::{App, ColorEdit};
 use crate::ui_linux::{DialogKind, View, view};

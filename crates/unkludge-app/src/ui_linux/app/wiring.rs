@@ -3,12 +3,12 @@
 
 use std::time::{Duration, Instant};
 
-use unkludge_protocol::lighting::ColorChoice;
 use slint::platform::{Key, WindowEvent};
 use slint::{
     CloseRequestResponse, ComponentHandle, Global, Image, Rgba8Pixel, SharedPixelBuffer,
     SharedString, Timer,
 };
+use unkludge_protocol::lighting::ColorChoice;
 
 use super::{APP, App, with_app};
 use crate::icon;

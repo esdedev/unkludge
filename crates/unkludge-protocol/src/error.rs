@@ -32,7 +32,7 @@ pub enum Error {
     /// Another Unkludge program has the keyboard. See `unkludge_shared::device_lock`.
     #[error(
         "another Unkludge program is using the keyboard. If the Unkludge app is running, quit it first \
-         (right-click its tray icon, Quit). If a unkludge command is running, wait for it to end"
+         (right-click its tray icon, Quit). If an unkludge command is running, wait for it to end"
     )]
     DeviceBusy,
     /// Nothing can tell whether another Unkludge program has the keyboard, so it stays closed.

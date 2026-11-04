@@ -1,11 +1,11 @@
 //! What the window shows, worked out from the state: everything the markup is given, and which choice
 //! each of its rows stands for. No window is needed for any of it.
 
+use slint::{Color, SharedString};
 use unkludge_protocol::Error;
 use unkludge_protocol::config::SleepTime;
 use unkludge_protocol::lighting::{ColorSetting, LightMode, ModeChoice, Rgb, SleepSetting};
 use unkludge_protocol::screen::Fit;
-use slint::{Color, SharedString};
 
 use super::{
     Area, Banner, Choice, ColorDialog, EmptyView, FooterView, Frame, HeaderData, Labels,

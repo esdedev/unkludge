@@ -215,7 +215,7 @@ const EN: Tr = Tr {
     unsupported_title: "This keyboard isn't supported yet",
     unsupported_short: "Not supported",
     no_collection_title: "This keyboard can't be used yet",
-    in_use_title: "A unkludge command is using the keyboard",
+    in_use_title: "An unkludge command is using the keyboard",
     in_use_detail: "The keyboard shows up here by itself when the command ends",
     in_use_short: "In use",
     settings_unreadable: "The settings file can't be read: the automatic clock is off, the rest are the defaults, and changes won't be saved",

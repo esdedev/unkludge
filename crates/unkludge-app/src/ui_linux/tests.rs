@@ -10,14 +10,14 @@ use std::sync::mpsc::{Sender, channel};
 use std::time::Duration;
 
 use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
+use slint::platform::{Key, PointerEventButton, WindowEvent};
+use slint::{Color, ComponentHandle, Global, LogicalPosition, PhysicalSize, SharedString};
 use unkludge_protocol::config::SleepTime;
 use unkludge_protocol::lighting::{
     ColorChoice, ColorSetting, CurrentLighting, LightMode, Rgb, SleepSetting,
 };
 use unkludge_protocol::model;
 use unkludge_protocol::screen::{Animation, LoadOptions};
-use slint::platform::{Key, PointerEventButton, WindowEvent};
-use slint::{Color, ComponentHandle, Global, LogicalPosition, PhysicalSize, SharedString};
 
 use super::app::{
     App, press, set_app, take_app, wanted_preview_timer, wire_for_tests as wire, with_app,

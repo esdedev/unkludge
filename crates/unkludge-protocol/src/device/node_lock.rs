@@ -52,7 +52,8 @@ mod tests {
 
     /// A file stands in for the node, as `flock` makes no difference between them.
     fn node(name: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!("unkludge-node-{}-{name}", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("unkludge-node-{}-{name}", std::process::id()));
         std::fs::write(&path, "").unwrap();
         path
     }

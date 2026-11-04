@@ -151,9 +151,9 @@ pub(super) fn decode_image(request: &LoadRequest) -> Result<LoadedImage, Error> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use unkludge_protocol::model;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc::{Receiver, Sender, channel};
+    use unkludge_protocol::model;
 
     const WAIT: Duration = Duration::from_secs(30);
 

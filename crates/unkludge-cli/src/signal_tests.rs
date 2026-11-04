@@ -177,8 +177,10 @@ fn an_upload_that_gets_told_to_stop() {
 }
 
 fn marker_for(name: &str) -> PathBuf {
-    let path =
-        std::env::temp_dir().join(format!("unkludge-signals-{}-{name}.txt", std::process::id()));
+    let path = std::env::temp_dir().join(format!(
+        "unkludge-signals-{}-{name}.txt",
+        std::process::id()
+    ));
     let _ = std::fs::remove_file(&path);
     path
 }

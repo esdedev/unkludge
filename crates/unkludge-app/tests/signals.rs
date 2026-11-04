@@ -17,8 +17,10 @@ fn bit(signal: i32) -> u64 {
 
 /// A demo that would stay for a minute, waiting to take a picture.
 fn start_demo(name: &str) -> (Child, PathBuf) {
-    let folder =
-        std::env::temp_dir().join(format!("unkludge-app-signals-{}-{name}", std::process::id()));
+    let folder = std::env::temp_dir().join(format!(
+        "unkludge-app-signals-{}-{name}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&folder).unwrap();
     let child = Command::new(env!("CARGO_BIN_EXE_unkludge-app"))
         .args(["--demo", "--demo-state", "no-keyboard", "--demo-shot"])

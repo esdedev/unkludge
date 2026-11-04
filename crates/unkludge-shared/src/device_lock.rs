@@ -101,7 +101,10 @@ mod imp {
 
         /// Away from the real one, for tests.
         pub fn scratch(name: &str) -> Place {
-            Place(format!("Local\\Unkludge-Test-{}-{name}", std::process::id()))
+            Place(format!(
+                "Local\\Unkludge-Test-{}-{name}",
+                std::process::id()
+            ))
         }
 
         /// A name given by another process's [`Place::describe`].
@@ -211,11 +214,11 @@ mod imp {
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
-    use unkludge_protocol::model;
-    use unkludge_protocol::transport::fake::FakeTransport;
     use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
     use std::time::Instant;
+    use unkludge_protocol::model;
+    use unkludge_protocol::transport::fake::FakeTransport;
 
     const NO_WAIT: Duration = Duration::ZERO;
     const PLACE_VARIABLE: &str = "UNKLUDGE_TEST_LOCK_PLACE";

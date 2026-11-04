@@ -267,13 +267,13 @@ mod tests {
     use crate::args::{Cli, Command, FitArg};
     use crate::dry_run::{self, DryRunTransport};
     use clap::Parser;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
     use unkludge_protocol::REPORT_LEN;
     use unkludge_protocol::device::PacketEvent;
     use unkludge_protocol::lighting::Rgb;
     use unkludge_protocol::model;
     use unkludge_protocol::transport::fake::{AckFault, FakeTransport};
-    use std::path::PathBuf;
-    use std::sync::{Arc, Mutex};
 
     /// What a command did: the reports that went out, and what it printed.
     #[derive(Default)]

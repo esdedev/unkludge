@@ -257,8 +257,8 @@ fn looks_installed(exe: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use unkludge_protocol::lighting::{PALETTES_LEN, Rgb};
     use std::path::PathBuf;
+    use unkludge_protocol::lighting::{PALETTES_LEN, Rgb};
 
     /// A folder of its own for each test, gone at the end.
     struct TempDir(PathBuf);

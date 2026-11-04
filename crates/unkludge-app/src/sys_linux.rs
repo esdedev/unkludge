@@ -196,7 +196,7 @@ fn chosen_exe(exe: PathBuf, image: Option<PathBuf>, appdir: Option<PathBuf>) -> 
     }
 }
 
-/// A Unkludge AppImage. They have the version in the name, which changes when upgrading.
+/// An Unkludge AppImage. They have the version in the name, which changes when upgrading.
 fn is_unkludge_appimage(path: &Path) -> bool {
     path.extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("AppImage"))

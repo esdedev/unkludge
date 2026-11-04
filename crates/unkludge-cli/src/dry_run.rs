@@ -73,13 +73,13 @@ pub fn device(model: &'static Model) -> Result<Device<DryRunTransport>, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, Mutex};
+    use std::time::Instant;
     use unkludge_protocol::config::Config;
     use unkludge_protocol::lighting::{self, LightMode, SleepSetting};
     use unkludge_protocol::model;
     use unkludge_protocol::screen::{Animation, LoadOptions};
-    use std::sync::atomic::AtomicBool;
-    use std::sync::{Arc, Mutex};
-    use std::time::Instant;
 
     fn solid_png(spec_width: u32, spec_height: u32) -> Vec<u8> {
         use image::{ImageFormat, Rgba, RgbaImage};
