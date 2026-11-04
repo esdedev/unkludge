@@ -406,7 +406,9 @@ pub struct Worker<T: Transport, F> {
     /// [`Cmd::SyncClock`] came during an upload.
     clock_asked: bool,
     /// The clock would be set, if the setting is on by then, once the keyboard is confirmed there or
-    /// an upload has ended. Connecting always sets this, so losing the keyboard needn't clear it.
+    /// an upload has ended. Connecting always sets this, so losing the keyboard needn't clear it. It
+    /// clears when the clock gets tried, whatever comes of that, so one that the keyboard refuses
+    /// isn't tried again until the next connection or wake-up.
     auto_clock_due: bool,
     /// Why the keyboard's config block can't be used, if so. Nothing gets written while this is set,
     /// and it keeps a failing read from telling the same thing every few seconds.
@@ -542,11 +544,20 @@ impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F
         self.emit(Event::Error(problem));
     }
 
-    /// A command couldn't do its work on the keyboard.
+    /// A command couldn't do its work on the keyboard. That the system says a report failed doesn't
+    /// mean the keyboard has gone: it may only have refused that report. So it gets one read, and
+    /// only if that fails too is it gone. Nothing gets tried again here, so that a keyboard that
+    /// refuses a write isn't sent it over and over.
     fn command_failed(&mut self, error: Error, now: Instant) {
-        let gone = matches!(error, Error::Hid(_));
+        let maybe_gone = matches!(error, Error::Hid(_));
         self.problem(Problem::Device(error));
-        if gone {
+        if maybe_gone {
+            self.lose_device_if_gone(now);
+        }
+    }
+
+    fn lose_device_if_gone(&mut self, now: Instant) {
+        if let Err(Error::Hid(_)) = self.read_config() {
             self.lose_device(now);
         }
     }
@@ -693,7 +704,10 @@ impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F
     fn refresh_now(&mut self, now: Instant) {
         match self.read_config() {
             Ok(config) => self.read_was_good(&config, true, now),
-            Err(error @ Error::Hid(_)) => self.command_failed(error, now),
+            Err(error @ Error::Hid(_)) => {
+                self.problem(Problem::Device(error));
+                self.lose_device(now);
+            }
             Err(error) => {
                 self.bad_config = Some(error.clone());
                 self.problem(Problem::Device(error));

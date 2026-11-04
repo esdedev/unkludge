@@ -412,6 +412,160 @@ fn the_worker_holds_the_lock_for_as_long_as_it_has_the_keyboard() {
     assert_eq!(take_from_elsewhere(&place), Ok(()));
 }
 
+/// Makes the next report's three tries fail, counting the send attempts so far.
+fn refuse_next_send(fake: &FakeTransport) {
+    let attempts = send_attempts(fake);
+    for attempt in attempts..attempts + 3 {
+        fake.fail_send(attempt);
+    }
+}
+
+fn send_attempts(fake: &FakeTransport) -> usize {
+    use unkludge_protocol::transport::fake::FakeEvent;
+    fake.events()
+        .iter()
+        .filter(|event| matches!(event, FakeEvent::Sent(_) | FakeEvent::SendFailed(_)))
+        .count()
+}
+
+/// How many times this command was tried, with each report given three tries at most.
+fn tried(fake: &FakeTransport, command: u8) -> usize {
+    use unkludge_protocol::transport::fake::FakeEvent;
+    fake.events()
+        .iter()
+        .filter(|event| match event {
+            FakeEvent::Sent(report) | FakeEvent::SendFailed(report) => report[1] == command,
+            _ => false,
+        })
+        .count()
+}
+
+fn is_usb_error(event: &Event) -> bool {
+    matches!(event, Event::Error(Problem::Device(Error::Hid(_))))
+}
+
+#[test]
+fn a_clock_the_keyboard_refuses_isnt_an_unplug_and_isnt_sent_again() {
+    let fake = FakeTransport::new();
+    // The read on connecting works, and so does every read after it.
+    queue_reads(&fake, 10);
+    fake.fail_send(1);
+    fake.fail_send(2);
+    fake.fail_send(3);
+    let mut rig = Rig::with_opens(VecDeque::from([Ok(fake.clone())]), true, Arc::new(|| {}));
+    rig.step(0);
+    let events = rig.drain();
+    assert_eq!(events[1], Event::Connected { model: s85() });
+    assert_eq!(events[2], Event::Lighting(current()));
+    assert!(is_usb_error(&events[3]), "{events:?}");
+    assert_eq!(events.len(), 4, "{events:?}");
+    assert_eq!(tried(&fake, CLOCK), 3, "one report, with its three tries");
+
+    // Time goes by, and there's no loop: no new connection and no new clock.
+    for look in 1..=3 {
+        rig.step(look * REFRESH_MS);
+        assert_eq!(rig.drain(), [], "look {look}");
+    }
+    assert_eq!(rig.opens_tried(), 1);
+    assert_eq!(tried(&fake, CLOCK), 3);
+    assert!(rig.worker.device.is_some());
+}
+
+#[test]
+fn asking_for_the_clock_after_a_refusal_is_one_attempt_and_shows_the_error() {
+    let fake = FakeTransport::new();
+    queue_reads(&fake, 10);
+    let mut rig = Rig::connected(&fake);
+    refuse_next_send(&fake);
+    let before = send_attempts(&fake);
+    rig.send(Cmd::SyncClock);
+    rig.step(1);
+    let events = rig.drain();
+    assert!(is_usb_error(&events[0]), "{events:?}");
+    assert_eq!(events.len(), 1, "{events:?}");
+    // The clock's three tries and the one read.
+    assert_eq!(send_attempts(&fake), before + 4);
+
+    // The next one gets through.
+    rig.send(Cmd::SyncClock);
+    rig.step(2);
+    assert_eq!(rig.drain(), [Event::ClockSynced]);
+}
+
+#[test]
+fn waking_up_tries_a_refused_clock_once_more() {
+    let fake = FakeTransport::new();
+    queue_reads(&fake, 10);
+    fake.fail_send(1);
+    fake.fail_send(2);
+    fake.fail_send(3);
+    let mut rig = Rig::with_opens(VecDeque::from([Ok(fake.clone())]), true, Arc::new(|| {}));
+    rig.step(0);
+    rig.drain();
+    rig.send(Cmd::Resumed);
+    rig.step(1);
+    assert_eq!(rig.drain(), [Event::ClockSynced]);
+    assert_eq!(rig.opens_tried(), 1);
+}
+
+#[test]
+fn a_light_write_the_keyboard_refuses_isnt_an_unplug_and_isnt_sent_again() {
+    let fake = FakeTransport::new();
+    queue_reads(&fake, 10);
+    let mut rig = Rig::connected(&fake);
+    let before = send_attempts(&fake);
+    // The write comes after the change's own read.
+    for attempt in before + 1..before + 4 {
+        fake.fail_send(attempt);
+    }
+    rig.send(Cmd::SetLighting(brightness(4)));
+    rig.step(1);
+    let events = rig.drain();
+    assert!(is_usb_error(&events[0]), "{events:?}");
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(
+        tried(&fake, CONFIG_WRITE),
+        3,
+        "one report, with its three tries"
+    );
+    assert!(rig.worker.device.is_some());
+
+    for look in 1..=2 {
+        rig.step(look * REFRESH_MS);
+        assert_eq!(rig.drain(), [], "look {look}");
+    }
+    assert_eq!(tried(&fake, CONFIG_WRITE), 3);
+    assert_eq!(rig.opens_tried(), 1);
+}
+
+#[test]
+fn a_write_that_fails_with_the_read_after_it_failing_too_is_an_unplug() {
+    let fake = FakeTransport::new();
+    let mut rig = Rig::connected(&fake);
+    fake.disconnect();
+    rig.send(Cmd::SyncClock);
+    rig.step(1);
+    let events = rig.drain();
+    assert!(is_usb_error(&events[0]), "{events:?}");
+    assert_eq!(events[1], Event::Disconnected);
+    assert_eq!(events.len(), 2, "{events:?}");
+    assert!(rig.worker.device.is_none());
+}
+
+#[test]
+fn a_refused_write_with_a_bad_block_after_it_stays_connected() {
+    let fake = FakeTransport::new();
+    let mut rig = Rig::connected(&fake);
+    refuse_next_send(&fake);
+    bad_read(&fake);
+    rig.send(Cmd::SyncClock);
+    rig.step(1);
+    let events = rig.drain();
+    assert!(is_usb_error(&events[0]), "{events:?}");
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert!(rig.worker.device.is_some());
+}
+
 #[test]
 fn a_keyboard_a_command_has_isnt_an_unplug_and_gets_looked_at_again() {
     let place = Place::scratch("worker-busy");

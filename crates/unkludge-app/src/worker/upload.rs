@@ -71,11 +71,13 @@ impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F
             Err(Error::Cancelled) => self.emit(Event::UploadCancelled),
             Err(error) => {
                 self.record(&error);
-                let gone = matches!(error, Error::Hid(_));
+                let maybe_gone = matches!(error, Error::Hid(_));
                 self.emit(Event::UploadFailed(error));
-                if gone {
-                    self.lose_device(now);
-                    return;
+                if maybe_gone {
+                    self.lose_device_if_gone(now);
+                    if self.device.is_none() {
+                        return;
+                    }
                 }
             }
         }
