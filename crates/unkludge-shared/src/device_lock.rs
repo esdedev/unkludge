@@ -46,9 +46,10 @@ pub fn open_locked_at<T: Transport>(
 #[cfg(windows)]
 mod imp {
     use std::ffi::OsStr;
-    use std::marker::PhantomData;
     use std::os::windows::ffi::OsStrExt;
     use std::ptr::null;
+    use std::sync::mpsc::{Sender, channel};
+    use std::thread::{self, JoinHandle};
     use std::time::Duration;
 
     use unkludge_protocol::Error;
@@ -85,59 +86,95 @@ mod imp {
         }
     }
 
-    /// Held until dropped. A mutex belongs to the thread that took it, so this stays on that thread:
-    /// it isn't `Send`, and the handle would make it so anyway.
+    /// Held until dropped. A mutex belongs to the thread that took it, and only that thread can let
+    /// go of it, so a thread of its own keeps it. That way the lock can go with a device from one
+    /// thread to another, and asking twice from one thread is an answer like any other, where the
+    /// mutex would just say yes again.
     #[derive(Debug)]
     pub struct DeviceLock {
-        mutex: HANDLE,
-        _on_this_thread: PhantomData<*const ()>,
+        let_go: Option<Sender<()>>,
+        owner: Option<JoinHandle<()>>,
     }
 
     impl DeviceLock {
-        /// [`Error::DeviceBusy`] if someone else has it after `wait`. A thread that already has it
-        /// gets it again, which is how these mutexes work. Nothing here takes it twice.
+        /// [`Error::DeviceBusy`] if someone else has it after `wait`.
         pub fn take(place: &Place, wait: Duration) -> Result<DeviceLock, Error> {
             let name: Vec<u16> = OsStr::new(&place.0).encode_wide().chain([0]).collect();
             let ms = u32::try_from(wait.as_millis()).unwrap_or(u32::MAX);
-            // SAFETY: the name is NUL-terminated, null attributes mean the default ones, and the
-            // last error is read at once, on this same thread. The handle is checked before use,
-            // and closed once unless it goes on to the lock, whose drop closes it.
-            unsafe {
-                let mutex = CreateMutexW(null(), 0, name.as_ptr());
-                if mutex.is_null() {
-                    let code = GetLastError();
-                    // Only a program running as administrator makes a mutex this one can't open, and
-                    // it only exists while that program runs.
-                    if code == ERROR_ACCESS_DENIED {
-                        return Err(Error::DeviceBusy);
+            let (answer_tx, answer) = channel();
+            let (let_go, wait_for_end) = channel::<()>();
+            let owner = thread::Builder::new()
+                .name("device lock".to_string())
+                .spawn(move || match acquire(&name, ms) {
+                    Ok(mutex) => {
+                        let _ = answer_tx.send(Ok(()));
+                        // Ends when the sender goes, which is when the lock is dropped.
+                        let _ = wait_for_end.recv();
+                        // SAFETY: this is the thread that holds it, and the handle is its own.
+                        unsafe {
+                            ReleaseMutex(mutex);
+                            CloseHandle(mutex);
+                        }
                     }
-                    return Err(Error::LockFailed(format!("system error {code}")));
+                    Err(error) => {
+                        let _ = answer_tx.send(Err(error));
+                    }
+                })
+                .map_err(|error| Error::LockFailed(error.to_string()))?;
+            let answer = answer
+                .recv()
+                .unwrap_or_else(|_| Err(Error::LockFailed("its thread ended".to_string())));
+            match answer {
+                Ok(()) => Ok(DeviceLock {
+                    let_go: Some(let_go),
+                    owner: Some(owner),
+                }),
+                Err(error) => {
+                    let _ = owner.join();
+                    Err(error)
                 }
-                match WaitForSingleObject(mutex, ms) {
-                    WAIT_OBJECT_0 | WAIT_ABANDONED => Ok(DeviceLock {
-                        mutex,
-                        _on_this_thread: PhantomData,
-                    }),
-                    WAIT_TIMEOUT => {
-                        CloseHandle(mutex);
-                        Err(Error::DeviceBusy)
-                    }
-                    _ => {
-                        let code = GetLastError();
-                        CloseHandle(mutex);
-                        Err(Error::LockFailed(format!("system error {code}")))
-                    }
+            }
+        }
+    }
+
+    /// Takes the mutex on this thread.
+    fn acquire(name: &[u16], ms: u32) -> Result<HANDLE, Error> {
+        // SAFETY: the name is NUL-terminated, null attributes mean the default ones, and the last
+        // error is read at once, on this same thread. The handle is checked before use, and closed
+        // here unless it goes back to the caller.
+        unsafe {
+            let mutex = CreateMutexW(null(), 0, name.as_ptr());
+            if mutex.is_null() {
+                let code = GetLastError();
+                // Only a program running as administrator makes a mutex this one can't open, and it
+                // only exists while that program runs.
+                if code == ERROR_ACCESS_DENIED {
+                    return Err(Error::DeviceBusy);
+                }
+                return Err(Error::LockFailed(format!("system error {code}")));
+            }
+            match WaitForSingleObject(mutex, ms) {
+                // An abandoned mutex is one a process that ended held, so now it's this thread's.
+                WAIT_OBJECT_0 | WAIT_ABANDONED => Ok(mutex),
+                WAIT_TIMEOUT => {
+                    CloseHandle(mutex);
+                    Err(Error::DeviceBusy)
+                }
+                _ => {
+                    let code = GetLastError();
+                    CloseHandle(mutex);
+                    Err(Error::LockFailed(format!("system error {code}")))
                 }
             }
         }
     }
 
     impl Drop for DeviceLock {
+        /// Only returns once the mutex is free.
         fn drop(&mut self) {
-            // SAFETY: the handle is this lock's own, and this is the thread that holds the mutex.
-            unsafe {
-                ReleaseMutex(self.mutex);
-                CloseHandle(self.mutex);
+            drop(self.let_go.take());
+            if let Some(owner) = self.owner.take() {
+                let _ = owner.join();
             }
         }
     }
@@ -253,13 +290,9 @@ mod tests {
     const PLACE_VARIABLE: &str = "UNKLUDGE_TEST_LOCK_PLACE";
     const HELD: &str = "the helper has the lock";
 
-    /// What another program sees. A mutex comes back to a thread that already has it, so even in one
-    /// process this has to ask from another thread.
+    /// What another program sees.
     fn take_from_elsewhere(place: &Place) -> Result<(), Error> {
-        let place = place.clone();
-        std::thread::spawn(move || DeviceLock::take(&place, NO_WAIT).map(drop))
-            .join()
-            .unwrap()
+        DeviceLock::take(place, NO_WAIT).map(drop)
     }
 
     fn device(fake: &FakeTransport) -> Result<Device<FakeTransport>, Error> {
@@ -318,19 +351,7 @@ mod tests {
     #[test]
     fn a_keyboard_someone_else_has_locked_isnt_even_opened() {
         let place = Place::scratch("refused");
-        let held = {
-            let place = place.clone();
-            let (tx, rx) = std::sync::mpsc::channel();
-            let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
-            let thread = std::thread::spawn(move || {
-                let lock = DeviceLock::take(&place, NO_WAIT).unwrap();
-                tx.send(()).unwrap();
-                let _ = done_rx.recv();
-                drop(lock);
-            });
-            rx.recv().unwrap();
-            (thread, done_tx)
-        };
+        let _held = DeviceLock::take(&place, NO_WAIT).unwrap();
         let mut opened = false;
         let result: Result<Device<FakeTransport>, Error> = open_locked_at(&place, NO_WAIT, || {
             opened = true;
@@ -338,8 +359,6 @@ mod tests {
         });
         assert_eq!(result.err(), Some(Error::DeviceBusy));
         assert!(!opened);
-        drop(held.1);
-        held.0.join().unwrap();
     }
 
     #[test]
@@ -361,6 +380,16 @@ mod tests {
             println!("{HELD}");
             std::thread::sleep(Duration::from_secs(120));
         }
+    }
+
+    #[test]
+    fn a_lock_can_be_let_go_of_on_another_thread_as_a_device_can_move() {
+        fn assert_send<T: Send>() {}
+        assert_send::<DeviceLock>();
+        let place = Place::scratch("moved");
+        let lock = DeviceLock::take(&place, NO_WAIT).unwrap();
+        std::thread::spawn(move || drop(lock)).join().unwrap();
+        assert_eq!(take_from_elsewhere(&place), Ok(()));
     }
 
     #[test]

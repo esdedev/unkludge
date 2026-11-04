@@ -94,7 +94,7 @@ pub struct Device<T: Transport = HidTransport> {
     /// Called for each report sent and each ack received.
     pub on_packet: Option<OnPacket>,
     /// Last, as fields go in this order: it outlives the transports.
-    kept: Option<Box<dyn Any>>,
+    kept: Option<Box<dyn Any + Send>>,
 }
 
 impl<T: Transport> Device<T> {
@@ -128,7 +128,7 @@ impl<T: Transport> Device<T> {
     }
 
     /// Holds on to something until the device is closed, as the lock that says who has the keyboard.
-    pub fn keep_until_closed(&mut self, kept: Box<dyn Any>) {
+    pub fn keep_until_closed(&mut self, kept: Box<dyn Any + Send>) {
         self.kept = Some(kept);
     }
 

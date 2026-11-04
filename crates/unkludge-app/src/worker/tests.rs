@@ -386,43 +386,9 @@ fn a_keyboard_that_wont_open_is_told_once_per_error() {
     assert_eq!(rig.drain(), [Event::Disconnected]);
 }
 
-/// What another program sees. On Windows a mutex comes back to the thread that has it, so even here
-/// this asks from another thread.
+/// What another program sees.
 fn take_from_elsewhere(place: &Place) -> Result<(), Error> {
-    let place = place.clone();
-    thread::spawn(move || DeviceLock::take(&place, Duration::ZERO).map(drop))
-        .join()
-        .unwrap()
-}
-
-/// Another program holding the lock, until this is dropped.
-struct Holder {
-    let_go: Sender<()>,
-    thread: Option<JoinHandle<()>>,
-}
-
-impl Holder {
-    fn new(place: &Place) -> Holder {
-        let place = place.clone();
-        let (held_tx, held) = channel();
-        let (let_go, wait) = channel::<()>();
-        let thread = thread::spawn(move || {
-            let lock = DeviceLock::take(&place, Duration::ZERO).unwrap();
-            held_tx.send(()).unwrap();
-            let _ = wait.recv();
-            drop(lock);
-        });
-        held.recv().unwrap();
-        Holder {
-            let_go,
-            thread: Some(thread),
-        }
-    }
-
-    fn let_go(mut self) {
-        let _ = self.let_go.send(());
-        self.thread.take().unwrap().join().unwrap();
-    }
+    DeviceLock::take(place, Duration::ZERO).map(drop)
 }
 
 #[test]
@@ -449,7 +415,7 @@ fn the_worker_holds_the_lock_for_as_long_as_it_has_the_keyboard() {
 #[test]
 fn a_keyboard_a_command_has_isnt_an_unplug_and_gets_looked_at_again() {
     let place = Place::scratch("worker-busy");
-    let holder = Holder::new(&place);
+    let holder = DeviceLock::take(&place, Duration::ZERO).unwrap();
     let fake = FakeTransport::new();
     let mut rig = Rig::locked(&fake, place);
     rig.step(0);
@@ -467,7 +433,7 @@ fn a_keyboard_a_command_has_isnt_an_unplug_and_gets_looked_at_again() {
     assert_eq!(rig.drain(), []);
     assert!(fake.sent().is_empty());
 
-    holder.let_go();
+    drop(holder);
     queue_reads(&fake, 1);
     rig.step(4000);
     assert_eq!(
