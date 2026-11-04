@@ -80,8 +80,8 @@ Tamaños de la compilación release, medidos con el perfil de `Cargo.toml`:
 
 | Programa | Windows x64 | Linux x86-64 |
 |---|---|---|
-| `unkludge-app` | 1.067.008 bytes | 11.804.640 bytes |
-| `unkludge` | 1.029.120 bytes | 1.330.968 bytes |
+| `unkludge-app` | 1.071.104 bytes | 11.810.400 bytes |
+| `unkludge` | 1.031.680 bytes | 1.343.960 bytes |
 
 Casi todo el tamaño de la app de Linux viene de Slint, su biblioteca de interfaz.
 
