@@ -24,7 +24,7 @@ Test in this order, from least to most risky, and stop at the first thing that l
 1. **`unkludge info`**. Only reads. Shows the model and its settings. Check they match what the keyboard is doing.
 2. **`unkludge light`**, with no options. Only reads.
 3. **`unkludge report`**. Only reads. Save the output: its config block lets you put your settings back by hand if a later step changes them.
-4. **`unkludge clock`**. Sends the time, and the keyboard doesn't answer. Look at its screen to see if it changed.
+4. **`unkludge clock`**. Reads the settings, then sends the time, and the keyboard doesn't answer. Look at its screen to see if it changed.
 5. **`unkludge light --mode 2`**, then a brightness, a speed, a colour and a sleep time. Each writes settings that stay on the keyboard. `--rgb` also gives the other effects Unkludge's default colours: any colours set in the RK app are replaced, as they can't be read first.
 6. **`unkludge screen <file>`**. Replaces what's on the screen. Start with one small image, then a short GIF. It can take minutes: add `--timing` to measure it.
 
@@ -34,7 +34,7 @@ As far as is known, but the honest answer is that nobody has tried most of this 
 
 - **Unkludge never updates firmware**, and never will. It has no command for that, nor for a factory reset, nor any way to send arbitrary bytes.
 - It only sends the commands in [docs/PROTOCOL.md](docs/PROTOCOL.md). No USB capture has confirmed them yet, and the table there says what has really been run, on which keyboard.
-- Settings are read first and written back with only what you asked to change. If the read fails or looks wrong, nothing is written.
+- Settings are read first and written back with only what you asked to change. If the read fails or looks wrong, nothing is written: not settings, not the clock, not a screen upload.
 - Ctrl+C during `unkludge screen` tells the keyboard to abort, which can take a few seconds if it has stalled. A second Ctrl+C quits at once, which, like unplugging the keyboard, leaves the upload unfinished. What a keyboard does then isn't known. Try unplugging it and plugging it back in, or uploading again, and say what happened.
 - If a keyboard stops responding, unplug it and plug it back in, and say so in your report.
 

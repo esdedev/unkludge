@@ -202,7 +202,7 @@ A dry run has no keyboard to read from, so it reads as if the lights were off: c
 - Key maps, macros, per-key colours or live effects, in this version.
 - Any command byte other than `0x84`, `0x04`, `0x0A`, `0x0B`, `0x0C`, `0x0D` and `0x82`, or any report ID other than `0x09`. A test runs every flow and fails if anything else goes out. [docs/PROTOCOL.md](docs/PROTOCOL.md#never-sent) has the exact list.
 
-**How it writes.** Settings are read first and written back with only what you asked to change. Bytes it doesn't know keep their value. If the read fails or the block doesn't end in `5A A5`, nothing is written.
+**How it writes.** Settings are read first and written back with only what you asked to change. Bytes it doesn't know keep their value. If the read fails or the block doesn't end in `5A A5`, nothing is written: not settings, not the clock, not a screen upload, from the app or the command line.
 
 **What isn't known.** This is no promise that nothing can go wrong. The commands have not been confirmed by a USB capture, and Unkludge has never written to a real keyboard. Nobody knows yet what a keyboard does if an upload just stops, as when it's unplugged. [docs/PROTOCOL.md](docs/PROTOCOL.md#not-confirmed) lists what's unconfirmed. If a keyboard stops responding, unplug it and plug it back in.
 

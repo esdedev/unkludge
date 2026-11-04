@@ -70,7 +70,7 @@ fn run_dry(cli: &Cli, command: &KeyboardCommand) -> Result<(), Failure> {
     let model = model::find(pid).ok_or(Error::Unsupported(pid))?;
     let device = dry_run::device(model)?;
     Console::with_stdio(|console| {
-        console.lines_err(commands::dry_run_notes(model, command, cli.timing));
+        console.lines_err(commands::dry_run_notes(model, cli.timing));
     });
     let host = ["Collections: not listed in a dry run".to_string()];
     drive(device, cli, command, &host)

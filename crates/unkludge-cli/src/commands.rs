@@ -60,16 +60,14 @@ pub fn run<T: Transport>(
 }
 
 /// What to know before a dry run's output.
-pub fn dry_run_notes(model: &Model, command: &KeyboardCommand, timing: bool) -> Vec<String> {
-    let mut notes = vec![format!(
-        "Dry run for {} ({:04X}): no keyboard is opened and nothing is sent.",
-        model.name, model.pid
-    )];
-    if let KeyboardCommand::Info | KeyboardCommand::Light(_) | KeyboardCommand::Report = command {
-        notes.push(
-            "The config read gets a blank block, which reads as the lights being off.".to_string(),
-        );
-    }
+pub fn dry_run_notes(model: &Model, timing: bool) -> Vec<String> {
+    let mut notes = vec![
+        format!(
+            "Dry run for {} ({:04X}): no keyboard is opened and nothing is sent.",
+            model.name, model.pid
+        ),
+        "The config read gets a blank block, which reads as the lights being off.".to_string(),
+    ];
     if timing {
         notes.push("A dry run makes up its acks, so timing says nothing about a keyboard.".into());
     }
@@ -151,6 +149,8 @@ fn clock<T: Transport>(
     options: &Options,
     console: &mut Console,
 ) -> Result<(), Failure> {
+    // As in the app, nothing gets written to a keyboard whose config block can't be used.
+    Config::read(device)?;
     let now = chrono::Local::now();
     set_clock(device, &device_time(&now)?)?;
     console.line(format_args!(
@@ -198,6 +198,10 @@ fn screen<T: Transport>(
         animation.delay_ms()
     ));
     console.line(format_args!("Chunks: {}", plan.total_chunks()));
+
+    // As in the app, nothing gets written to a keyboard whose config block can't be used. This comes
+    // after the file, so that a bad file doesn't get as far as the keyboard.
+    Config::read(device)?;
 
     // A dry run has no wait to show progress for. A terminal gets one line that keeps changing, and
     // a file or a pipe a line per frame.
@@ -516,15 +520,15 @@ mod tests {
     #[test]
     fn dry_run_notes_say_what_applies() {
         let s85 = model::find(0x0265).unwrap();
-        let clock = dry_run_notes(s85, &command(&["clock"]), false);
+        let plain = dry_run_notes(s85, false);
         assert_eq!(
-            clock,
-            ["Dry run for RK S85 ES (0265): no keyboard is opened and nothing is sent."]
+            plain[0],
+            "Dry run for RK S85 ES (0265): no keyboard is opened and nothing is sent."
         );
-        let info = dry_run_notes(s85, &command(&["info"]), false);
-        assert!(info[1].contains("blank block"), "{info:?}");
-        let timed = dry_run_notes(s85, &command(&["clock"]), true);
-        assert!(timed[1].contains("makes up its acks"), "{timed:?}");
+        assert!(plain[1].contains("blank block"), "{plain:?}");
+        assert_eq!(plain.len(), 2);
+        let timed = dry_run_notes(s85, true);
+        assert!(timed[2].contains("makes up its acks"), "{timed:?}");
     }
 
     #[test]
@@ -681,11 +685,12 @@ mod tests {
     }
 
     #[test]
-    fn the_clock_sends_one_clock_report() {
+    fn the_clock_reads_the_config_then_sends_one_clock_report() {
         let (result, outcome) = dry(&["clock"]);
         result.unwrap();
-        assert_eq!(outcome.sent.len(), 1);
-        assert_eq!(&outcome.sent[0][..8], &[0x09, 0x0B, 0, 0, 1, 0, 14, 0]);
+        assert_eq!(outcome.sent.len(), 2);
+        assert_only_config_reads(&outcome.sent[..1]);
+        assert_eq!(&outcome.sent[1][..8], &[0x09, 0x0B, 0, 0, 1, 0, 14, 0]);
         assert!(outcome.out.contains("Clock: "), "{}", outcome.out);
         assert!(outcome.err.is_empty(), "{}", outcome.err);
     }
@@ -705,11 +710,12 @@ mod tests {
         let (result, outcome) = on_device(&mut dry_device(0x0265), &screen);
         std::fs::remove_file(&path).unwrap();
         result.unwrap();
-        // The start, 215 chunks per frame, and the finish.
-        assert_eq!(outcome.sent.len(), 432);
-        assert_eq!(outcome.sent[0][1], 0x0D);
-        assert_eq!(outcome.sent[431][1], 0x0D);
-        assert!(outcome.sent[1..431].iter().all(|report| report[1] == 0x0C));
+        // The config read, the start, 215 chunks per frame, and the finish.
+        assert_eq!(outcome.sent.len(), 433);
+        assert_only_config_reads(&outcome.sent[..1]);
+        assert_eq!(outcome.sent[1][1], 0x0D);
+        assert_eq!(outcome.sent[432][1], 0x0D);
+        assert!(outcome.sent[2..432].iter().all(|report| report[1] == 0x0C));
         assert!(
             outcome.out.contains("Frames: 2 at 320x172, 200 ms each"),
             "{}",
@@ -762,7 +768,7 @@ mod tests {
     }
 
     #[test]
-    fn cancelling_before_the_upload_sends_nothing_and_isnt_done() {
+    fn cancelling_before_the_upload_writes_nothing_and_isnt_done() {
         let path = temp_gif("cancel-first", 1);
         let cancel = AtomicBool::new(true);
         let options = Options {
@@ -773,7 +779,7 @@ mod tests {
         let (result, outcome) = with_options(&mut dry_device(0x0265), &screen, &options);
         std::fs::remove_file(&path).unwrap();
         assert_eq!(result.unwrap_err().to_string(), "cancelled");
-        assert!(outcome.sent.is_empty());
+        assert_only_config_reads(&outcome.sent);
         assert!(!outcome.out.contains("Done"), "{}", outcome.out);
     }
 
@@ -835,7 +841,7 @@ mod tests {
         result.unwrap();
         assert!(outcome.err.contains("warning: "), "{}", outcome.err);
         assert!(outcome.err.contains("first 60"), "{}", outcome.err);
-        assert_eq!(outcome.sent.len(), 60 * 215 + 2);
+        assert_eq!(outcome.sent.len(), 1 + 60 * 215 + 2);
     }
 
     #[test]
@@ -847,10 +853,69 @@ mod tests {
         assert!(outcome.sent.is_empty());
     }
 
+    /// A config block as a keyboard would give it, with its end marker or without.
+    fn config_reply(good: bool) -> Vec<u8> {
+        let mut reply = vec![0x09, 0x84, 0, 0, 1, 0, 0x80, 0];
+        reply.extend([0; 126]);
+        reply.extend(if good { [0x5A, 0xA5] } else { [0, 0] });
+        reply
+    }
+
+    fn fake_device(fake: &FakeTransport) -> Device<FakeTransport> {
+        Device::new(fake.clone(), None, model::find(0x0265).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn nothing_is_written_to_a_keyboard_with_an_unusable_config_block() {
+        let path = temp_gif("bad-block", 1);
+        let upload = command(&["screen", path.to_str().unwrap()]);
+        for command in [command(&["clock"]), upload] {
+            let fake = FakeTransport::with_auto_ack();
+            // Reads get five tries.
+            for _ in 0..5 {
+                fake.queue_feature_reply(&config_reply(false));
+            }
+            let (result, outcome) =
+                with_options(&mut fake_device(&fake), &command, &real_options(false));
+            assert!(result.is_err());
+            assert_only_config_reads(&fake.sent());
+            assert_eq!(fake.sent().len(), 5);
+            assert!(!outcome.out.contains("Done"), "{}", outcome.out);
+        }
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn nothing_is_written_to_a_keyboard_that_cant_be_read() {
+        let path = temp_gif("no-read", 1);
+        let upload = command(&["screen", path.to_str().unwrap()]);
+        for command in [command(&["clock"]), upload] {
+            let fake = FakeTransport::with_auto_ack();
+            let (result, _) = with_options(&mut fake_device(&fake), &command, &real_options(false));
+            assert!(result.is_err());
+            assert_only_config_reads(&fake.sent());
+        }
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn a_good_config_block_lets_the_clock_through() {
+        let fake = FakeTransport::new();
+        fake.queue_feature_reply(&config_reply(true));
+        let (result, _) = with_options(
+            &mut fake_device(&fake),
+            &command(&["clock"]),
+            &real_options(false),
+        );
+        result.unwrap();
+        assert_eq!(fake.sent()[1][1], 0x0B);
+    }
+
     #[test]
     fn a_finish_the_keyboard_doesnt_confirm_is_a_warning() {
         let path = temp_gif("finish", 1);
         let fake = FakeTransport::with_auto_ack();
+        fake.queue_feature_reply(&config_reply(true));
         // The start is ack 0, then 215 chunks. So the finish is ack 216.
         fake.ack_fault(216, AckFault::Drop);
         let mut device = Device::new(fake, None, model::find(0x0265).unwrap()).unwrap();
@@ -867,6 +932,7 @@ mod tests {
     fn a_rejected_upload_fails_after_the_abort() {
         let path = temp_gif("abort", 1);
         let fake = FakeTransport::with_auto_ack();
+        fake.queue_feature_reply(&config_reply(true));
         fake.ack_fault(5, AckFault::Drop);
         let mut device = Device::new(fake, None, model::find(0x0265).unwrap()).unwrap();
         let screen = command(&["screen", path.to_str().unwrap()]);

@@ -132,12 +132,13 @@ fn light_with_a_mode_prints_the_read_and_the_write() {
 }
 
 #[test]
-fn clock_prints_the_one_report() {
+fn clock_prints_the_read_and_the_one_report() {
     let output = unkludge(&["clock", "--dry-run", "--pid", "0265"]);
     assert_eq!(output.status.code(), Some(0));
     let text = stdout(&output);
     assert!(text.contains("09 0B 00 00 01 00 0E 00 00 00 00"), "{text}");
-    assert!(text.contains("Reports: 1 x 0x0B"), "{text}");
+    assert!(text.contains("09 84 00 00 01 00 80 00"), "{text}");
+    assert!(text.contains("Reports: 1 x 0x84, 1 x 0x0B"), "{text}");
 }
 
 #[test]
@@ -277,12 +278,15 @@ fn screen_prints_a_summary_not_every_chunk() {
     std::fs::remove_file(&path).unwrap();
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let text = stdout(&output);
-    assert!(text.lines().count() < 16, "{text}");
+    assert!(text.lines().count() < 17, "{text}");
     assert!(
         text.contains("... 213 more chunks of frame 0 ..."),
         "{text}"
     );
-    assert!(text.contains("Reports: 2 x 0x0D, 215 x 0x0C"), "{text}");
+    assert!(
+        text.contains("Reports: 1 x 0x84, 2 x 0x0D, 215 x 0x0C"),
+        "{text}"
+    );
     assert!(text.contains("Total: "), "{text}");
     assert!(
         text.contains("Chunks: 215 sent, 215 acknowledged"),

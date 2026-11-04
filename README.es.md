@@ -202,7 +202,7 @@ En un `--dry-run` no hay teclado del que leer, así que lee como si las luces es
 - Mapas de teclas, macros, colores por tecla ni efectos en tiempo real, en esta versión.
 - Ningún byte de comando que no sea `0x84`, `0x04`, `0x0A`, `0x0B`, `0x0C`, `0x0D` o `0x82`, ni ningún ID de report que no sea `0x09`. Un test ejecuta todos los flujos y falla si sale cualquier otra cosa. La lista exacta está en [docs/PROTOCOL.md](docs/PROTOCOL.md#never-sent).
 
-**Cómo escribe.** Los ajustes se leen primero y se vuelven a escribir solo con lo que has pedido cambiar. Los bytes que no conoce conservan su valor. Si la lectura falla o el bloque no termina en `5A A5`, no se escribe nada.
+**Cómo escribe.** Los ajustes se leen primero y se vuelven a escribir solo con lo que has pedido cambiar. Los bytes que no conoce conservan su valor. Si la lectura falla o el bloque no termina en `5A A5`, no se escribe nada: ni ajustes, ni el reloj, ni una subida a la pantalla, desde la app o desde la línea de comandos.
 
 **Lo que no se sabe.** Esto no es ninguna promesa de que nada pueda salir mal. Ninguna captura USB ha confirmado los comandos, y Unkludge nunca ha escrito en un teclado real. Aún no se sabe qué hace un teclado si una subida se corta sin más, como al desenchufarlo. [docs/PROTOCOL.md](docs/PROTOCOL.md#not-confirmed) lista lo que está sin confirmar. Si un teclado deja de responder, desenchúfalo y vuelve a enchufarlo.
 

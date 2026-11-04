@@ -119,6 +119,8 @@ The official app has no command to read them back, so whoever writes them must k
 
 The official app sends the time on connecting, with bytes 0 to 2 at 0. It doesn't send the clock during a screen upload. There's no ack, so a sent clock can only be checked by looking at the screen.
 
+Unkludge reads the config block before sending the clock or starting a screen upload, and sends neither if the read fails or the block has no end marker.
+
 Example, for 2026-10-29 01:24:07, a Thursday:
 
 ```
