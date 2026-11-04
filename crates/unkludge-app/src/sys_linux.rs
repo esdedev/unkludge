@@ -10,6 +10,8 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use unkludge_shared::linux_dirs::{self, env_dir};
+
 const APP_NAME: &str = "unkludge";
 
 /// In the binary, so that it can be installed from the plain binary or an AppImage too.
@@ -58,17 +60,9 @@ pub fn grant_access() -> Result<(), GrantError> {
     }
 }
 
-/// An environment variable holding an absolute path. The XDG rules treat anything else as not set.
-fn env_dir(name: &str) -> Option<PathBuf> {
-    std::env::var_os(name)
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-}
-
 /// `~/.config/unkludge`
 pub fn data_dir() -> Option<PathBuf> {
-    let config = env_dir("XDG_CONFIG_HOME").or_else(|| Some(env_dir("HOME")?.join(".config")))?;
-    Some(config.join(APP_NAME))
+    linux_dirs::data_dir()
 }
 
 fn locale_is_spanish(locale: &str) -> bool {
@@ -322,12 +316,10 @@ extern "C" fn on_end_signal(signal: libc::c_int) {
 
 // One copy at a time
 
-fn runtime_dir() -> PathBuf {
-    env_dir("XDG_RUNTIME_DIR").unwrap_or_else(std::env::temp_dir)
-}
-
-fn show_socket() -> PathBuf {
-    runtime_dir().join(format!("{APP_NAME}.sock"))
+/// In the runtime folder, or else the data folder: never anywhere other users can write, where one
+/// of theirs could be waiting under this name.
+fn show_socket() -> Option<PathBuf> {
+    Some(linux_dirs::runtime_dir()?.join(format!("{APP_NAME}.sock")))
 }
 
 /// How trying to be the only copy went.
@@ -391,7 +383,9 @@ pub fn claim_single_instance() -> bool {
 
 /// Asks the copy that's running to show its window.
 pub fn show_other_copy() {
-    ask_to_show(&show_socket());
+    if let Some(socket) = show_socket() {
+        ask_to_show(&socket);
+    }
 }
 
 /// Whether the udev rule is in place, whoever put it there.
@@ -408,13 +402,25 @@ fn ask_to_show(socket: &Path) {
 /// Calls `show` whenever another copy that started asks for the window. Only for the copy that
 /// [`claim_single_instance`] said yes to, as it replaces a socket left behind.
 pub fn on_show_request(show: impl Fn() + Send + 'static) {
-    listen_for_show(&show_socket(), show);
+    if let Some(socket) = show_socket() {
+        listen_for_show(&socket, show);
+    }
 }
 
+/// With no socket, starting another copy just won't bring up the window, which is no reason to stop.
 fn listen_for_show(socket: &Path, show: impl Fn() + Send + 'static) {
+    if let Some(folder) = socket.parent() {
+        let _ = std::fs::create_dir_all(folder);
+    }
     let _ = std::fs::remove_file(socket);
-    let Ok(listener) = UnixListener::bind(socket) else {
-        return;
+    let listener = match UnixListener::bind(socket) {
+        Ok(listener) => listener,
+        Err(error) => {
+            crate::log::error(&format!(
+                "other copies can't ask for the window, as there's no socket: {error}"
+            ));
+            return;
+        }
     };
     std::thread::spawn(move || {
         accept_loop(
@@ -532,14 +538,6 @@ mod tests {
         assert!(locale_is_spanish("es"));
         assert!(!locale_is_spanish("en_US.UTF-8"));
         assert!(!locale_is_spanish("C"));
-    }
-
-    #[test]
-    fn the_data_folder_is_the_apps_own() {
-        // Without HOME or XDG_CONFIG_HOME there's no answer, which CI won't have.
-        if let Some(dir) = data_dir() {
-            assert_eq!(dir.file_name().unwrap(), "unkludge");
-        }
     }
 
     #[test]
@@ -786,6 +784,27 @@ mod tests {
         let socket = dir.0.join("test.sock");
         // One left behind by a copy that crashed doesn't get in the way.
         std::fs::write(&socket, "").unwrap();
+        let (shown_tx, shown) = channel();
+        listen_for_show(&socket, move || {
+            let _ = shown_tx.send(());
+        });
+        ask_to_show(&socket);
+        assert_eq!(shown.recv_timeout(Duration::from_secs(10)), Ok(()));
+    }
+
+    #[test]
+    fn a_socket_that_cant_be_made_is_no_reason_to_stop() {
+        let dir = TempDir::new("no-socket-folder");
+        let not_a_folder = dir.0.join("file");
+        std::fs::write(&not_a_folder, "kept").unwrap();
+        listen_for_show(&not_a_folder.join("test.sock"), || {});
+        assert_eq!(std::fs::read_to_string(&not_a_folder).unwrap(), "kept");
+    }
+
+    #[test]
+    fn the_listener_makes_the_folder_it_needs() {
+        let dir = TempDir::new("socket-folder");
+        let socket = dir.0.join("deeper").join("test.sock");
         let (shown_tx, shown) = channel();
         listen_for_show(&socket, move || {
             let _ = shown_tx.send(());

@@ -220,6 +220,7 @@ The app has a **Send report** link on experimental and unsupported models. There
 
 - Settings and logs (`settings.txt`, `unkludge.log`, `crash.log`, `unkludge-report.txt`) live in `%APPDATA%\Unkludge` on Windows and `~/.config/unkludge` on Linux, or `$XDG_CONFIG_HOME/unkludge` if that's set.
 - `unkludge-app --tray` starts hidden in the tray. Running the app when it's already running shows its window.
+- On Linux, the socket that asks for that window and the lock on the keyboard are in `$XDG_RUNTIME_DIR` if it's set and belongs to you, and otherwise in the data folder.
 - To remove Unkludge: turn off *Start with the system*, quit, then delete the programs and the data folder, and on Linux the [udev rule](#linux-access).
 
 ## License
