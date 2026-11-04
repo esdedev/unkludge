@@ -5,6 +5,8 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 #[cfg(windows)]
+use std::sync::{Mutex, MutexGuard, PoisonError};
+#[cfg(windows)]
 use std::time::Duration;
 
 #[cfg(windows)]
@@ -212,9 +214,24 @@ fn this_test_build_cant_open_a_keyboard() {
 /// already, and a command must refuse all the same. Only on Windows: on Linux the lock is the
 /// keyboard's own node, and this build of the program can't get as far as that.
 #[cfg(windows)]
-fn hold_the_lock() -> Option<DeviceLock> {
+struct HeldLock {
+    _lock: Option<DeviceLock>,
+    // After the lock, so that the next test's turn only starts once the lock is free.
+    _turn: MutexGuard<'static, ()>,
+}
+
+#[cfg(windows)]
+fn hold_the_lock() -> HeldLock {
+    // Tests take turns before they ask. A test that ran out of time behind another one would take
+    // that for the app having the lock, and go on without it.
+    static TURN: Mutex<()> = Mutex::new(());
+    // A test that fails on its turn reports that itself, and the others can still run.
+    let turn = TURN.lock().unwrap_or_else(PoisonError::into_inner);
     let place = Place::system().unwrap();
-    DeviceLock::take(&place, Duration::from_secs(5)).ok()
+    HeldLock {
+        _lock: DeviceLock::take(&place, Duration::from_secs(5)).ok(),
+        _turn: turn,
+    }
 }
 
 #[cfg(windows)]
