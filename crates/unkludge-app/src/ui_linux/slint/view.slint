@@ -80,10 +80,12 @@ export struct LightsView {
     brightness-step: int,
     brightness-steps: int,
     brightness-text: string,
+    brightness-percent: int,
     has-speed: bool,
     speed-step: int,
     speed-steps: int,
     speed-text: string,
+    speed-min: int,
     own-colors: bool,
     has-colors: bool,
     has-rainbow: bool,
@@ -184,8 +186,10 @@ export global View {
     in property <[Choice]> sleeps;
     in property <[Swatch]> swatches;
     in property <DialogKind> dialog;
+    // Another program is asking for a file, which is as much a dialog as these.
+    in property <bool> picking;
     in property <ColorDialog> color-dialog;
-    out property <bool> modal: dialog != DialogKind.none;
+    out property <bool> modal: dialog != DialogKind.none || picking;
 }
 
 export global Actions {

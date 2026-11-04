@@ -5,7 +5,9 @@ use std::ffi::{OsStr, OsString};
 use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crate::i18n::t;
 
@@ -22,9 +24,13 @@ pub enum Picked {
     NoProgram,
 }
 
+/// What both programs exit with when the user closes them.
+const EXIT_CANCELLED: i32 = 1;
+
 /// What a program for choosing a file said, if it could be run.
 pub struct Answer {
-    pub success: bool,
+    /// Its exit code, if it wasn't killed.
+    pub code: Option<i32>,
     pub stdout: Vec<u8>,
 }
 
@@ -59,7 +65,8 @@ fn path_in(stdout: &[u8]) -> Option<PathBuf> {
     (!line.is_empty()).then(|| PathBuf::from(OsStr::from_bytes(line)))
 }
 
-/// Tries each program in turn with `run`, and the first that runs gets to say.
+/// Tries each program in turn with `run`, and the first that has an answer gets to say. One that
+/// can't run or that fails, as with no display it can use, leaves it to the next.
 fn pick_with(
     title: &str,
     kind: &str,
@@ -69,34 +76,74 @@ fn pick_with(
         let Ok(answer) = run(program, &args) else {
             continue;
         };
-        return match path_in(&answer.stdout).filter(|_| answer.success) {
-            Some(path) => Picked::File(path),
-            None => Picked::Cancelled,
-        };
+        match answer.code {
+            Some(0) => {
+                return path_in(&answer.stdout).map_or(Picked::Cancelled, Picked::File);
+            }
+            Some(EXIT_CANCELLED) => return Picked::Cancelled,
+            _ => {}
+        }
     }
     Picked::NoProgram
 }
 
-/// Asks for a file. Waits for the user, so don't call this from the interface's thread.
-pub fn choose_image() -> Picked {
-    pick_with(t().choose_title, t().image_files, |program, args| {
-        Command::new(program)
+/// Asks for files, and can stop asking from another thread.
+#[derive(Clone, Default)]
+pub struct Picker {
+    /// The process asking right now.
+    running: Arc<AtomicU32>,
+    stopped: Arc<AtomicBool>,
+}
+
+impl Picker {
+    /// Asks for a file. Waits for the user, so don't call this from the interface's thread.
+    pub fn choose_image(&self) -> Picked {
+        pick_with(t().choose_title, t().image_files, |program, args| {
+            self.run(program, args)
+        })
+    }
+
+    fn run(&self, program: &str, args: &[OsString]) -> io::Result<Answer> {
+        if self.stopped.load(Ordering::SeqCst) {
+            return Err(io::ErrorKind::Interrupted.into());
+        }
+        let child = Command::new(program)
             .args(args)
-            .output()
-            .map(|output| Answer {
-                success: output.status.success(),
-                stdout: output.stdout,
-            })
-    })
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()?;
+        self.running.store(child.id(), Ordering::SeqCst);
+        let output = child.wait_with_output();
+        self.running.store(0, Ordering::SeqCst);
+        let output = output?;
+        Ok(Answer {
+            code: output.status.code(),
+            stdout: output.stdout,
+        })
+    }
+
+    /// Closes what's asking, if anything is.
+    pub fn stop(&self) {
+        self.stopped.store(true, Ordering::SeqCst);
+        let running = self.running.swap(0, Ordering::SeqCst);
+        if running != 0 {
+            // SAFETY: plain numbers. It's cleared as soon as the process has been waited for, so
+            // the number is still that process's.
+            unsafe {
+                libc::kill(running as libc::pid_t, libc::SIGTERM);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn answer(success: bool, stdout: &[u8]) -> io::Result<Answer> {
+    fn answer(code: i32, stdout: &[u8]) -> io::Result<Answer> {
         Ok(Answer {
-            success,
+            code: Some(code),
             stdout: stdout.to_vec(),
         })
     }
@@ -106,7 +153,7 @@ mod tests {
         let mut tried = Vec::new();
         let picked = pick_with("T", "K", |program, _| {
             tried.push(program.to_string());
-            answer(true, b"/a/b.gif\n")
+            answer(0, b"/a/b.gif\n")
         });
         assert_eq!(picked, Picked::File(PathBuf::from("/a/b.gif")));
         assert_eq!(tried, ["zenity"]);
@@ -120,7 +167,7 @@ mod tests {
             if program == "zenity" {
                 Err(io::ErrorKind::NotFound.into())
             } else {
-                answer(true, b"/c.png\n")
+                answer(0, b"/c.png\n")
             }
         });
         assert_eq!(picked, Picked::File(PathBuf::from("/c.png")));
@@ -138,10 +185,75 @@ mod tests {
         let mut tries = 0;
         let picked = pick_with("T", "K", |_, _| {
             tries += 1;
-            answer(false, b"")
+            answer(1, b"")
         });
         assert_eq!(picked, Picked::Cancelled);
         assert_eq!(tries, 1);
+    }
+
+    #[test]
+    fn a_program_that_fails_leaves_it_to_the_next() {
+        let mut tried = Vec::new();
+        let picked = pick_with("T", "K", |program, _| {
+            tried.push(program.to_string());
+            if program == "zenity" {
+                answer(255, b"")
+            } else {
+                answer(0, b"/c.png\n")
+            }
+        });
+        assert_eq!(picked, Picked::File(PathBuf::from("/c.png")));
+        assert_eq!(tried, ["zenity", "kdialog"]);
+    }
+
+    #[test]
+    fn with_every_program_failing_the_window_has_to_ask() {
+        assert_eq!(
+            pick_with("T", "K", |_, _| answer(5, b"")),
+            Picked::NoProgram
+        );
+    }
+
+    #[test]
+    fn a_program_that_was_killed_is_no_answer() {
+        let picked = pick_with("T", "K", |_, _| {
+            Ok(Answer {
+                code: None,
+                stdout: Vec::new(),
+            })
+        });
+        assert_eq!(picked, Picked::NoProgram);
+    }
+
+    #[test]
+    fn saying_yes_with_nothing_chosen_is_changing_ones_mind() {
+        assert_eq!(
+            pick_with("T", "K", |_, _| answer(0, b"\n")),
+            Picked::Cancelled
+        );
+    }
+
+    #[test]
+    fn stopping_closes_what_is_asking() {
+        let picker = Picker::default();
+        let asking = picker.clone();
+        let started = std::time::Instant::now();
+        let running = std::thread::spawn(move || asking.run("sleep", &[OsString::from("30")]));
+        while picker.running.load(Ordering::SeqCst) == 0 {
+            assert!(started.elapsed().as_secs() < 10, "it never started");
+            std::thread::yield_now();
+        }
+        picker.stop();
+        let answer = running.join().unwrap().unwrap();
+        assert_eq!(answer.code, None, "killed");
+        assert!(started.elapsed().as_secs() < 10);
+    }
+
+    #[test]
+    fn once_stopped_nothing_else_gets_started() {
+        let picker = Picker::default();
+        picker.stop();
+        assert!(picker.run("true", &[]).is_err());
     }
 
     #[test]

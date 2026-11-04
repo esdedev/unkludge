@@ -4,10 +4,9 @@
 //!
 //! Slint's own way of scaling is `SLINT_SCALE_FACTOR`, which is read as a window gets made, and the
 //! screen can't be known before that. So the window starts at the system's scale, and once it exists
-//! this tells it the scale that fits, as the system does when a window moves to another monitor. That
-//! only ever goes down: going up takes a bigger surface first, and drawing to one that's still too
-//! small is a panic in the renderer. A window that shrank for a banner stays that size until the app
-//! starts again, which is no great loss on a screen that small.
+//! this tells it the scale that fits, as the system does when a window moves to another monitor. Going
+//! up takes a bigger surface first, as drawing to one that's still too small is a panic in the
+//! renderer, so the window grows first and only then does the scale change. See [`next_step`].
 
 use slint::winit_030::WinitWindowAccessor;
 use slint::winit_030::winit;
@@ -58,9 +57,44 @@ pub fn size_at(height_dips: f32, scale: f32) -> (u32, u32) {
     (pixels(WIDTH, dpi) as u32, pixels(height_dips, dpi) as u32)
 }
 
-/// The scale to go to from `current`, wanting `fitting`. See the module's description.
-pub fn shrunk_scale(current: f32, fitting: f32) -> f32 {
-    current.min(fitting)
+/// What to do about the window's scale and size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Step {
+    /// The scale to take now, if it's to change.
+    pub scale: Option<f32>,
+    /// The size the window should have, in pixels.
+    pub size: (u32, u32),
+    /// The scale is to go up once the window has that size, which it doesn't yet.
+    pub growing: bool,
+}
+
+/// The next step from a scale of `current` and a window of `size` pixels, wanting `fitting`. The scale
+/// goes down at once, as a surface that's too large does no harm. It only goes up with a surface that
+/// already has the room.
+pub fn next_step(current: f32, fitting: f32, height_dips: f32, size: (u32, u32)) -> Step {
+    if (fitting - current).abs() < SCALE_STEP {
+        return Step {
+            scale: None,
+            size: size_at(height_dips, current),
+            growing: false,
+        };
+    }
+    let wanted = size_at(height_dips, fitting);
+    let has_room = size.0 >= wanted.0 && size.1 >= wanted.1;
+    let growing = fitting > current && !has_room;
+    Step {
+        scale: (!growing).then_some(fitting),
+        size: wanted,
+        growing,
+    }
+}
+
+/// How fitting a window went.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Fitted {
+    pub scale: f32,
+    /// It's waiting for the window to grow, and should be looked at again.
+    pub growing: bool,
 }
 
 /// What winit knows of the screen the window is on.
@@ -115,7 +149,7 @@ pub fn is_wayland(window: &AppWindow) -> bool {
 
 /// Fits a window that exists to its screen, and says what scale it's now at. With no screen to go
 /// by it stays as it is. `work_area` is what a demo said the screen is like.
-pub fn fit(window: &AppWindow, height_dips: f32, work_area: Option<(i32, i32)>) -> Option<f32> {
+pub fn fit(window: &AppWindow, height_dips: f32, work_area: Option<(i32, i32)>) -> Option<Fitted> {
     let screen = window
         .window()
         .with_winit_window(screen_of)
@@ -124,23 +158,44 @@ pub fn fit(window: &AppWindow, height_dips: f32, work_area: Option<(i32, i32)>) 
     let os_scale = scale_asked_for().unwrap_or(screen.scale);
     let work = work_area.unwrap_or_else(|| work_of_screen(screen.size, os_scale));
     let current = window.window().scale_factor();
-    let scale = shrunk_scale(current, scale_for(os_scale, height_dips, work));
-    if current - scale >= SCALE_STEP {
-        window
-            .window()
-            .dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged {
-                scale_factor: scale,
-            });
+    let now = window.window().size();
+    let step = next_step(
+        current,
+        scale_for(os_scale, height_dips, work),
+        height_dips,
+        (now.width, now.height),
+    );
+    if let Some(scale) = step.scale {
+        change_scale(window, scale, height_dips);
     }
-    // Slint asks for a size in its logical pixels and leaves it to winit, whose scale is the system's.
-    // With another one the window has to be told in real pixels.
-    if (scale - screen.scale).abs() >= SCALE_STEP {
-        take_size(window, size_at(height_dips, scale));
+    // Slint asks for a size in its logical pixels and leaves it to winit, whose scale can be another,
+    // and that goes wrong too when the window starts on one monitor and ends up on another. So what
+    // counts is the size it has, in real pixels.
+    if window.window().size() != PhysicalSize::new(step.size.0, step.size.1) {
+        take_size(window, step.size);
     }
+    let scale = step.scale.unwrap_or(current);
     if !is_wayland(window) {
-        keep_on_screen(window, &screen, height_dips, scale, os_scale);
+        keep_on_screen(window, &screen, step.size, os_scale);
     }
-    Some(scale)
+    Some(Fitted {
+        scale,
+        growing: step.growing,
+    })
+}
+
+/// Changes the scale, and says the window's size in Slint's pixels with it, before anything gets to
+/// draw: a window that grew in the old scale has too many of those for the new one.
+fn change_scale(window: &AppWindow, scale: f32, height_dips: f32) {
+    use slint::platform::WindowEvent;
+    window
+        .window()
+        .dispatch_event(WindowEvent::ScaleFactorChanged {
+            scale_factor: scale,
+        });
+    window.window().dispatch_event(WindowEvent::Resized {
+        size: slint::LogicalSize::new(WIDTH, height_dips),
+    });
 }
 
 /// Takes a size in real pixels, limits first, as Slint only works those out when the size in its own
@@ -169,15 +224,8 @@ fn set_size_and_limits(window: &AppWindow, size: PhysicalSize) {
 
 /// On Wayland the compositor places the window, and on X11 the window manager does at first, but it
 /// won't necessarily move a window that has grown past the edge.
-fn keep_on_screen(
-    window: &AppWindow,
-    screen: &Screen,
-    height_dips: f32,
-    scale: f32,
-    os_scale: f32,
-) {
+fn keep_on_screen(window: &AppWindow, screen: &Screen, size: (u32, u32), os_scale: f32) {
     let now = window.window().position();
-    let size = size_at(height_dips, scale);
     let dpi = os_scale * 96.0;
     let outer = (
         size.0 as i32 + frame_at(dpi).0,
@@ -284,10 +332,44 @@ mod tests {
     }
 
     #[test]
-    fn the_scale_only_goes_down() {
-        assert_eq!(shrunk_scale(1.0, 0.9), 0.9);
-        assert_eq!(shrunk_scale(0.9, 1.0), 0.9);
-        assert_eq!(shrunk_scale(1.0, 1.0), 1.0);
+    fn the_scale_goes_down_at_once() {
+        let step = next_step(1.0, 0.9, 643.0, (900, 643));
+        assert_eq!(step.scale, Some(0.9));
+        assert_eq!(step.size, size_at(643.0, 0.9));
+        assert!(!step.growing);
+    }
+
+    #[test]
+    fn the_scale_doesnt_go_up_before_the_window_has_grown() {
+        let small = size_at(643.0, 0.9);
+        let step = next_step(0.9, 1.0, 643.0, small);
+        assert_eq!(step.scale, None, "the renderer would panic");
+        assert_eq!(step.size, size_at(643.0, 1.0));
+        assert!(step.growing);
+        // Room in only one direction isn't enough.
+        assert_eq!(next_step(0.9, 1.0, 643.0, (900, small.1)).scale, None);
+        assert_eq!(next_step(0.9, 1.0, 643.0, (small.0, 643)).scale, None);
+    }
+
+    #[test]
+    fn the_scale_goes_up_once_the_window_has_room() {
+        let step = next_step(0.9, 1.0, 643.0, size_at(643.0, 1.0));
+        assert_eq!(step.scale, Some(1.0));
+        assert!(!step.growing);
+    }
+
+    #[test]
+    fn a_scale_thats_right_is_left_alone_and_the_size_still_gets_looked_at() {
+        let step = next_step(1.0, 1.0, 643.0, (1050, 750));
+        assert_eq!(step.scale, None);
+        assert_eq!(step.size, (900, 643));
+        assert!(!step.growing);
+    }
+
+    #[test]
+    fn a_scale_that_differs_by_next_to_nothing_stays() {
+        assert_eq!(next_step(1.0, 1.001, 643.0, (900, 643)).scale, None);
+        assert_eq!(next_step(1.0, 0.999, 643.0, (900, 643)).scale, None);
     }
 
     #[test]

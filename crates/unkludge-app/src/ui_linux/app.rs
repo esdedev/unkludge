@@ -12,47 +12,38 @@ use std::time::{Duration, Instant};
 use unkludge_protocol::lighting::Rgb;
 use unkludge_protocol::screen::Animation;
 use ksni::blocking::Handle;
-use slint::platform::{Key, WindowEvent};
-use slint::{
-    CloseRequestResponse, ComponentHandle, Global, Model, ModelRc, Timer, TimerMode, VecModel,
-};
+use slint::platform::Key;
+use slint::{ComponentHandle, Global, Model, ModelRc, Timer, TimerMode, VecModel};
 
-use super::tray::{self, Close, Start, Tray};
-use super::{
-    APP_ID, AppWindow, Banner, Choice, DialogKind, Swatch, View, dialogs, fit, resume, shot, view,
-};
+use super::tray::Tray;
+use super::{AppWindow, Banner, Choice, DialogKind, Swatch, View, dialogs, resume, shot, view};
 use crate::demo::Script;
 use crate::drive::{Drained, MESSAGE_TIME, PROGRESS_PAINT_GAP, Parts};
 use crate::i18n::t;
 use crate::layout;
-use crate::session::{Session, SystemAutostart, open_real_keyboard};
+use crate::session::{Session, SystemAutostart};
 use crate::settings::Settings;
 use crate::state::{Note, Slider, State, Tone};
-use crate::worker::{Cmd, Event, Notify, WorkerHandle};
+use crate::worker::{Cmd, Event, WorkerHandle};
 use crate::{log, sys};
 
 mod modal;
 mod preview;
+mod start;
+mod window;
 mod wiring;
 
 #[cfg(test)]
 pub(super) use preview::wanted_preview_timer;
+#[cfg(test)]
+pub(super) use start::Outside;
+pub(super) use start::RealOutside;
 pub(super) use wiring::press;
 #[cfg(test)]
 pub(super) use wiring::wire as wire_for_tests;
-use wiring::{app_icon, hook_window_events, raise, wire};
 
-/// A window minimized at login because there was no tray yet goes into a tray that turns up this soon.
-const TRAY_GRACE: Duration = Duration::from_secs(60);
-/// Closing again this soon after minimizing means that it didn't work.
-const MINIMIZE_GRACE: Duration = Duration::from_secs(2);
-/// A new window doesn't always reach the window manager straight away.
-const MINIMIZE_AGAIN_AFTER: Duration = Duration::from_millis(300);
-/// How long to wait for the window to exist, and how many times.
-const FIT_RETRY: Duration = Duration::from_millis(100);
-const MAX_FIT_TRIES: u32 = 50;
-/// How long a scripted demo waits to reach its state before giving up.
-const SHOT_GIVE_UP: Duration = Duration::from_secs(90);
+/// Files dropped together come one at a time this close together.
+const DROP_BURST: Duration = Duration::from_millis(500);
 
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
@@ -150,10 +141,14 @@ pub struct App {
     /// A wake-up is on its way, so the worker needn't send another.
     woken: Arc<AtomicBool>,
     session: Session,
+    /// Where settings and reports go. A test has its own.
+    data_dir: Option<PathBuf>,
     script: Option<Script>,
     shot_scheduled: bool,
     autostart: bool,
     tray: Option<Handle<Tray>>,
+    /// Whether there's a tray to stay in right now, which the tray's thread keeps up to date.
+    pub(super) tray_online: Arc<AtomicBool>,
     /// Waiting for the system's password dialog.
     granting: bool,
     /// Whether files can be dropped on the window. Not on Wayland, where winit doesn't pass them on.
@@ -168,27 +163,44 @@ pub struct App {
     preview_timer: Timer,
     message_timer: Timer,
     sleep_timer: Timer,
+    sleep_watch: resume::SleepWatch,
+    /// For a move of the window, which ends some time after it stops saying so.
+    refit_timer: Timer,
     /// When the last redraw that an upload's progress asked for was.
     last_refresh: Instant,
     /// Minimized at login for want of a tray, which may yet turn up.
-    parked_at: Option<Instant>,
-    minimized_at: Option<Instant>,
+    pub(super) parked_at: Option<Instant>,
+    /// When it was last asked to minimize, for as long as that's still the news.
+    pub(super) minimized_at: Option<Instant>,
     /// A dialog of the window's own came from the keyboard, so the focus goes back afterwards.
     dialog_by_keyboard: bool,
     /// A file is being asked for, so another shouldn't be.
-    choosing_file: bool,
+    pub(super) choosing_file: bool,
+    picker: dialogs::Picker,
+    /// When a file was last dropped.
+    last_drop: Option<Instant>,
     color: Option<ColorEdit>,
-    /// How many times the window wasn't there yet to be fitted.
-    fit_tries: u32,
+    /// How many times the window wasn't there yet to be fitted, or to be minimized.
+    pub(super) fit_tries: u32,
+    pub(super) size_refits: u32,
+    minimize_tries: u32,
     #[cfg(test)]
     pub(super) frames_decoded: usize,
     /// What would have gone to the worker.
     #[cfg(test)]
     pub(super) sent: RefCell<Vec<&'static str>>,
+    /// And the lighting changes among it.
+    #[cfg(test)]
+    pub(super) sent_lighting: RefCell<Vec<unkludge_protocol::lighting::LightingChange>>,
 }
 
 impl App {
-    pub(super) fn new(window: AppWindow, settings: Settings, session: Session) -> App {
+    pub(super) fn new(
+        window: AppWindow,
+        settings: Settings,
+        session: Session,
+        data_dir: Option<PathBuf>,
+    ) -> App {
         let autostart = session.autostart_now(&SystemAutostart, false);
         let state = State::with_settings(&settings);
         let frame = layout::Frame::new(state.banners().len(), state.preview_height());
@@ -202,10 +214,12 @@ impl App {
             events: None,
             woken: Arc::new(AtomicBool::new(false)),
             session,
+            data_dir,
             script: None,
             shot_scheduled: false,
             autostart,
             tray: None,
+            tray_online: Arc::new(AtomicBool::new(false)),
             granting: false,
             can_drop: true,
             rows,
@@ -215,129 +229,25 @@ impl App {
             preview_timer: Timer::default(),
             message_timer: Timer::default(),
             sleep_timer: Timer::default(),
+            sleep_watch: resume::SleepWatch::default(),
+            refit_timer: Timer::default(),
             last_refresh: Instant::now(),
             parked_at: None,
             minimized_at: None,
             dialog_by_keyboard: false,
             choosing_file: false,
+            picker: dialogs::Picker::default(),
+            last_drop: None,
             color: None,
             fit_tries: 0,
+            size_refits: 0,
+            minimize_tries: 0,
             #[cfg(test)]
             frames_decoded: 0,
             #[cfg(test)]
             sent: RefCell::default(),
-        }
-    }
-
-    /// Everything that comes before the event loop, in the order it has to.
-    pub(super) fn start(
-        window: AppWindow,
-        settings: Settings,
-        session: Session,
-        start_hidden: bool,
-    ) {
-        let view = View::get(&window);
-        view.set_t(view::labels());
-        view.set_icon(app_icon());
-        let scripted = session.is_scripted();
-        let demo = session.is_demo();
-        view.set_window_title(window_title(demo).into());
-        wire(&window);
-        let mut app = App::new(window.clone_strong(), settings, session);
-        app.refresh();
-        if !scripted {
-            app.tray = tray::spawn(Tray {
-                title: window_title(demo),
-                id: if demo { "unkludge-demo" } else { APP_ID },
-                autostart: app.autostart,
-            });
-        }
-        APP.with(|cell| *cell.borrow_mut() = Some(app));
-        if scripted {
-            with_app(App::start_scripted);
-        } else {
-            let weak = window.as_weak();
-            hook_window_events(&window);
-            if !demo {
-                sys::on_show_request(|| on_ui(App::show_window));
-            }
-            with_app(move |app| app.start_shown(start_hidden));
-            // The window itself only exists once the event loop is going.
-            Timer::single_shot(Duration::ZERO, move || {
-                if weak.upgrade().is_some() {
-                    with_app(App::fit_window);
-                }
-            });
-        }
-    }
-
-    fn start_shown(&mut self, start_hidden: bool) {
-        self.exit_when_told();
-        let start = tray::start(start_hidden, tray::is_online());
-        if start != Start::Hidden {
-            let _ = self.window.show();
-        }
-        if start == Start::Minimized {
-            self.window.window().set_minimized(true);
-            self.parked_at = Some(Instant::now());
-            let weak = self.window.as_weak();
-            Timer::single_shot(MINIMIZE_AGAIN_AFTER, move || {
-                if let Some(window) = weak.upgrade() {
-                    window.window().set_minimized(true);
-                }
-            });
-        }
-        if !tray::is_online() {
-            self.state.message = Some(Note::new(t().linux.no_tray, Tone::Warning));
-            self.refresh();
-        }
-        self.watch_for_sleep();
-        // After showing, so that the first write to a keyboard, which is the clock, doesn't come
-        // from a program that hasn't appeared yet.
-        self.start_worker();
-    }
-
-    fn start_scripted(&mut self) {
-        self.exit_when_told();
-        self.fit_offscreen();
-        let _ = self.window.show();
-        Timer::single_shot(SHOT_GIVE_UP, || {
-            log::error("the demo didn't reach its state, so there's no picture");
-            with_app(App::quit);
-        });
-        self.start_worker();
-    }
-
-    fn exit_when_told(&self) {
-        if let Some(after) = self.session.demo_args().and_then(|args| args.exit_after) {
-            Timer::single_shot(after, || with_app(App::quit));
-        }
-    }
-
-    /// Starts the worker, which starts looking for the keyboard.
-    pub(super) fn start_worker(&mut self) {
-        let notify: Notify = {
-            let woken = Arc::clone(&self.woken);
-            Arc::new(move || {
-                if !woken.swap(true, Ordering::SeqCst) {
-                    on_ui(App::drain_events);
-                }
-            })
-        };
-        let started = self.session.spawn_worker(
-            &self.settings,
-            sys::data_dir(),
-            notify,
-            open_real_keyboard,
-            Box::new(sys::rk_app_running),
-        );
-        match started {
-            Ok(running) => {
-                self.worker = Some(running.worker);
-                self.events = Some(running.events);
-                self.script = running.script;
-            }
-            Err(problem) => log::error(&problem),
+            #[cfg(test)]
+            sent_lighting: RefCell::default(),
         }
     }
 
@@ -345,6 +255,9 @@ impl App {
         #[cfg(test)]
         if let Some(cmd) = &cmd {
             self.sent.borrow_mut().push(super::tests::name_of(cmd));
+            if let Cmd::SetLighting(change) | Cmd::AdjustLighting(change) = cmd {
+                self.sent_lighting.borrow_mut().push(*change);
+            }
         }
         if let (Some(worker), Some(cmd)) = (&self.worker, cmd) {
             worker.send(cmd);
@@ -352,8 +265,10 @@ impl App {
     }
 
     pub(super) fn save_settings(&self) {
-        let dir = sys::data_dir();
-        if let Err(error) = self.session.save_settings(&self.settings, dir.as_deref()) {
+        if let Err(error) = self
+            .session
+            .save_settings(&self.settings, self.data_dir.as_deref())
+        {
             log::error(&format!("the settings can't be saved: {error}"));
         }
     }
@@ -362,12 +277,15 @@ impl App {
         if cfg!(debug_assertions) {
             let window = self.window.window();
             eprintln!(
-                "ending at scale {}: {:?}",
+                "ending at scale {}: {:?}, minimized {}",
                 window.scale_factor(),
-                window.size()
+                window.size(),
+                window.is_minimized()
             );
         }
         self.save_settings();
+        // A dialog from another program would otherwise stay up with nothing to answer to.
+        self.picker.stop();
         // It doesn't get waited for: the process is about to end, and the tray with it.
         if let Some(tray) = self.tray.take() {
             let _ = tray.shutdown();
@@ -381,8 +299,10 @@ impl App {
         self.woken.store(false, Ordering::SeqCst);
         let had_keyboard = self.state.model().is_some();
         let drained = self.take_events();
-        // What had the focus has gone out of sight, and Space would still find it.
-        if had_keyboard && self.state.model().is_none() {
+        // What had the focus has gone out of sight, and Space would find it once it's back. A dialog
+        // that's up has the focus, and needs it for Escape.
+        let dialog = View::get(&self.window).get_dialog();
+        if had_keyboard && self.state.model().is_none() && dialog == DialogKind::None {
             self.window.invoke_drop_focus();
         }
         if drained.save_settings {
@@ -423,7 +343,7 @@ impl App {
             settings: &mut self.settings,
             session: &self.session,
             script: &mut self.script,
-            data_dir: sys::data_dir(),
+            data_dir: self.data_dir.clone(),
             send: &mut send,
         }
         .drain(events)
@@ -484,184 +404,9 @@ impl App {
         self.update_preview();
         self.sync_preview_timer();
         if size_changed {
+            self.size_refits = 0;
             self.fit_window();
         }
-    }
-
-    /// A picture has no screen, so it's the size a demo says the screen allows.
-    fn fit_offscreen(&mut self) {
-        let height = self.frame.height;
-        let (forced_dpi, work_area) = self
-            .session
-            .demo_args()
-            .map_or((None, None), |args| (args.dpi, args.work_area));
-        let os_scale = forced_dpi.map_or(1.0, |dpi| dpi as f32 / 96.0);
-        let scale = work_area.map_or(os_scale, |work| fit::scale_for(os_scale, height, work));
-        self.window
-            .window()
-            .dispatch_event(WindowEvent::ScaleFactorChanged {
-                scale_factor: scale,
-            });
-        let (width, pixels) = fit::size_at(height, scale);
-        self.window
-            .window()
-            .set_size(slint::PhysicalSize::new(width, pixels));
-        self.sync_hairline();
-    }
-
-    fn sync_hairline(&self) {
-        let scale = self.window.window().scale_factor();
-        View::get(&self.window).set_hairline(fit::hairline_at(scale));
-    }
-
-    /// The window's size for the layout, drawing smaller if the screen is too small for it.
-    pub(super) fn fit_window(&mut self) {
-        if self.session.is_scripted() {
-            self.fit_offscreen();
-            return;
-        }
-        let work_area = self.session.demo_args().and_then(|args| args.work_area);
-        let fitted = fit::fit(&self.window, self.frame.height, work_area);
-        // The window itself only exists once the event loop has got to it.
-        if fitted.is_some() {
-            self.fit_tries = 0;
-        } else if self.window.window().is_visible() && self.fit_tries < MAX_FIT_TRIES {
-            self.fit_tries += 1;
-            Timer::single_shot(FIT_RETRY, || with_app(App::fit_window));
-        }
-        if cfg!(debug_assertions) {
-            eprintln!("fitted at {fitted:?}: {:?}", self.window.window().size());
-        }
-        self.sync_hairline();
-        self.can_drop = !fit::is_wayland(&self.window);
-        View::get(&self.window).set_screen(view::screen(&self.state, self.can_drop));
-    }
-
-    // The window itself.
-
-    fn is_showing(&self) -> bool {
-        let window = self.window.window();
-        window.is_visible() && !window.is_minimized()
-    }
-
-    pub(super) fn show_window(&mut self) {
-        let window = self.window.window();
-        // What was read before may be old by now, if the window was hidden.
-        if !window.is_visible() {
-            self.send(Some(Cmd::Refresh));
-        }
-        let _ = self.window.show();
-        self.window.window().set_minimized(false);
-        self.parked_at = None;
-        self.minimized_at = None;
-        self.autostart = self.session.autostart_now(&SystemAutostart, self.autostart);
-        self.update_tray();
-        self.restart_preview();
-        self.refresh();
-        self.fit_window();
-        raise(&self.window);
-    }
-
-    /// Closing the window hides it, and while hidden nothing gets drawn.
-    fn hide_window(&mut self) {
-        View::get(&self.window).set_dialog(DialogKind::None);
-        let _ = self.window.hide();
-        self.save_settings();
-        self.restart_preview();
-    }
-
-    pub(super) fn close_requested(&mut self) -> CloseRequestResponse {
-        let just_minimized = self
-            .minimized_at
-            .is_some_and(|at| at.elapsed() < MINIMIZE_GRACE);
-        let note_up = View::get(&self.window).get_dialog() == DialogKind::Note;
-        match tray::close(
-            tray::is_online(),
-            self.settings.tray_note_shown || note_up,
-            just_minimized,
-        ) {
-            Close::NoteFirst => {
-                self.settings.tray_note_shown = true;
-                self.save_settings();
-                self.open_dialog(DialogKind::Note, false);
-                CloseRequestResponse::KeepWindowShown
-            }
-            Close::Hide | Close::HideAnyway => {
-                self.minimized_at = None;
-                self.hide_window();
-                CloseRequestResponse::HideWindow
-            }
-            Close::Minimize => {
-                self.window.window().set_minimized(true);
-                self.minimized_at = Some(Instant::now());
-                self.say(t().linux.no_tray, Tone::Warning);
-                self.save_settings();
-                CloseRequestResponse::KeepWindowShown
-            }
-        }
-    }
-
-    pub(super) fn tray_came_online(&mut self) {
-        // It might have been saying there wasn't one.
-        if self
-            .state
-            .message
-            .as_ref()
-            .is_some_and(|message| message.text == t().linux.no_tray)
-        {
-            self.state.message = None;
-            self.refresh();
-        }
-        let parked = self.parked_at.take();
-        if parked.is_some_and(|at| at.elapsed() < TRAY_GRACE) {
-            self.hide_window();
-        }
-    }
-
-    /// A window hidden in a tray that has gone would be out of reach, so it goes to the dock.
-    pub(super) fn tray_went_offline(&mut self) {
-        if !self.window.window().is_visible() {
-            let _ = self.window.show();
-            self.window.window().set_minimized(true);
-            self.say(t().linux.no_tray, Tone::Warning);
-        }
-    }
-
-    /// Starts with the system or not. A demo only pretends.
-    pub(super) fn toggle_autostart(&mut self) {
-        self.autostart = self
-            .session
-            .set_autostart(!self.autostart, &SystemAutostart);
-        self.update_tray();
-        self.refresh();
-    }
-
-    pub(super) fn toggle_auto_clock(&mut self) {
-        self.settings.auto_clock = !self.settings.auto_clock;
-        self.send(Some(Cmd::SetAutoClock(self.settings.auto_clock)));
-        self.save_settings();
-        self.refresh();
-    }
-
-    fn update_tray(&self) {
-        // It waits for the tray's thread, which this one has no reason to do.
-        if let Some(tray) = self.tray.clone() {
-            let autostart = self.autostart;
-            std::thread::spawn(move || {
-                tray.update(|tray| tray.autostart = autostart);
-            });
-        }
-    }
-
-    fn watch_for_sleep(&mut self) {
-        let mut watch = resume::SleepWatch::default();
-        watch.woke_up(resume::time_asleep());
-        self.sleep_timer
-            .start(TimerMode::Repeated, resume::CHECK_EVERY, move || {
-                if watch.woke_up(resume::time_asleep()) {
-                    with_app(|app| app.send(Some(Cmd::Resumed)));
-                }
-            });
     }
 
     // What the user does.
@@ -673,23 +418,52 @@ impl App {
         self.refresh();
     }
 
+    /// A file dropped on the window. Of several at once the first counts, as on Windows, and nothing
+    /// gets dropped through a dialog.
+    pub(super) fn file_dropped(&mut self, path: PathBuf, now: Instant) {
+        let same_drop = self
+            .last_drop
+            .is_some_and(|at| now.saturating_duration_since(at) < DROP_BURST);
+        self.last_drop = Some(now);
+        if !same_drop && !View::get(&self.window).get_modal() {
+            self.choose_path(path);
+        }
+    }
+
+    /// Nothing can be used while a program asks for a file, as with a dialog of the window's own.
+    /// Says whether one should be asked for.
+    pub(super) fn begin_choosing(&mut self) -> bool {
+        if std::mem::replace(&mut self.choosing_file, true) {
+            return false;
+        }
+        View::get(&self.window).set_picking(true);
+        true
+    }
+
     /// Asks for a file on a thread of its own, as that waits for the user.
     pub(super) fn ask_for_file(&mut self, by_keyboard: bool) {
-        if std::mem::replace(&mut self.choosing_file, true) {
+        if !self.begin_choosing() {
             return;
         }
+        let picker = self.picker.clone();
         std::thread::spawn(move || {
-            let picked = dialogs::choose_image();
+            let picked = picker.choose_image();
             on_ui(move |app| app.file_picked(picked, by_keyboard));
         });
     }
 
     pub(super) fn file_picked(&mut self, picked: dialogs::Picked, by_keyboard: bool) {
         self.choosing_file = false;
-        match picked {
-            dialogs::Picked::File(path) => self.choose_path(path),
-            dialogs::Picked::Cancelled => {}
-            dialogs::Picked::NoProgram => self.open_dialog(DialogKind::Path, by_keyboard),
+        View::get(&self.window).set_picking(false);
+        if picked == dialogs::Picked::NoProgram {
+            self.open_dialog(DialogKind::Path, by_keyboard);
+            return;
+        }
+        if by_keyboard {
+            self.window.invoke_focus_choose_file();
+        }
+        if let dialogs::Picked::File(path) = picked {
+            self.choose_path(path);
         }
     }
 
@@ -780,14 +554,6 @@ impl App {
             log::error(&format!("the picture can't be saved: {error}"));
         }
         self.quit();
-    }
-}
-
-fn window_title(demo: bool) -> String {
-    if demo {
-        format!("Unkludge - {}", t().demo)
-    } else {
-        "Unkludge".to_string()
     }
 }
 

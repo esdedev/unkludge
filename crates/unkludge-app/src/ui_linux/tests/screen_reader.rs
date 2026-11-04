@@ -56,11 +56,26 @@ fn a_slider_tells_its_value_and_range_and_can_be_moved_by_a_screen_reader() {
     assert_eq!(named.len(), 1, "read once");
     let brightness = named.pop().unwrap();
     assert_eq!(brightness.accessible_role(), Some(AccessibleRole::Slider));
-    assert_eq!(brightness.accessible_value().unwrap(), "0 %");
+    // A plain number and its range, or it isn't read as a number.
+    assert_eq!(brightness.accessible_value().unwrap(), "0");
     assert_eq!(brightness.accessible_value_minimum(), Some(0.0));
+    assert_eq!(brightness.accessible_value_maximum(), Some(100.0));
     let model = model::find(0x0265).unwrap();
-    let last = model.lighting.brightness.len() as f32 - 1.0;
-    assert_eq!(brightness.accessible_value_maximum(), Some(last));
+    let steps = model.lighting.brightness.len() as f32 - 1.0;
+    assert_eq!(brightness.accessible_value_step(), Some(100.0 / steps));
+    let speed = labelled(&fixture.window, t().speed).pop().unwrap();
+    assert_eq!(
+        speed.accessible_value().unwrap(),
+        model.lighting.speed_min.to_string()
+    );
+    assert_eq!(
+        speed.accessible_value_minimum(),
+        Some(f32::from(model.lighting.speed_min))
+    );
+    assert_eq!(
+        speed.accessible_value_maximum(),
+        Some(f32::from(model.lighting.speed_max))
+    );
     brightness.invoke_accessible_increment_action();
     assert_eq!(fixture.sent().last(), Some(&"adjust lights"));
 }
@@ -162,6 +177,12 @@ fn contrast_is_enough_even_for_what_cant_be_used() {
         ("track", p.get_track(), p.get_card()),
         ("track, disabled", p.get_track_disabled(), p.get_card()),
         ("focus ring", p.get_accent_hi(), p.get_card()),
+        ("text field's edge", p.get_field_border(), p.get_well()),
+        (
+            "text field's edge, outside",
+            p.get_field_border(),
+            p.get_card(),
+        ),
     ];
     for (what, front, back) in tracks {
         let ratio = contrast(front, back);

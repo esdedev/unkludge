@@ -66,6 +66,15 @@ export component AppWindow inherits Window {
             }
             return reject;
         }
+        // A click on nothing leaves nothing with the focus, as on Windows. It's under everything
+        // else, so what can be used gets its clicks first.
+        TouchArea {
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down) {
+                    keys.focus();
+                }
+            }
+        }
         Header { }
         Banners { }
         screen := ScreenCard {

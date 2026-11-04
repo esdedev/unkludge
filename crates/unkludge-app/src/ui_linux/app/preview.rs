@@ -18,6 +18,9 @@ impl App {
     pub(in crate::ui_linux) fn restart_preview(&mut self) {
         self.preview_since = Instant::now();
         self.preview_shown = None;
+        if !self.is_showing() {
+            View::get(&self.window).set_picture(Image::default());
+        }
         self.update_preview();
         self.sync_preview_timer();
     }

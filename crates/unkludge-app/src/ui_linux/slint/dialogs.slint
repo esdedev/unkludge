@@ -79,7 +79,7 @@ component Field {
         background: Palette.well;
         border-radius: 8px;
         border-width: input.has-focus ? 2px : View.hairline;
-        border-color: input.has-focus ? Palette.accent-hi : Palette.border-hi;
+        border-color: input.has-focus ? Palette.accent-hi : Palette.field-border;
     }
     input := TextInput {
         enabled: root.enabled;
@@ -98,6 +98,26 @@ component Field {
         accepted => {
             root.accepted(self.text);
         }
+    }
+}
+
+// How much there is of one colour, from 0 to 255.
+component ColorSlider inherits Slider {
+    in property <int> channel;
+    in property <int> amount;
+    x: 20px;
+    width: 300px;
+    height: 44px;
+    value: amount;
+    step: amount;
+    steps: 256;
+    marks: false;
+    in-dialog: true;
+    dragged(x, x0, x1) => {
+        Actions.color-channel(channel, Math.round((x - x0) / (x1 - x0) * 255));
+    }
+    nudged(by) => {
+        Actions.color-channel(channel, amount + by);
     }
 }
 
@@ -121,62 +141,26 @@ component ColorPicker inherits DialogFrame {
         font-size: 11px;
         wrap: word-wrap;
     }
-    red := Slider {
-        x: 20px;
+    red := ColorSlider {
         y: root.top;
-        width: 300px;
-        height: 44px;
         name: View.t.red;
-        value: View.color-dialog.red;
-        step: View.color-dialog.red;
-        steps: 256;
-        marks: false;
+        channel: 0;
+        amount: View.color-dialog.red;
         fill: #FF5468;
-        in-dialog: true;
-        dragged(x, x0, x1) => {
-            Actions.color-channel(0, Math.round((x - x0) / (x1 - x0) * 255));
-        }
-        nudged(by) => {
-            Actions.color-channel(0, View.color-dialog.red + by);
-        }
     }
-    Slider {
-        x: 20px;
+    ColorSlider {
         y: root.top + 48px;
-        width: 300px;
-        height: 44px;
         name: View.t.green;
-        value: View.color-dialog.green;
-        step: View.color-dialog.green;
-        steps: 256;
-        marks: false;
+        channel: 1;
+        amount: View.color-dialog.green;
         fill: #2FD27A;
-        in-dialog: true;
-        dragged(x, x0, x1) => {
-            Actions.color-channel(1, Math.round((x - x0) / (x1 - x0) * 255));
-        }
-        nudged(by) => {
-            Actions.color-channel(1, View.color-dialog.green + by);
-        }
     }
-    Slider {
-        x: 20px;
+    ColorSlider {
         y: root.top + 96px;
-        width: 300px;
-        height: 44px;
         name: View.t.blue;
-        value: View.color-dialog.blue;
-        step: View.color-dialog.blue;
-        steps: 256;
-        marks: false;
+        channel: 2;
+        amount: View.color-dialog.blue;
         fill: #38BDF8;
-        in-dialog: true;
-        dragged(x, x0, x1) => {
-            Actions.color-channel(2, Math.round((x - x0) / (x1 - x0) * 255));
-        }
-        nudged(by) => {
-            Actions.color-channel(2, View.color-dialog.blue + by);
-        }
     }
     Rectangle {
         x: 340px;

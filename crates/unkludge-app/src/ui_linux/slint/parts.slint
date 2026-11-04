@@ -20,6 +20,7 @@ export global Palette {
     out property <color> silver: #C9CDD6;
     out property <color> muted: #9696A3;
     out property <color> text-disabled: #8A8A96;
+    out property <color> field-border: #787888;
     out property <color> accent: #6448F0;
     out property <color> accent-hi: #A796FF;
     out property <color> screen-dark: #121022;
@@ -43,15 +44,54 @@ export global Palette {
     }
 }
 
-// The ring around what has the focus, once the keyboard has been used to get there.
-component FocusRing inherits Rectangle {
-    in property <length> radius: 10px;
-    x: -3px;
-    y: -3px;
-    border-radius: radius;
-    border-width: 2px;
-    border-color: Palette.accent-hi;
-    background: Palette.accent-hi.with-alpha(0.12);
+// What can have the focus, and the ring around it once the keyboard has been used to get there.
+component FocusArea {
+    in property <bool> enabled: true;
+    in property <length> ring-radius: 10px;
+    out property <bool> has-focus: scope.has-focus;
+    out property <bool> by-keyboard-now: by-keyboard && scope.has-focus;
+    property <bool> by-keyboard;
+
+    callback key(KeyEvent) -> EventResult;
+
+    public function take-focus() {
+        by-keyboard = true;
+        scope.focus();
+    }
+
+    // As after a click, with no ring.
+    public function take-focus-quietly() {
+        by-keyboard = false;
+        scope.focus();
+    }
+
+    public function keyboard-used() {
+        by-keyboard = true;
+    }
+
+    scope := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        focus-gained(reason) => {
+            if (reason == FocusReason.tab-navigation) {
+                by-keyboard = true;
+            }
+        }
+        key-pressed(event) => {
+            return root.key(event);
+        }
+    }
+
+    if root.by-keyboard-now: Rectangle {
+        x: -3px;
+        y: -3px;
+        width: root.width + 6px;
+        height: root.height + 6px;
+        border-radius: root.ring-radius;
+        border-width: 2px;
+        border-color: Palette.accent-hi;
+        background: Palette.accent-hi.with-alpha(0.12);
+    }
 }
 
 // Anything that does something when clicked, or with Space or Enter.
@@ -64,15 +104,13 @@ export component Pressable {
     in property <length> ring-radius: 10px;
     out property <bool> usable: enabled && (!View.modal || in-dialog);
     out property <bool> hovered: touch.has-hover && usable;
-    out property <bool> has-focus: scope.has-focus;
-    out property <bool> focus-by-keyboard: by-keyboard && scope.has-focus;
-    property <bool> by-keyboard;
+    out property <bool> has-focus: focus.has-focus;
+    out property <bool> focus-by-keyboard: focus.by-keyboard-now;
 
     callback activated(bool);
 
     public function take-focus() {
-        by-keyboard = true;
-        scope.focus();
+        focus.take-focus();
     }
 
     accessible-enabled: usable;
@@ -88,9 +126,8 @@ export component Pressable {
         enabled: root.usable;
         mouse-cursor: pointer;
         clicked => {
-            by-keyboard = false;
             if (root.click-takes-focus) {
-                scope.focus();
+                focus.take-focus-quietly();
             } else {
                 Actions.drop-focus();
             }
@@ -98,31 +135,20 @@ export component Pressable {
         }
     }
 
-    scope := FocusScope {
+    focus := FocusArea {
         enabled: root.usable;
-        focus-on-click: false;
-        focus-gained(reason) => {
-            if (reason == FocusReason.tab-navigation) {
-                by-keyboard = true;
-            }
-        }
-        key-pressed(event) => {
+        ring-radius: root.ring-radius;
+        key(event) => {
             if (event.text == " " || event.text == Key.Return) {
                 // Holding it down mustn't write to the keyboard over and over.
                 if (!event.repeat && root.usable) {
-                    by-keyboard = true;
+                    self.keyboard-used();
                     root.activated(true);
                 }
                 return accept;
             }
             return reject;
         }
-    }
-
-    if root.focus-by-keyboard: FocusRing {
-        width: root.width + 6px;
-        height: root.height + 6px;
-        radius: root.ring-radius;
     }
 }
 
@@ -232,23 +258,28 @@ export component Slider {
     property <length> x1: root.width - 8px;
     property <length> track-y: root.height - 11px;
     property <length> at: steps < 2 ? x0 : x0 + (x1 - x0) * step / (steps - 1);
-    property <bool> by-keyboard;
+
+    // What a screen reader gets, which has to be a plain number for it to be read as one. By default
+    // that's the step.
+    in property <string> number: step;
+    in property <float> number-min: 0;
+    in property <float> number-max: Math.max(steps - 1, 0);
+    in property <float> number-step: 1;
 
     callback dragged(length, length, length);
     callback nudged(int);
 
     public function take-focus() {
-        by-keyboard = true;
-        scope.focus();
+        focus.take-focus();
     }
 
     accessible-role: slider;
     accessible-label: name;
-    accessible-value: value;
+    accessible-value: number;
     accessible-enabled: usable;
-    accessible-value-minimum: 0;
-    accessible-value-maximum: Math.max(steps - 1, 0);
-    accessible-value-step: 1;
+    accessible-value-minimum: number-min;
+    accessible-value-maximum: number-max;
+    accessible-value-step: number-step;
     accessible-action-increment => {
         if (usable) {
             root.nudged(1);
@@ -332,8 +363,7 @@ export component Slider {
         mouse-cursor: ew-resize;
         pointer-event(event) => {
             if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
-                by-keyboard = false;
-                scope.focus();
+                focus.take-focus-quietly();
                 root.dragged(self.mouse-x, root.x0, root.x1);
             }
         }
@@ -343,40 +373,24 @@ export component Slider {
             }
         }
     }
-    scope := FocusScope {
+    focus := FocusArea {
         y: root.track-y - 12px;
         height: 24px;
         enabled: root.usable;
-        focus-on-click: false;
-        focus-gained(reason) => {
-            if (reason == FocusReason.tab-navigation) {
-                by-keyboard = true;
-            }
-        }
         // These are meant to repeat, and the worker waits for them to settle before writing.
-        key-pressed(event) => {
+        key(event) => {
             if (event.text == Key.RightArrow || event.text == Key.UpArrow) {
-                by-keyboard = true;
+                self.keyboard-used();
                 root.nudged(1);
                 return accept;
             }
             if (event.text == Key.LeftArrow || event.text == Key.DownArrow) {
-                by-keyboard = true;
+                self.keyboard-used();
                 root.nudged(-1);
                 return accept;
             }
             return reject;
         }
-    }
-    if scope.has-focus && by-keyboard: Rectangle {
-        x: -3px;
-        y: root.track-y - 15px;
-        width: root.width + 6px;
-        height: 30px;
-        border-radius: 10px;
-        border-width: 2px;
-        border-color: Palette.accent-hi;
-        background: Palette.accent-hi.with-alpha(0.12);
     }
 }
 

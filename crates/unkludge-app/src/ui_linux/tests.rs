@@ -2,15 +2,18 @@
 //! would use them. Each test has a thread to itself, and with it a window and an app.
 
 use std::cell::{Cell, RefCell};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Sender, channel};
 use std::time::Duration;
 
 use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
 use unkludge_protocol::config::SleepTime;
-use unkludge_protocol::lighting::{ColorSetting, CurrentLighting, LightMode, SleepSetting};
+use unkludge_protocol::lighting::{
+    ColorChoice, ColorSetting, CurrentLighting, LightMode, Rgb, SleepSetting,
+};
 use unkludge_protocol::model;
 use unkludge_protocol::screen::{Animation, LoadOptions};
 use slint::platform::{Key, PointerEventButton, WindowEvent};
@@ -70,11 +73,41 @@ fn image(frames: usize) -> LoadedImage {
     }
 }
 
+/// A folder of a test's own for what an app saves, gone at the end.
+struct TempDir(PathBuf);
+
+impl Default for TempDir {
+    fn default() -> TempDir {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let name = format!(
+            "unkludge-ui-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        );
+        let dir = std::env::temp_dir().join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        TempDir(dir)
+    }
+}
+
+impl TempDir {
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 /// A window and an app, as far as they can get with no worker. Events go in through the sender, the
 /// way the worker's do.
 struct Fixture {
     window: AppWindow,
     events: Sender<Event>,
+    dir: TempDir,
 }
 
 impl Fixture {
@@ -83,10 +116,12 @@ impl Fixture {
         let window = AppWindow::new().unwrap();
         View::get(&window).set_t(super::view::labels());
         wire(&window);
+        let dir = TempDir::default();
         let mut app = App::new(
             window.clone_strong(),
             Settings::default(),
             Session::Demo(DemoArgs::default()),
+            Some(dir.path().to_path_buf()),
         );
         let (events, receiver) = channel();
         app.events = Some(receiver);
@@ -94,7 +129,11 @@ impl Fixture {
         set_app(app);
         window.window().set_size(PhysicalSize::new(900, 643));
         window.show().unwrap();
-        Fixture { window, events }
+        Fixture {
+            window,
+            events,
+            dir,
+        }
     }
 
     /// Connected to a keyboard with these lights on, and with a file ready to go if asked.
@@ -188,6 +227,8 @@ fn labelled(window: &AppWindow, label: &str) -> Vec<ElementHandle> {
     ElementHandle::find_by_accessible_label(window, label).collect()
 }
 
+mod dialogs;
+mod lifecycle;
 mod screen_reader;
 
 // Lesson: holding Space or Enter.
@@ -235,6 +276,18 @@ fn clicking_upload_leaves_no_focus_behind_for_space_to_find() {
 }
 
 #[test]
+fn clicking_upload_doesnt_keep_the_focus_even_when_nothing_came_of_it() {
+    // Upload stays in sight and usable, which is when a focus left on it could be found.
+    let fixture = Fixture::connected(Some(2));
+    let log = log_actions(&fixture.window);
+    fixture.click_upload();
+    assert_eq!(*log.borrow(), ["upload"]);
+    fixture.key_text(" ");
+    fixture.key(Key::Return);
+    assert_eq!(*log.borrow(), ["upload"]);
+}
+
+#[test]
 fn clicking_upload_takes_the_focus_from_what_had_it() {
     let fixture = Fixture::connected(Some(2));
     let frame = View::get(&fixture.window).get_frame();
@@ -274,14 +327,58 @@ fn holding_enter_on_upload_doesnt_go_on_to_cancel_it() {
 }
 
 #[test]
-fn losing_the_keyboard_leaves_no_focus_on_what_went_out_of_sight() {
+fn losing_the_keyboard_leaves_no_focus_for_when_it_comes_back() {
     let fixture = Fixture::connected(None);
     let frame = View::get(&fixture.window).get_frame();
     fixture.click(frame.clock.x + frame.clock.w - 40.0, frame.clock.y + 20.0);
     assert_eq!(fixture.sent(), ["sync clock"]);
     fixture.say(Event::Disconnected);
+    fixture.say(Event::Connected {
+        model: model::find(0x0265).unwrap(),
+    });
+    fixture.say(Event::Lighting(lighting(LightMode::Effect(2))));
     fixture.key_text(" ");
     assert_eq!(fixture.sent(), ["sync clock"]);
+}
+
+#[test]
+fn a_click_on_nothing_leaves_nothing_with_the_focus() {
+    let fixture = Fixture::connected(None);
+    let effects = View::get(&fixture.window).get_effects();
+    let chip = slint::Model::row_data(&effects, 3).unwrap().area;
+    fixture.click(chip.x + 5.0, chip.y + 5.0);
+    assert_eq!(fixture.sent(), ["set lights"]);
+    // Between the header and the cards.
+    fixture.click(450.0, 72.0);
+    fixture.key_text(" ");
+    assert_eq!(fixture.sent(), ["set lights"]);
+}
+
+#[test]
+fn a_click_on_a_card_with_nothing_there_leaves_nothing_with_the_focus_either() {
+    let fixture = Fixture::connected(None);
+    let frame = View::get(&fixture.window).get_frame();
+    fixture.click(frame.clock.x + frame.clock.w - 40.0, frame.clock.y + 20.0);
+    fixture.click(frame.screen.x + 5.0, frame.screen.y + 40.0);
+    fixture.key_text(" ");
+    assert_eq!(fixture.sent(), ["sync clock"]);
+}
+
+#[test]
+fn a_slider_can_be_taken_all_along_its_row() {
+    let fixture = Fixture::connected(None);
+    let frame = View::get(&fixture.window).get_frame();
+    let area = frame.brightness;
+    let track = area.y + area.h - 11.0;
+    // From the right edge, and above and below the track.
+    fixture.click(area.x + area.w - 1.0, track);
+    assert_eq!(fixture.sent().last(), Some(&"adjust lights"));
+    let before = fixture.sent().len();
+    fixture.click(area.x + 1.0, track - 11.0);
+    assert_eq!(fixture.sent().len(), before + 1);
+    let before = fixture.sent().len();
+    fixture.click(area.x + area.w - 1.0, track + 10.0);
+    assert_eq!(fixture.sent().len(), before + 1);
 }
 
 #[test]
@@ -377,6 +474,7 @@ fn settings_that_cant_be_read_get_a_banner() {
         window.clone_strong(),
         settings,
         Session::Demo(DemoArgs::default()),
+        None,
     );
     app.refresh();
     let banners = View::get(&window).get_banners();
@@ -485,89 +583,6 @@ fn with_no_tray_closing_minimizes_and_then_hides_if_that_didnt_work() {
     );
     window.dispatch_event(WindowEvent::CloseRequested);
     assert!(!window.is_visible());
-}
-
-// The window's own dialogs.
-
-#[test]
-fn the_colour_picker_sends_what_was_chosen() {
-    let fixture = Fixture::connected(None);
-    let view = View::get(&fixture.window);
-    labelled(&fixture.window, t().custom_color)
-        .pop()
-        .unwrap()
-        .invoke_accessible_default_action();
-    fixture.settle();
-    assert_eq!(view.get_dialog(), DialogKind::Color);
-    assert_eq!(
-        view.get_color_dialog().warning,
-        t().first_custom_warning,
-        "a model's first"
-    );
-    with_app(|app| app.color_code_edited("#102030"));
-    assert_eq!(view.get_color_dialog().red, 0x10);
-    assert_eq!(view.get_color_dialog().code, "#102030");
-    with_app(|app| app.color_code_edited("#1020"));
-    assert_eq!(view.get_color_dialog().red, 0x10, "not a whole code yet");
-    assert_eq!(view.get_color_dialog().code, "#1020");
-    with_app(|app| app.color_channel(0, 300));
-    assert_eq!(view.get_color_dialog().red, 255);
-    with_app(App::color_ok);
-    assert_eq!(view.get_dialog(), DialogKind::None);
-    assert_eq!(fixture.sent().last(), Some(&"set lights"));
-}
-
-#[test]
-fn nothing_behind_a_dialog_can_be_used_and_escape_closes_it() {
-    let fixture = Fixture::connected(None);
-    let view = View::get(&fixture.window);
-    labelled(&fixture.window, t().custom_color)
-        .pop()
-        .unwrap()
-        .invoke_accessible_default_action();
-    fixture.settle();
-    let frame = view.get_frame();
-    let before = fixture.sent().len();
-    // Past the dialog's card, on Sync clock.
-    fixture.click(frame.clock.x + frame.clock.w - 40.0, frame.clock.y + 20.0);
-    assert_eq!(fixture.sent().len(), before);
-    fixture.key(Key::Escape);
-    fixture.settle();
-    assert_eq!(view.get_dialog(), DialogKind::None);
-    assert_eq!(fixture.sent().len(), before, "and nothing was sent");
-}
-
-#[test]
-fn the_tray_note_goes_away_with_the_window() {
-    let fixture = Fixture::connected(None);
-    with_app(|app| app.open_dialog(DialogKind::Note, false));
-    assert!(labelled(&fixture.window, t().tray_note_title).len() == 1);
-    fixture.key(Key::Return);
-    fixture.settle();
-    assert_eq!(View::get(&fixture.window).get_dialog(), DialogKind::None);
-    assert!(!fixture.window.window().is_visible());
-}
-
-#[test]
-fn a_path_can_be_typed_when_no_program_can_ask_for_one() {
-    let fixture = Fixture::connected(None);
-    with_app(|app| app.file_picked(super::dialogs::Picked::NoProgram, false));
-    let view = View::get(&fixture.window);
-    assert_eq!(view.get_dialog(), DialogKind::Path);
-    with_app(|app| app.path_entered("   "));
-    assert_eq!(view.get_dialog(), DialogKind::Path, "nothing typed yet");
-    with_app(|app| app.path_entered(" /a/b.gif "));
-    assert_eq!(view.get_dialog(), DialogKind::None);
-    assert_eq!(fixture.sent().last(), Some(&"load"));
-    assert_eq!(view.get_screen().file_name, "b.gif");
-}
-
-#[test]
-fn a_file_being_chosen_does_nothing_when_the_user_changes_their_mind() {
-    let fixture = Fixture::connected(None);
-    with_app(|app| app.file_picked(super::dialogs::Picked::Cancelled, false));
-    assert!(!View::get(&fixture.window).get_screen().has_file);
-    assert_eq!(View::get(&fixture.window).get_dialog(), DialogKind::None);
 }
 
 // Going through it all with Tab.

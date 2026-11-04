@@ -21,7 +21,7 @@ use slint::ComponentHandle;
 use crate::args::Args;
 use crate::session::{Session, SystemAutostart};
 use crate::{settings, sys};
-use app::App;
+use app::{App, RealOutside};
 
 slint::slint! {
     export {
@@ -42,10 +42,6 @@ pub fn run(args: Args) {
         }
         return;
     }
-    let installed =
-        std::env::current_exe().is_ok_and(|exe| settings::starts_with_system_on_first_launch(&exe));
-    let data_dir = sys::data_dir();
-    let settings = session.load_settings(data_dir.as_deref(), &SystemAutostart, installed);
     // A scripted demo draws its picture without ever showing up on the desktop.
     if session.is_scripted() {
         shot::use_headless_platform();
@@ -60,7 +56,19 @@ pub fn run(args: Args) {
     }
     let window =
         AppWindow::new().unwrap_or_else(|error| panic!("the window can't be made: {error}"));
-    App::start(window.clone_strong(), settings, session, args.tray);
+    // Only now, as a first launch makes the app start with the system, which a copy with no display
+    // to open a window on shouldn't do.
+    let installed =
+        std::env::current_exe().is_ok_and(|exe| settings::starts_with_system_on_first_launch(&exe));
+    let data_dir = sys::data_dir();
+    let settings = session.load_settings(data_dir.as_deref(), &SystemAutostart, installed);
+    App::start(
+        window.clone_strong(),
+        settings,
+        session,
+        args.tray,
+        &RealOutside,
+    );
     if let Err(error) = slint::run_event_loop_until_quit() {
         crate::log::error(&format!("the window's event loop ended badly: {error}"));
     }

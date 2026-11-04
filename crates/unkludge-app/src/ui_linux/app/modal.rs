@@ -17,7 +17,8 @@ impl App {
         let kind = View::get(&self.window).get_dialog();
         View::get(&self.window).set_dialog(DialogKind::None);
         self.color = None;
-        if self.dialog_by_keyboard {
+        // With the keyboard gone, what opened the dialog has gone out of sight too.
+        if self.dialog_by_keyboard && self.state.model().is_some() {
             match kind {
                 DialogKind::Color => self.window.invoke_focus_custom_color(),
                 DialogKind::Path => self.window.invoke_focus_choose_file(),

@@ -44,7 +44,8 @@ fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS");
     let target_env = std::env::var("CARGO_CFG_TARGET_ENV");
     // The Linux interface's tests look through the window's elements as a screen reader would, and
-    // Slint leaves out what that takes unless asked. A release build has no use for it.
+    // Slint leaves out what that takes unless asked. A release build has no use for it, which is also
+    // why `cargo test --release` fails those tests on Linux: tests are run in debug builds.
     if target_os.as_deref() == Ok("linux") && std::env::var("PROFILE").as_deref() == Ok("debug") {
         println!("cargo:rustc-env=SLINT_EMIT_DEBUG_INFO=1");
     }

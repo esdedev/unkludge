@@ -1,6 +1,7 @@
 //! The tray icon, through StatusNotifierItem: KDE has it, and GNOME with the AppIndicator extension.
 //! Without one the app can't hide in it, so it stays minimized instead, and starts that way.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use ksni::blocking::{Handle, TrayMethods};
@@ -13,13 +14,6 @@ use crate::worker::Cmd;
 
 /// Size of the tray's icon, as it goes with no scaling.
 const ICON_SIZE: usize = 32;
-
-/// Whether there's a tray to stay in right now.
-static ONLINE: AtomicBool = AtomicBool::new(false);
-
-pub fn is_online() -> bool {
-    ONLINE.load(Ordering::Relaxed)
-}
 
 /// How the window starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,6 +62,8 @@ pub struct Tray {
     pub title: String,
     pub id: &'static str,
     pub autostart: bool,
+    /// Whether there's a tray to stay in right now, for the window to know.
+    pub online: Arc<AtomicBool>,
 }
 
 /// What a tray icon wants: `A R G B`, from the `B G R A` of the icon.
@@ -101,13 +97,13 @@ impl ksni::Tray for Tray {
     }
 
     fn watcher_online(&self) {
-        ONLINE.store(true, Ordering::Relaxed);
+        self.online.store(true, Ordering::Relaxed);
         on_ui(App::tray_came_online);
     }
 
     /// The service keeps waiting, in case one comes back.
     fn watcher_offline(&self, _reason: ksni::OfflineReason) -> bool {
-        ONLINE.store(false, Ordering::Relaxed);
+        self.online.store(false, Ordering::Relaxed);
         on_ui(App::tray_went_offline);
         true
     }
@@ -147,12 +143,13 @@ impl ksni::Tray for Tray {
 /// Starts the tray. Having no tray to show in is fine, as it can turn up later, but with no session
 /// bus at all there's none now and never will be.
 pub fn spawn(tray: Tray) -> Option<Handle<Tray>> {
-    ONLINE.store(true, Ordering::Relaxed);
+    let online = Arc::clone(&tray.online);
+    online.store(true, Ordering::Relaxed);
     match tray.assume_sni_available(true).spawn() {
         Ok(handle) => Some(handle),
         Err(error) => {
             crate::log::error(&format!("there's no tray: {error}"));
-            ONLINE.store(false, Ordering::Relaxed);
+            online.store(false, Ordering::Relaxed);
             None
         }
     }
@@ -168,6 +165,7 @@ mod tests {
             title: "Unkludge".to_string(),
             id: "unkludge",
             autostart,
+            online: Arc::default(),
         }
     }
 
@@ -181,6 +179,18 @@ mod tests {
                 _ => "?".to_string(),
             })
             .collect()
+    }
+
+    #[test]
+    fn the_tray_says_whether_theres_one_to_stay_in() {
+        let tray = tray(false);
+        tray.watcher_online();
+        assert!(tray.online.load(Ordering::Relaxed));
+        assert!(
+            tray.watcher_offline(ksni::OfflineReason::No),
+            "keeps waiting for one"
+        );
+        assert!(!tray.online.load(Ordering::Relaxed));
     }
 
     #[test]

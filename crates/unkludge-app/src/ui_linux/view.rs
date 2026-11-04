@@ -15,12 +15,7 @@ use crate::i18n::t;
 use crate::layout::{self, Rect};
 use crate::session::Session;
 use crate::settings::Settings;
-use crate::state::{self, FITS, Link, State, WellHint, brightness_text};
-
-const SLIDER_GAP: f32 = 24.0;
-const FIT_CHIPS_W: f32 = 234.0;
-const CHIP_GAP: f32 = 6.0;
-const SLEEP_CHIPS_TOP: f32 = 20.0;
+use crate::state::{self, FITS, Link, State, WellHint, brightness_text, percent};
 
 fn text(value: &str) -> SharedString {
     SharedString::from(value)
@@ -96,7 +91,7 @@ pub fn labels() -> Labels {
 pub fn frame(state: &State, frame: &layout::Frame) -> Frame {
     let rows = layout::screen_rows(frame.screen);
     let lights = layout::light_rows(frame.lights);
-    let sliders = layout::split_row(lights.sliders, 2, SLIDER_GAP);
+    let [brightness, speed] = layout::slider_parts(lights.sliders);
     let size = state
         .model()
         .and_then(|model| model.screen)
@@ -114,8 +109,8 @@ pub fn frame(state: &State, frame: &layout::Frame) -> Frame {
         notes: area(rows.notes),
         action: area(rows.action),
         effects: area(lights.effects),
-        brightness: area(sliders[0]),
-        speed: area(sliders[1]),
+        brightness: area(brightness),
+        speed: area(speed),
         colors: area(lights.colors),
         sleep: area(lights.sleep),
         preview: area(layout::centered(
@@ -215,9 +210,8 @@ fn preview_name(state: &State, can_drop: bool) -> String {
 
 pub fn fits(state: &State, frame: &layout::Frame) -> Vec<Choice> {
     let row = layout::screen_rows(frame.screen).fit;
-    let chips = (row.0, row.1, row.0 + FIT_CHIPS_W, row.3);
     FITS.iter()
-        .zip(layout::split_row(chips, FITS.len(), CHIP_GAP))
+        .zip(layout::fit_chips(row, FITS.len()))
         .map(|(fit, part)| Choice {
             area: area(part),
             label: text(t().fit_name(*fit)),
@@ -275,10 +269,9 @@ pub fn sleeps(state: &State, frame: &layout::Frame) -> Vec<Choice> {
         return Vec::new();
     };
     let row = layout::light_rows(frame.lights).sleep;
-    let chips = (row.0, row.1 + SLEEP_CHIPS_TOP, row.2, row.3);
     SleepTime::ALL
         .iter()
-        .zip(layout::split_row(chips, SleepTime::ALL.len(), CHIP_GAP))
+        .zip(layout::sleep_chips(row, SleepTime::ALL.len()))
         .map(|(choice, part)| {
             let label = t().sleep_label(*choice);
             Choice {
@@ -309,10 +302,12 @@ pub fn lights(state: &State) -> LightsView {
         brightness_step: brightness_step as i32,
         brightness_steps: brightness_steps as i32,
         brightness_text: brightness_text(brightness_step, brightness_steps).into(),
+        brightness_percent: percent(brightness_step, brightness_steps) as i32,
         has_speed: has_effect && controls.speed.is_some(),
         speed_step: i32::from(speed - speed_min),
         speed_steps: i32::from(speed_max - speed_min) + 1,
         speed_text: speed.to_string().into(),
+        speed_min: i32::from(speed_min),
         own_colors: has_effect && !controls.colors && !controls.rainbow,
         has_colors: has_effect && controls.colors,
         has_rainbow: has_effect && controls.rainbow,

@@ -256,6 +256,9 @@ export component LightsCard {
         value: View.lights.brightness-text;
         step: View.lights.brightness-step;
         steps: View.lights.brightness-steps;
+        number: View.lights.brightness-percent;
+        number-max: 100;
+        number-step: 100 / Math.max(View.lights.brightness-steps - 1, 1);
         enabled: View.lights.enabled;
         dragged(x, x0, x1) => {
             Actions.drag-brightness(x, x0, x1);
@@ -273,6 +276,9 @@ export component LightsCard {
         value: View.lights.speed-text;
         step: View.lights.speed-step;
         steps: View.lights.speed-steps;
+        number: View.lights.speed-text;
+        number-min: View.lights.speed-min;
+        number-max: View.lights.speed-min + View.lights.speed-steps - 1;
         enabled: View.lights.enabled;
         dragged(x, x0, x1) => {
             Actions.drag-speed(x, x0, x1);

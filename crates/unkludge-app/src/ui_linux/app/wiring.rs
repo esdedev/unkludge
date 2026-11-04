@@ -1,7 +1,7 @@
 //! What connects the window to the app: what the markup asks for, what winit tells, and a few things
 //! that are asked of the window.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use unkludge_protocol::lighting::ColorChoice;
 use slint::platform::{Key, WindowEvent};
@@ -20,7 +20,7 @@ use crate::worker::Cmd;
 const ICON_SIZE: usize = 128;
 
 /// The app's icon, as the window takes it.
-pub(in crate::ui_linux) fn app_icon() -> Image {
+pub(super) fn app_icon() -> Image {
     let bgra = icon::pixels(ICON_SIZE);
     let mut pixels = SharedPixelBuffer::<Rgba8Pixel>::new(ICON_SIZE as u32, ICON_SIZE as u32);
     let (source, _) = bgra.as_chunks::<4>();
@@ -31,28 +31,48 @@ pub(in crate::ui_linux) fn app_icon() -> Image {
 }
 
 /// Brings the window to the front, as far as the window manager lets it.
-pub(in crate::ui_linux) fn raise(window: &AppWindow) {
+pub(super) fn raise(window: &AppWindow) {
     use slint::winit_030::WinitWindowAccessor;
     window
         .window()
         .with_winit_window(|winit_window| winit_window.focus_window());
 }
 
-/// What Slint doesn't deal with itself: files dropped, and the scale changing, which has to go through
-/// the sums again.
+/// What Slint doesn't deal with itself: files dropped, the scale changing or the window moving to
+/// another screen, which have to go through the sums again, and signs that a window it thinks is
+/// minimized is back.
 pub(in crate::ui_linux) fn hook_window_events(window: &AppWindow) {
     use slint::winit_030::winit::event::WindowEvent as Winit;
     use slint::winit_030::{EventResult, WinitWindowAccessor};
     window
         .window()
-        .on_winit_window_event(|_, event| match event {
+        .on_winit_window_event(|window, event| match event {
             Winit::DroppedFile(path) => {
-                let path = path.clone();
-                with_app(move |app| app.choose_path(path));
+                let (path, now) = (path.clone(), Instant::now());
+                with_app(move |app| app.file_dropped(path, now));
                 EventResult::PreventDefault
             }
             Winit::ScaleFactorChanged { .. } => {
                 Timer::single_shot(Duration::ZERO, || with_app(App::fit_window));
+                EventResult::Propagate
+            }
+            Winit::Moved(_) => {
+                with_app(App::refit_soon);
+                EventResult::Propagate
+            }
+            Winit::Resized(_) => {
+                with_app(App::window_resized);
+                EventResult::Propagate
+            }
+            Winit::Focused(true)
+            | Winit::CursorEntered { .. }
+            | Winit::CursorMoved { .. }
+            | Winit::MouseInput { .. }
+            | Winit::KeyboardInput { .. }
+                if window.is_minimized() =>
+            {
+                // Not from in here, where Slint is in the middle of dealing with the event.
+                Timer::single_shot(Duration::ZERO, || with_app(App::window_seen));
                 EventResult::Propagate
             }
             _ => EventResult::Propagate,
