@@ -31,7 +31,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError, channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -40,7 +40,7 @@ use unkludge_protocol::clock::set_clock;
 use unkludge_protocol::config::Config;
 use unkludge_protocol::lighting::{self, CurrentLighting, LightingChange, Palettes};
 use unkludge_protocol::model::Model;
-use unkludge_protocol::screen::{Animation, Fit, Progress, UploadOutcome, UploadPlan};
+use unkludge_protocol::screen::{Animation, Fit, UploadPlan};
 use unkludge_protocol::transport::Transport;
 use unkludge_protocol::{Device, Error};
 use unkludge_shared::local_time::device_now;
@@ -49,6 +49,7 @@ mod loader;
 #[cfg(test)]
 mod tests;
 mod timing;
+mod upload;
 
 use loader::{LoadRequest, Loader, decode_image};
 use timing::{Beat, ChunkTime, ChunkTimer, WatchTimes, watch};
@@ -781,118 +782,6 @@ impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F
             model,
             chunk_time: self.chunk_time.mean(),
         });
-    }
-
-    /// No upload is going to run. If that came with a cancel, the cancel is what gets told.
-    fn refuse_upload(&mut self, problem: Problem) {
-        if self.shared.end_upload() {
-            self.emit(Event::UploadCancelled);
-        } else {
-            self.problem(problem);
-        }
-    }
-
-    fn upload(&mut self, animation: &Animation, now: Instant) {
-        self.flush_adjustment(now);
-        self.shared.begin_upload();
-        if self.shared.cancelled() {
-            self.shared.end_upload();
-            self.emit(Event::UploadCancelled);
-            return;
-        }
-        if let Err(problem) = self.writable() {
-            self.refuse_upload(problem);
-            return;
-        }
-        let Some(mut device) = self.device.take() else {
-            return;
-        };
-        let plan = match animation.plan(device.model()) {
-            Ok(plan) => plan,
-            Err(error) => {
-                self.device = Some(device);
-                self.refuse_upload(Problem::Device(error));
-                return;
-            }
-        };
-
-        self.emit(Event::UploadStarted {
-            total: plan.total_steps(),
-            estimate: estimate(plan.total_steps(), self.chunk_time.mean()),
-        });
-        let shared = Arc::clone(&self.shared);
-        let uploaded = animation.upload(&mut device, &shared.cancel, |progress| {
-            self.between_chunks(progress);
-        });
-        // Anything that came during the pauses at the end was still during the upload.
-        self.commands_during_upload();
-        shared.end_upload();
-        self.device = Some(device);
-        // An upload can take many minutes.
-        let now = (self.clock)();
-
-        match uploaded {
-            Ok(UploadOutcome { finish_confirmed }) => {
-                if !finish_confirmed {
-                    self.emit(Event::UploadUnconfirmed);
-                }
-                self.emit(Event::UploadDone);
-            }
-            Err(Error::Cancelled) => self.emit(Event::UploadCancelled),
-            Err(error) => {
-                self.record(&error);
-                let gone = matches!(error, Error::Hid(_));
-                self.emit(Event::UploadFailed(error));
-                if gone {
-                    self.lose_device(now);
-                    return;
-                }
-            }
-        }
-        self.schedule_poll(now);
-        self.set_clock_if_due(now);
-    }
-
-    fn between_chunks(&mut self, progress: Progress) {
-        self.commands_during_upload();
-        let steps_left = progress.total.saturating_sub(progress.done);
-        self.emit(Event::Progress {
-            done: progress.done,
-            total: progress.total,
-            remaining: estimate(steps_left, self.chunk_time.mean()),
-        });
-    }
-
-    fn commands_during_upload(&mut self) {
-        loop {
-            match self.cmds.try_recv() {
-                Ok(cmd) => self.during_upload(cmd),
-                Err(TryRecvError::Empty) => break,
-                // The interface is gone, and the keyboard shouldn't be left in the middle of this.
-                Err(TryRecvError::Disconnected) => {
-                    self.shared.cancel.store(true, Ordering::SeqCst);
-                    break;
-                }
-            }
-        }
-    }
-
-    /// What each command means while the upload has the keyboard. See the top of this file.
-    fn during_upload(&mut self, cmd: Cmd) {
-        match cmd {
-            Cmd::SetLighting(_) | Cmd::AdjustLighting(_) | Cmd::UploadScreen(_) => {
-                self.problem(Problem::Busy);
-            }
-            Cmd::SyncClock => self.clock_asked = true,
-            Cmd::Resumed => self.auto_clock_due = true,
-            Cmd::LoadImage { path, fit, delay } => self.load_image(path, fit, delay),
-            Cmd::CancelUpload => self.shared.request_cancel(&self.emitter),
-            Cmd::Refresh => {}
-            Cmd::SetAutoClock(on) => self.auto_clock = on,
-            Cmd::Report => {
-                self.tell_report(Err("not read: an upload is running".to_string()));
-            }
-        }
     }
 
     fn report(&mut self, now: Instant) {
