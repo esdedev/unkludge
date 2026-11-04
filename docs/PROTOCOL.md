@@ -32,7 +32,7 @@ What "observed" means here:
 - On Linux, when the system doesn't list usages, Unkludge takes interface 1, the one that holds this collection on the S85.
 - Everything sent is a **feature report of 520 bytes** including the report ID, which is always `0x09`. Whatever a report doesn't use is zero. The official app only opens a collection whose feature reports have that length, and Unkludge checks the same, in the collection's report descriptor, before sending anything: a shorter report could be cut off with no error on Windows. A length it can't find out counts as a wrong one.
 - Acks arrive as 8-byte input reports.
-- The system lets several programs open a collection at once, and what a keyboard does when their reports mix isn't known. So Unkludge's own programs take a lock before opening a keyboard, reads included, and keep it until they close it: a named mutex on Windows, `flock` on a file on Linux. Both go away with the process, however it ends. This is Unkludge's own rule, and the keyboard knows nothing of it.
+- The system lets several programs open a collection at once, and what a keyboard does when their reports mix isn't known. So Unkludge's own programs take a lock before opening a keyboard, reads included, and keep it until they close it: a named mutex on Windows, `flock` on the keyboard's hidraw node on Linux. Both go away with the process, however it ends. This is Unkludge's own rule, and the keyboard knows nothing of it.
 
 ## Report layout
 

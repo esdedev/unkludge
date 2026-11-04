@@ -415,6 +415,8 @@ fn a_folder_that_wont_open_says_so_and_where_the_report_is() {
     assert!(!note.fades());
 }
 
+/// On Linux the lock is the keyboard's own node, which a test build can't get as far as.
+#[cfg(windows)]
 #[test]
 fn the_real_keyboard_only_opens_with_the_lock() {
     use unkludge_shared::device_lock::{DeviceLock, Place};

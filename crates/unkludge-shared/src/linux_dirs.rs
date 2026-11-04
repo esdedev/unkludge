@@ -22,9 +22,10 @@ fn data_dir_in(config: Option<PathBuf>, home: Option<PathBuf>) -> Option<PathBuf
     Some(config.join(APP_NAME))
 }
 
-/// For what only lasts while a program runs: `$XDG_RUNTIME_DIR` when it's this user's, as `su` can
-/// leave another user's in the environment. Otherwise the data folder, which unlike the system's
-/// temporary folder no other user can put things in.
+/// For what only lasts while a program runs, which is the app's socket: `$XDG_RUNTIME_DIR` when it's
+/// this user's, as `su` can leave another user's in the environment. Otherwise the data folder, which
+/// unlike the system's temporary folder no other user can put things in. Two programs with different
+/// environments don't share this, so nothing that has to keep them apart can rely on it.
 pub fn runtime_dir() -> Option<PathBuf> {
     // SAFETY: no arguments, and it can't fail.
     let uid = unsafe { libc::getuid() };

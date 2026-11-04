@@ -15,6 +15,8 @@ use crate::packet::{self, Ack, AckExpect, HEADER_LEN, REPORT_ID, REPORT_LEN, Rep
 use crate::transport::{HidTransport, Transport};
 
 mod descriptor;
+#[cfg(target_os = "linux")]
+pub(crate) mod node_lock;
 mod open;
 
 pub use open::{HidCollection, list_collections};

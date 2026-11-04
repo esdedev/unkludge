@@ -4,8 +4,10 @@
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
+#[cfg(windows)]
 use std::time::Duration;
 
+#[cfg(windows)]
 use unkludge_shared::device_lock::{DeviceLock, Place};
 
 fn unkludge(args: &[&str]) -> Output {
@@ -207,12 +209,15 @@ fn this_test_build_cant_open_a_keyboard() {
 }
 
 /// The real lock, as the real app would hold it. If the app really is running here it has the lock
-/// already, and a command must refuse all the same.
+/// already, and a command must refuse all the same. Only on Windows: on Linux the lock is the
+/// keyboard's own node, and this build of the program can't get as far as that.
+#[cfg(windows)]
 fn hold_the_lock() -> Option<DeviceLock> {
     let place = Place::system().unwrap();
     DeviceLock::take(&place, Duration::from_secs(5)).ok()
 }
 
+#[cfg(windows)]
 #[test]
 fn a_command_refuses_while_the_app_has_the_keyboard_and_says_to_quit_it() {
     let _lock = hold_the_lock();
@@ -225,6 +230,7 @@ fn a_command_refuses_while_the_app_has_the_keyboard_and_says_to_quit_it() {
     }
 }
 
+#[cfg(windows)]
 #[test]
 fn a_report_says_the_keyboard_is_taken_and_still_succeeds() {
     let _lock = hold_the_lock();
@@ -235,6 +241,7 @@ fn a_report_says_the_keyboard_is_taken_and_still_succeeds() {
     assert!(text.contains("quit it first"), "{text}");
 }
 
+#[cfg(windows)]
 #[test]
 fn a_dry_run_takes_no_lock() {
     let _lock = hold_the_lock();
@@ -242,6 +249,7 @@ fn a_dry_run_takes_no_lock() {
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
 }
 
+#[cfg(windows)]
 #[test]
 fn listing_the_models_takes_no_lock() {
     let _lock = hold_the_lock();

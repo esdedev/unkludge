@@ -309,10 +309,12 @@ fn pair_screen<T: Transport>(
             }
         }
     }
-    Err(not_opened.map_or(Error::NotFound, |error| {
-        Error::Hid(format!(
-            "couldn't open a possible screen collection: {error}"
-        ))
+    Err(not_opened.map_or(Error::NotFound, |error| match error {
+        // Another program has it, and that's the news.
+        Error::DeviceBusy => error,
+        other => Error::Hid(format!(
+            "couldn't open a possible screen collection: {other}"
+        )),
     }))
 }
 
@@ -1151,6 +1153,13 @@ mod tests {
         };
         assert!(message.contains("couldn't open"), "{message}");
         assert!(message.contains("access denied"), "{message}");
+    }
+
+    #[test]
+    fn pairing_says_so_when_another_program_has_a_candidate() {
+        let main = answers(&ID);
+        let busy = Err(Error::DeviceBusy);
+        assert_eq!(pair_screen(&main, [busy]).err(), Some(Error::DeviceBusy));
     }
 
     #[test]

@@ -1,11 +1,15 @@
 //! The link to the keyboard, behind a trait so the protocol can run without hardware.
 
 use std::ffi::CStr;
+#[cfg(target_os = "linux")]
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use hidapi::{HidApi, HidDevice, HidError, MAX_REPORT_DESCRIPTOR_SIZE};
 
 use crate::Error;
+#[cfg(target_os = "linux")]
+use crate::device::node_lock::NodeLock;
 
 #[cfg(any(test, feature = "fake"))]
 pub mod fake;
@@ -46,12 +50,21 @@ pub trait Transport {
 /// itself.
 pub struct HidTransport {
     device: HidDevice,
+    /// Before anything else, and let go of after the device closes, as fields go in this order.
+    #[cfg(target_os = "linux")]
+    _node_lock: NodeLock,
 }
 
 impl HidTransport {
     pub(crate) fn open(api: &HidApi, path: &CStr) -> Result<Self, Error> {
+        #[cfg(target_os = "linux")]
+        let _node_lock = NodeLock::take(Path::new(&*path.to_string_lossy()))?;
         let device = api.open_path(path).map_err(hid_error)?;
-        Ok(HidTransport { device })
+        Ok(HidTransport {
+            device,
+            #[cfg(target_os = "linux")]
+            _node_lock,
+        })
     }
 }
 
@@ -82,5 +95,28 @@ impl Transport for HidTransport {
             .map_err(hid_error)?;
         descriptor.truncate(len);
         Ok(descriptor)
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+
+    #[test]
+    fn a_keyboard_someone_else_has_locked_isnt_even_opened() {
+        let node = std::env::temp_dir().join(format!("unkludge-transport-{}", std::process::id()));
+        std::fs::write(&node, "").unwrap();
+        let lock = NodeLock::take(&node).unwrap();
+        // This asks the system nothing about keyboards. It would fail either way, as a file isn't a
+        // keyboard, but only the lock says it like this.
+        let api = HidApi::new_without_enumerate().unwrap();
+        let path = CString::new(node.to_str().unwrap()).unwrap();
+        assert_eq!(
+            HidTransport::open(&api, &path).err(),
+            Some(Error::DeviceBusy)
+        );
+        drop(lock);
+        std::fs::remove_file(&node).unwrap();
     }
 }

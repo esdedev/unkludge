@@ -1,15 +1,21 @@
 //! One Unkludge program at a time on the keyboard.
 //!
 //! The system lets any number of programs open a keyboard's collections at once, and nothing on the
-//! keyboard tells them apart. So the app and the command-line tool agree here: whoever wants a real
-//! keyboard takes this lock first, and keeps it for as long as the keyboard is open. It's a named
-//! mutex on Windows and `flock` on a file on Linux, and the system lets go of both when a process
-//! ends, however it ends, so a crash can't leave a keyboard locked. A mutex a crashed process held
-//! comes back marked as abandoned, which here is just a lock that's free.
+//! keyboard tells them apart. So the app and the command-line tool agree: whoever wants a real keyboard
+//! holds a lock from before it opens until it's closed. The system lets go when a process ends, however
+//! it ends, so a crash can't leave a keyboard locked.
+//!
+//! On Windows it's a named mutex here. A mutex a crashed process held comes back marked as abandoned,
+//! which here is just a lock that's free. It's per user session: another user logged in at the same
+//! time has a lock of their own. It covers all keyboards: there's one mutex.
+//!
+//! On Linux it's `flock` on the keyboard's hidraw node, which only the protocol crate's opening gets to
+//! see, so it's there and not here: see its `device::node_lock`. That's per keyboard, and holds for any
+//! user and any environment. There's no lock file: one would have to be found by every program in the
+//! same place, whatever their environment, and it would add nothing to locking the device itself.
 //!
 //! This isn't the app's single-instance lock, which keeps a second copy of the app from starting.
-//! A dry run and a demo open nothing, so they don't come here. The lock is per user session: another
-//! user logged in at the same time has a lock of their own.
+//! A dry run and a demo open nothing, so they don't come here.
 
 use std::time::Duration;
 
@@ -20,27 +26,49 @@ use unkludge_protocol::{Device, Error};
 /// keyboard, and a command that comes just then shouldn't be told the keyboard is busy.
 pub const COMMAND_WAIT: Duration = Duration::from_secs(1);
 
+#[cfg(windows)]
 pub use imp::{DeviceLock, Place};
 
-/// Takes the lock, then opens the keyboard, so nothing opens without it. The lock stays with the
-/// device and goes when it does.
+/// Opens the keyboard, with the lock held from before that until the device closes.
+#[cfg(windows)]
 pub fn open_locked<T: Transport>(
     wait: Duration,
-    open: impl FnOnce() -> Result<Device<T>, Error>,
+    open: impl FnMut() -> Result<Device<T>, Error>,
 ) -> Result<Device<T>, Error> {
     open_locked_at(&Place::system()?, wait, open)
 }
 
 /// [`open_locked`], with the lock somewhere else.
+#[cfg(windows)]
 pub fn open_locked_at<T: Transport>(
     place: &Place,
     wait: Duration,
-    open: impl FnOnce() -> Result<Device<T>, Error>,
+    mut open: impl FnMut() -> Result<Device<T>, Error>,
 ) -> Result<Device<T>, Error> {
     let lock = DeviceLock::take(place, wait)?;
     let mut device = open()?;
     device.keep_until_closed(Box::new(lock));
     Ok(device)
+}
+
+/// Opens the keyboard, which takes the lock as part of that. If someone else has it this tries again
+/// for up to `wait`.
+#[cfg(not(windows))]
+pub fn open_locked<T: Transport>(
+    wait: Duration,
+    mut open: impl FnMut() -> Result<Device<T>, Error>,
+) -> Result<Device<T>, Error> {
+    const LOOK_EVERY: Duration = Duration::from_millis(20);
+
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        match open() {
+            Err(Error::DeviceBusy) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(LOOK_EVERY);
+            }
+            other => return other,
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -180,115 +208,7 @@ mod imp {
     }
 }
 
-#[cfg(not(windows))]
-mod imp {
-    use std::fs::{File, OpenOptions};
-    use std::io;
-    use std::os::fd::AsRawFd;
-    use std::os::unix::fs::OpenOptionsExt;
-    use std::path::{Path, PathBuf};
-    use std::time::{Duration, Instant};
-
-    use unkludge_protocol::Error;
-
-    use crate::linux_dirs;
-
-    const FILE_NAME: &str = "unkludge-device.lock";
-    const LOOK_EVERY: Duration = Duration::from_millis(20);
-
-    /// A lock file.
-    #[derive(Clone, Debug)]
-    pub struct Place(PathBuf);
-
-    impl Place {
-        /// In the runtime folder. See [`linux_dirs::runtime_dir`] for when there's none.
-        pub fn system() -> Result<Place, Error> {
-            linux_dirs::runtime_dir()
-                .map(|dir| Place(dir.join(FILE_NAME)))
-                .ok_or_else(|| {
-                    Error::LockFailed("no folder for it: HOME isn't set either".to_string())
-                })
-        }
-
-        /// Away from the real one, for tests.
-        pub fn scratch(name: &str) -> Place {
-            Place(
-                std::env::temp_dir()
-                    .join(format!("unkludge-test-{}-{name}.lock", std::process::id())),
-            )
-        }
-
-        /// A file given by another process's [`Place::describe`].
-        pub fn from_description(text: &str) -> Place {
-            Place(PathBuf::from(text))
-        }
-
-        pub fn describe(&self) -> String {
-            self.0.to_string_lossy().into_owned()
-        }
-    }
-
-    /// Held until dropped.
-    #[derive(Debug)]
-    pub struct DeviceLock {
-        file: File,
-    }
-
-    impl Drop for DeviceLock {
-        /// Says so rather than leaving it to the file closing. A program being started from this one
-        /// has a copy of the file for a moment, and with that the lock would last until it's done.
-        fn drop(&mut self) {
-            // SAFETY: the descriptor comes from a file that's open here.
-            unsafe {
-                libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
-            }
-        }
-    }
-
-    impl DeviceLock {
-        /// [`Error::DeviceBusy`] if someone else has it after `wait`.
-        pub fn take(place: &Place, wait: Duration) -> Result<DeviceLock, Error> {
-            let file = open_file(&place.0)
-                .map_err(|error| Error::LockFailed(format!("{}: {error}", place.0.display())))?;
-            let deadline = Instant::now() + wait;
-            loop {
-                // SAFETY: the descriptor comes from a file that's open here. The lock goes away with
-                // the file, which programs started from this one don't inherit.
-                if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-                    return Ok(DeviceLock { file });
-                }
-                let error = io::Error::last_os_error();
-                match error.raw_os_error() {
-                    Some(libc::EWOULDBLOCK) if Instant::now() >= deadline => {
-                        return Err(Error::DeviceBusy);
-                    }
-                    Some(libc::EWOULDBLOCK) => std::thread::sleep(LOOK_EVERY),
-                    Some(libc::EINTR) => {}
-                    _ => {
-                        return Err(Error::LockFailed(format!("{}: {error}", place.0.display())));
-                    }
-                }
-            }
-        }
-    }
-
-    /// Doesn't follow a link, so that whatever someone left under this name can't make this create or
-    /// lock a file elsewhere. A file of another user's can't be opened, and that gets said as it is.
-    fn open_file(path: &Path) -> io::Result<File> {
-        if let Some(folder) = path.parent() {
-            std::fs::create_dir_all(folder)?;
-        }
-        OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(path)
-    }
-}
-
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use super::*;
     use unkludge_protocol::model;
@@ -436,20 +356,53 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
     }
+}
 
-    #[cfg(not(windows))]
+#[cfg(all(test, not(windows)))]
+mod tests {
+    use super::*;
+    use unkludge_protocol::model;
+    use unkludge_protocol::transport::fake::FakeTransport;
+
+    fn device() -> Result<Device<FakeTransport>, Error> {
+        Device::new(FakeTransport::new(), None, model::find(0x0265).unwrap())
+    }
+
     #[test]
-    fn a_link_in_the_way_is_a_failure_and_isnt_followed() {
-        let elsewhere =
-            std::env::temp_dir().join(format!("unkludge-test-{}-link-target", std::process::id()));
-        let link =
-            std::env::temp_dir().join(format!("unkludge-test-{}-link.lock", std::process::id()));
-        let _ = std::fs::remove_file(&link);
-        std::os::unix::fs::symlink(&elsewhere, &link).unwrap();
-        let place = Place::from_description(&link.to_string_lossy());
-        let result = DeviceLock::take(&place, NO_WAIT);
-        std::fs::remove_file(&link).unwrap();
-        assert!(matches!(result, Err(Error::LockFailed(_))), "{result:?}");
-        assert!(!elsewhere.exists());
+    fn a_keyboard_someone_had_for_a_moment_opens_on_another_try() {
+        let mut tries = 0;
+        let opened = open_locked(Duration::from_secs(20), || {
+            tries += 1;
+            if tries < 3 {
+                Err(Error::DeviceBusy)
+            } else {
+                device()
+            }
+        });
+        assert!(opened.is_ok());
+        assert_eq!(tries, 3);
+    }
+
+    #[test]
+    fn a_keyboard_someone_keeps_is_busy_when_the_wait_is_over() {
+        let mut tries = 0;
+        let opened: Result<Device<FakeTransport>, Error> = open_locked(Duration::ZERO, || {
+            tries += 1;
+            Err(Error::DeviceBusy)
+        });
+        assert_eq!(opened.err(), Some(Error::DeviceBusy));
+        assert_eq!(tries, 1);
+    }
+
+    #[test]
+    fn other_failures_arent_tried_again() {
+        let mut tries = 0;
+        let opened: Result<Device<FakeTransport>, Error> =
+            open_locked(Duration::from_secs(20), || {
+                tries += 1;
+                Err(Error::NotFound)
+            });
+        assert_eq!(opened.err(), Some(Error::NotFound));
+        assert_eq!(tries, 1);
     }
 }

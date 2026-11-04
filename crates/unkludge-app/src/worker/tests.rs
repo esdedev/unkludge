@@ -11,6 +11,7 @@ use unkludge_protocol::lighting::{ColorChoice, ColorSetting, LightMode, ModeChoi
 use unkludge_protocol::model;
 use unkludge_protocol::screen::LoadOptions;
 use unkludge_protocol::transport::fake::{AckFault, FakeTransport};
+#[cfg(windows)]
 use unkludge_shared::device_lock::{DeviceLock, Place, open_locked_at};
 
 use super::timing::DEFAULT_CHUNK_TIME;
@@ -148,6 +149,7 @@ impl Rig {
     }
 
     /// A keyboard opened as the real one is, with the lock first.
+    #[cfg(windows)]
     fn locked(fake: &FakeTransport, place: Place) -> Rig {
         let mut rig = Rig::with_opens(VecDeque::new(), false, Arc::new(|| {}));
         let fake = fake.clone();
@@ -387,10 +389,12 @@ fn a_keyboard_that_wont_open_is_told_once_per_error() {
 }
 
 /// What another program sees.
+#[cfg(windows)]
 fn take_from_elsewhere(place: &Place) -> Result<(), Error> {
     DeviceLock::take(place, Duration::ZERO).map(drop)
 }
 
+#[cfg(windows)]
 #[test]
 fn the_worker_holds_the_lock_for_as_long_as_it_has_the_keyboard() {
     let place = Place::scratch("worker-holds");
@@ -566,6 +570,37 @@ fn a_refused_write_with_a_bad_block_after_it_stays_connected() {
     assert!(rig.worker.device.is_some());
 }
 
+#[test]
+fn a_keyboard_someone_has_isnt_an_unplug_and_connects_when_they_let_go() {
+    let fake = FakeTransport::new();
+    let opens = VecDeque::from([
+        Err(Error::DeviceBusy),
+        Err(Error::DeviceBusy),
+        Ok(fake.clone()),
+    ]);
+    let mut rig = Rig::with_opens(opens, false, Arc::new(|| {}));
+    rig.step(0);
+    assert_eq!(
+        rig.drain(),
+        [
+            Event::RkAppRunning(false),
+            Event::CannotOpen(Error::DeviceBusy)
+        ]
+    );
+    rig.step(2000);
+    assert_eq!(rig.drain(), []);
+    queue_reads(&fake, 1);
+    rig.step(4000);
+    assert_eq!(
+        rig.drain(),
+        [
+            Event::Connected { model: s85() },
+            Event::Lighting(current())
+        ]
+    );
+}
+
+#[cfg(windows)]
 #[test]
 fn a_keyboard_a_command_has_isnt_an_unplug_and_gets_looked_at_again() {
     let place = Place::scratch("worker-busy");
