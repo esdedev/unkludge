@@ -198,7 +198,7 @@ const EN: Tr = Tr {
     upload_cancelled: "Upload cancelled",
     upload_failed: "The upload failed",
     image_failed: "That file can't be used",
-    clock_synced: "Clock set",
+    clock_synced: "Clock sent",
     frames_cut: "The file has more frames than this keyboard's limit: only the first {frames} are \
                  used",
     frames_thinned: "At {delay} ms per frame, {sent} of its {frames} frames are sent, as this \
@@ -341,7 +341,7 @@ const ES: Tr = Tr {
     upload_cancelled: "Subida cancelada",
     upload_failed: "La subida ha fallado",
     image_failed: "No se puede usar ese archivo",
-    clock_synced: "Hora ajustada",
+    clock_synced: "Hora enviada",
     frames_cut: "El archivo tiene más fotogramas de los que admite este teclado: solo se usan los \
                  primeros {frames}",
     frames_thinned: "A {delay} ms por fotograma se envían {sent} de sus {frames} fotogramas, porque \
