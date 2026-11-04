@@ -318,7 +318,8 @@ impl<T: Transport> Device<T> {
     }
 }
 
-/// Hands a report to the transport, up to [`SEND_TRIES`] times with `gap` between tries.
+/// Hands a report to the transport, up to [`SEND_TRIES`] times with `gap` between tries. Any error
+/// gets the other tries, deliberately: see the pacing table in `docs/PROTOCOL.md`.
 fn try_send<T: Transport>(transport: &T, report: &Report, gap: Duration) -> Result<(), Error> {
     let mut result = transport.send_feature(report);
     for _ in 1..SEND_TRIES {

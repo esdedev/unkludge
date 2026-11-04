@@ -50,7 +50,7 @@ A read sends `09 <cmd> <arg> 00 01 00 <len lo> <len hi>` with no data, where `cm
 |---|---|
 | Before each report of a command with no ack, each read request and each `0x0D` | 25 ms |
 | Between a read request and fetching its answer | 25 ms |
-| A report that fails to send | Up to 3 tries, 50 ms apart, or 100 ms for `0x0C`. On reports with an ack, the ack wait still decides after the third |
+| A report that fails to send | Up to 3 tries, 50 ms apart, or 100 ms for `0x0C`, whatever the error. That's deliberate. On reports with an ack, the ack wait still decides after the third |
 | Before the config read and the config write when changing settings | 30 ms each |
 | Between the config write and the palettes | 100 ms |
 | Between `0x0C` chunks | None: the ack sets the pace |
