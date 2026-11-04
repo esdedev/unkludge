@@ -187,13 +187,8 @@ impl App {
     /// The part of the window a slider's thumb runs along.
     pub fn slider_track(&self, hit: Hit) -> (f32, f32) {
         let rows = layout::light_rows(self.frame.lights);
-        let parts = layout::split_row(rows.sliders, 2, 24.0);
-        let part = if hit == Hit::Speed {
-            parts[1]
-        } else {
-            parts[0]
-        };
-        (part.0 + 8.0, part.2 - 8.0)
+        let [brightness, speed] = layout::slider_parts(rows.sliders);
+        layout::slider_track(if hit == Hit::Speed { speed } else { brightness })
     }
 
     /// Moves a slider being dragged to where the mouse is.

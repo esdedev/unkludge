@@ -39,6 +39,16 @@ const SECTION_GAP: f32 = 11.0;
 const SLIDERS_H: f32 = 44.0;
 const COLORS_H: f32 = 52.0;
 const SLEEP_H: f32 = 48.0;
+/// Between the lights' two sliders.
+const SLIDER_GAP: f32 = 24.0;
+/// How far in from its part of the row a slider's thumb runs.
+#[cfg_attr(not(windows), allow(dead_code))]
+const SLIDER_INSET: f32 = 8.0;
+const CHIP_GAP: f32 = 6.0;
+/// The chips for how a picture fits, which leave the rest of their row for the time per frame.
+const FIT_CHIPS_W: f32 = 234.0;
+/// What the sleep chips leave above them for their name.
+const SLEEP_CHIPS_TOP: f32 = 20.0;
 
 const LIGHTS_H: f32 = TITLE_H + EFFECT_ROWS as f32 * (EFFECT_H + EFFECT_GAP) - EFFECT_GAP
     + SECTION_GAP
@@ -202,6 +212,31 @@ pub fn light_rows(card: Rect) -> LightRows {
         colors,
         sleep,
     }
+}
+
+/// Where the lights' two sliders go: brightness, then speed.
+pub fn slider_parts(sliders: Rect) -> [Rect; 2] {
+    let parts = split_row(sliders, 2, SLIDER_GAP);
+    [parts[0], parts[1]]
+}
+
+/// What a slider's thumb runs along, in its part of the row. The Linux interface's markup works out
+/// its own, where it's drawn.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn slider_track(part: Rect) -> (f32, f32) {
+    (part.0 + SLIDER_INSET, part.2 - SLIDER_INSET)
+}
+
+/// Where the chips for how a picture fits go, in their row.
+pub fn fit_chips(row: Rect, count: usize) -> Vec<Rect> {
+    let chips = (row.0, row.1, row.0 + FIT_CHIPS_W, row.3);
+    split_row(chips, count, CHIP_GAP)
+}
+
+/// Where the sleep chips go, in the sleep row.
+pub fn sleep_chips(row: Rect, count: usize) -> Vec<Rect> {
+    let chips = (row.0, row.1 + SLEEP_CHIPS_TOP, row.2, row.3);
+    split_row(chips, count, CHIP_GAP)
 }
 
 /// Where each effect's chip goes: left to right, then top to bottom.
@@ -510,6 +545,33 @@ mod tests {
         let width = parts[0].2 - parts[0].0;
         assert_eq!(parts[2].2 - parts[2].0, width);
         assert_eq!(parts[1].0, parts[0].2 + 4.0);
+    }
+
+    #[test]
+    fn the_sliders_share_their_row_with_a_gap_between_them() {
+        let [brightness, speed] = slider_parts((10.0, 5.0, 134.0, 49.0));
+        assert_eq!(brightness, (10.0, 5.0, 60.0, 49.0));
+        assert_eq!(speed, (84.0, 5.0, 134.0, 49.0));
+        assert_eq!(slider_track(speed), (92.0, 126.0));
+    }
+
+    #[test]
+    fn the_fit_chips_leave_the_rest_of_their_row_alone() {
+        let row = (18.0, 400.0, 382.0, 430.0);
+        let chips = fit_chips(row, 3);
+        assert_eq!(chips.len(), 3);
+        assert_eq!(chips[0].0, row.0);
+        assert_eq!(chips[2].2, row.0 + 234.0);
+        assert_eq!(chips[1].0, chips[0].2 + 6.0);
+        assert!(chips.iter().all(|chip| chip.1 == row.1 && chip.3 == row.3));
+    }
+
+    #[test]
+    fn the_sleep_chips_go_under_their_name() {
+        let chips = sleep_chips((0.0, 100.0, 90.0, 148.0), 4);
+        assert_eq!(chips.len(), 4);
+        assert!(chips.iter().all(|chip| chip.1 == 120.0 && chip.3 == 148.0));
+        assert_eq!(chips[3].2, 90.0);
     }
 
     #[test]

@@ -8,7 +8,7 @@ use windows::Win32::Graphics::Direct2D::ID2D1GradientStopCollection;
 use super::gfx::{BORDER, DIM, Draw, MUTED, R, SILVER, TEXT, TRACK_DISABLED, alpha};
 use super::{App, Hit, Role};
 use crate::i18n::t;
-use crate::layout::{self, effect_chips, split_row};
+use crate::layout::{self, effect_chips};
 use crate::state::{LightControls, brightness_text};
 
 fn color_of(rgb: Rgb) -> D2D1_COLOR_F {
@@ -89,7 +89,7 @@ impl App {
 
     fn paint_sliders(&self, d: &Draw, area: R, controls: &LightControls) {
         d.line(area.x0, area.y0 - 5.0, area.x1, area.y0 - 5.0, BORDER, 1.0);
-        let parts = split_row((area.x0, area.y0, area.x1, area.y1), 2, 24.0);
+        let parts = layout::slider_parts((area.x0, area.y0, area.x1, area.y1));
         if let Some((step, steps)) = controls.brightness {
             self.paint_slider(
                 d,
@@ -286,10 +286,10 @@ impl App {
                 MUTED,
             );
         }
-        let chips = (area.x0, area.y0 + 20.0, area.x1, area.y1);
+        let row = (area.x0, area.y0, area.x1, area.y1);
         for (choice, part) in SleepTime::ALL
             .iter()
-            .zip(split_row(chips, SleepTime::ALL.len(), 6.0))
+            .zip(layout::sleep_chips(row, SleepTime::ALL.len()))
         {
             let hit = Hit::Sleep(*choice);
             let on = sleep == SleepSetting::Known(*choice);

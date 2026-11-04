@@ -12,7 +12,7 @@ use super::gfx::{
 use super::header::{fitted_text, tone_color};
 use super::{App, Hit, Role, TextItem};
 use crate::i18n::t;
-use crate::layout::{self, centered, split_row};
+use crate::layout::{self, centered};
 use crate::state::{FITS, Upload, WellHint, preview_frame};
 use crate::worker::rgb_from_565;
 
@@ -217,12 +217,8 @@ impl App {
     }
 
     fn paint_fit_row(&self, d: &Draw, row: R) {
-        let chips = R::new(row.x0, row.y0, row.x0 + 234.0, row.y1);
-        for (fit, part) in FITS.iter().zip(split_row(
-            (chips.x0, chips.y0, chips.x1, chips.y1),
-            FITS.len(),
-            6.0,
-        )) {
+        let chips = layout::fit_chips((row.x0, row.y0, row.x1, row.y1), FITS.len());
+        for (fit, part) in FITS.iter().zip(chips) {
             let hit = Hit::Fit(*fit);
             let selected = self.state.fit == *fit;
             d.chip(
