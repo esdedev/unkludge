@@ -570,6 +570,79 @@ fn a_refused_write_with_a_bad_block_after_it_stays_connected() {
     assert!(rig.worker.device.is_some());
 }
 
+/// A keyboard that takes the first read, refuses the clock and then stops answering.
+fn drops_on_the_clock() -> FakeTransport {
+    let fake = FakeTransport::new();
+    queue_reads(&fake, 1);
+    fake.fail_send(1);
+    fake.fail_send(2);
+    fake.fail_send(3);
+    fake
+}
+
+fn good_keyboard() -> FakeTransport {
+    let fake = FakeTransport::new();
+    queue_reads(&fake, 10);
+    fake
+}
+
+const HOLD_MS: u64 = AUTO_CLOCK_HOLD.as_millis() as u64;
+
+#[test]
+fn a_keyboard_that_drops_on_the_clock_doesnt_get_it_again_on_reconnecting() {
+    let back = good_keyboard();
+    let opens = VecDeque::from([Ok(drops_on_the_clock()), Ok(back.clone())]);
+    let mut rig = Rig::with_opens(opens, true, Arc::new(|| {}));
+    rig.step(0);
+    assert!(rig.drain().contains(&Event::Disconnected));
+    rig.step(2000);
+    assert!(rig.drain().contains(&Event::Connected { model: s85() }));
+    assert_eq!(tried(&back, CLOCK), 0);
+    // Staying connected changes nothing.
+    rig.step(2000 + REFRESH_MS);
+    assert_eq!(tried(&back, CLOCK), 0);
+}
+
+#[test]
+fn the_clock_comes_back_once_enough_time_has_gone_by() {
+    let again = good_keyboard();
+    let opens = VecDeque::from([Ok(drops_on_the_clock()), Ok(again.clone())]);
+    let mut rig = Rig::with_opens(opens, true, Arc::new(|| {}));
+    rig.step(0);
+    assert!(rig.drain().contains(&Event::Disconnected));
+    rig.step(HOLD_MS);
+    assert_eq!(tried(&again, CLOCK), 1);
+}
+
+#[test]
+fn a_real_replug_gets_the_clock_at_once() {
+    let again = good_keyboard();
+    let opens = VecDeque::from([
+        Ok(drops_on_the_clock()),
+        Err(Error::NotFound),
+        Ok(again.clone()),
+    ]);
+    let mut rig = Rig::with_opens(opens, true, Arc::new(|| {}));
+    rig.step(0);
+    rig.step(2000);
+    assert_eq!(rig.opens_tried(), 2);
+    rig.step(4000);
+    assert_eq!(tried(&again, CLOCK), 1);
+}
+
+#[test]
+fn waking_up_gets_the_clock_whatever_was_held_back() {
+    let back = good_keyboard();
+    let opens = VecDeque::from([Ok(drops_on_the_clock()), Ok(back.clone())]);
+    let mut rig = Rig::with_opens(opens, true, Arc::new(|| {}));
+    rig.step(0);
+    rig.step(2000);
+    assert_eq!(tried(&back, CLOCK), 0);
+    rig.send(Cmd::Resumed);
+    rig.step(2001);
+    assert_eq!(tried(&back, CLOCK), 1);
+}
+
 #[test]
 fn a_keyboard_someone_has_isnt_an_unplug_and_connects_when_they_let_go() {
     let fake = FakeTransport::new();

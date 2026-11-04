@@ -67,6 +67,10 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const SETTLE_TIME: Duration = Duration::from_millis(300);
 /// How many errors a report can list.
 const MAX_ERRORS: usize = 20;
+/// How long after a clock that lost the keyboard a reconnection gets none, unless the keyboard was
+/// really gone in between. A keyboard that drops out on being sent the clock would get it every couple
+/// of seconds otherwise.
+const AUTO_CLOCK_HOLD: Duration = Duration::from_secs(60);
 /// How long [`WorkerHandle::shutdown_within`] should give an upload to abort when the system is ending
 /// the program, as stopping it halfway is the alternative, and it only waits for as long as the abort
 /// takes. Windows gives about 5 seconds, and it isn't known how long a Linux session gives.
@@ -416,10 +420,13 @@ pub struct Worker<T: Transport, F> {
     /// [`Cmd::SyncClock`] came during an upload.
     clock_asked: bool,
     /// The clock would be set, if the setting is on by then, once the keyboard is confirmed there or
-    /// an upload has ended. Connecting always sets this, so losing the keyboard needn't clear it. It
-    /// clears when the clock gets tried, whatever comes of that, so one that the keyboard refuses
-    /// isn't tried again until the next connection or wake-up.
+    /// an upload has ended. Connecting sets this, so losing the keyboard needn't clear it. It clears
+    /// when the clock gets tried, whatever comes of that, so one that the keyboard refuses isn't tried
+    /// again until the next connection or wake-up. See [`AUTO_CLOCK_HOLD`] for a connection that doesn't
+    /// count.
     auto_clock_due: bool,
+    /// When sending the clock last lost the keyboard, for as long as that holds back the next one.
+    auto_clock_held_since: Option<Instant>,
     /// Why the keyboard's config block can't be used, if so. Nothing gets written while this is set,
     /// and it keeps a failing read from telling the same thing every few seconds.
     bad_config: Option<Error>,
@@ -456,6 +463,7 @@ impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F
             adjusting: None,
             clock_asked: false,
             auto_clock_due: false,
+            auto_clock_held_since: None,
             bad_config: None,
             errors: VecDeque::new(),
             chunk_time: Arc::default(),
@@ -518,6 +526,7 @@ impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F
             Cmd::SyncClock => self.sync_clock(now),
             Cmd::Resumed => {
                 self.auto_clock_due = true;
+                self.auto_clock_held_since = None;
                 self.next_poll = None;
             }
             Cmd::LoadImage { path, fit, delay } => self.load_image(path, fit, delay),
@@ -635,7 +644,11 @@ impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F
                 }));
                 self.connected(device, now);
             }
-            Err(Error::NotFound) => self.set_link(Link::Absent),
+            Err(Error::NotFound) => {
+                // Really gone, so whatever comes next is a replug.
+                self.auto_clock_held_since = None;
+                self.set_link(Link::Absent);
+            }
             Err(error) => self.set_link(Link::Blocked(error)),
         }
         self.schedule_poll(now);
@@ -656,7 +669,13 @@ impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F
         self.model = Some(model);
         self.link = Link::Connected;
         self.emit(Event::Connected { model });
-        self.auto_clock_due = true;
+        let held = self
+            .auto_clock_held_since
+            .is_some_and(|since| now < since + AUTO_CLOCK_HOLD);
+        if !held {
+            self.auto_clock_held_since = None;
+            self.auto_clock_due = true;
+        }
         match read {
             Ok(config) => self.read_was_good(&config, true, now),
             Err(error) => {
@@ -794,7 +813,12 @@ impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F
         let set = device_now().and_then(|time| set_clock(device, &time));
         match set {
             Ok(()) => self.emit(Event::ClockSynced),
-            Err(error) => self.command_failed(error, now),
+            Err(error) => {
+                self.command_failed(error, now);
+                if self.device.is_none() {
+                    self.auto_clock_held_since = Some(now);
+                }
+            }
         }
     }
 
