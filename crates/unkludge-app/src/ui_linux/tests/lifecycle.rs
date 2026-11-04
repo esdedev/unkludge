@@ -23,6 +23,12 @@ struct FakeOutside {
     dir: TempDir,
 }
 
+impl FakeOutside {
+    fn saved_settings(&self) -> bool {
+        self.dir.path().join("settings-demo.txt").exists()
+    }
+}
+
 impl Outside for FakeOutside {
     fn spawn_tray(&self, tray: Tray) -> Option<Handle<Tray>> {
         self.tray_ids.borrow_mut().push(tray.id.to_string());
@@ -430,4 +436,18 @@ fn nothing_is_left_of_the_fixtures_folder() {
         path.to_path_buf()
     };
     assert!(!path.exists());
+}
+
+#[test]
+fn being_told_to_end_quits_the_usual_way() {
+    let outside = FakeOutside {
+        tray: true,
+        ..FakeOutside::default()
+    };
+    let _window = started(demo(), false, &outside);
+    with_app(|app| app.look_for_end(false));
+    assert!(!outside.saved_settings(), "nothing asked for it yet");
+    with_app(|app| app.look_for_end(true));
+    assert!(outside.saved_settings());
+    take_app();
 }

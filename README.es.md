@@ -171,7 +171,7 @@ Opciones de `screen`:
 | `--delay <MS>` | Milisegundos por fotograma, en lugar de lo que diga el archivo |
 | `--truncate` | Se queda con los fotogramas que caben en el límite del modelo. Sin esto, un archivo con demasiados fotogramas da error |
 
-Con más de 6 fotogramas y un tiempo por fotograma menor que el tiempo de dibujo del modelo (180 ms en el S85 ES), solo se envía parte de los fotogramas. La salida dice cuántos. Ctrl+C durante `screen` le pide al teclado que aborte, lo que puede tardar unos segundos si se ha quedado parado. Un segundo Ctrl+C sale al momento y deja la subida a medias.
+Con más de 6 fotogramas y un tiempo por fotograma menor que el tiempo de dibujo del modelo (180 ms en el S85 ES), solo se envía parte de los fotogramas. La salida dice cuántos. Ctrl+C durante `screen` le pide al teclado que aborte, lo que puede tardar unos segundos si se ha quedado parado. Un segundo Ctrl+C sale al momento y deja la subida a medias. Cerrar el terminal, cerrar la sesión, apagar y SIGTERM o SIGHUP hacen lo mismo que Ctrl+C, en los dos programas, hasta donde el sistema deje tiempo: unos 5 segundos en Windows. Un teclado parado puede tardar más, y entonces la subida se queda a medias.
 
 `unkludge` termina con 0 si todo ha ido bien y con 1 si hay un error. Si el teclado recibió todos los fotogramas de una subida pero no confirmó el final, imprime un aviso y termina con 2: puede que el teclado muestre la animación nueva o puede que no.
 

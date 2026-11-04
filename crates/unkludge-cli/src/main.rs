@@ -152,6 +152,7 @@ fn drive<T: Transport>(
     };
     let result =
         Console::with_stdio(|console| commands::run(&mut device, command, &options, console));
+    interrupt::finished();
     if let Ok(mut observer) = observer.lock() {
         Console::with_stdio(|console| observer.finish(console));
     }

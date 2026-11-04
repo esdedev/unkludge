@@ -164,6 +164,7 @@ pub struct App {
     message_timer: Timer,
     sleep_timer: Timer,
     sleep_watch: resume::SleepWatch,
+    end_timer: Timer,
     /// For a move of the window, which ends some time after it stops saying so.
     refit_timer: Timer,
     /// When the last redraw that an upload's progress asked for was.
@@ -230,6 +231,7 @@ impl App {
             message_timer: Timer::default(),
             sleep_timer: Timer::default(),
             sleep_watch: resume::SleepWatch::default(),
+            end_timer: Timer::default(),
             refit_timer: Timer::default(),
             last_refresh: Instant::now(),
             parked_at: None,

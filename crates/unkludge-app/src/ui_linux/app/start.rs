@@ -26,6 +26,8 @@ use crate::worker::Notify;
 const REFIT_AFTER_START: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(3)];
 /// How long a scripted demo waits to reach its state before giving up.
 const SHOT_GIVE_UP: Duration = Duration::from_secs(90);
+/// How soon a signal to end gets noticed. Part of the little time the system leaves goes on this.
+const END_CHECK_EVERY: Duration = Duration::from_millis(100);
 
 /// What starting up does outside the window.
 pub(in crate::ui_linux) trait Outside {
@@ -34,6 +36,8 @@ pub(in crate::ui_linux) trait Outside {
     fn hook_window(&self, window: &AppWindow);
     fn start_worker(&self, app: &mut App);
     fn data_dir(&self) -> Option<PathBuf>;
+    /// For the whole process, so not something for a test to do.
+    fn listen_for_end_signals(&self) {}
 }
 
 /// The real thing.
@@ -58,6 +62,10 @@ impl Outside for RealOutside {
 
     fn data_dir(&self) -> Option<PathBuf> {
         sys::data_dir()
+    }
+
+    fn listen_for_end_signals(&self) {
+        sys::listen_for_end_signals();
     }
 }
 
@@ -120,6 +128,8 @@ impl App {
             self.refresh();
         }
         self.watch_for_sleep();
+        outside.listen_for_end_signals();
+        self.watch_for_end();
         // The window only appears once the event loop is going, and what the worker says waits for
         // that too. Its first write to a keyboard, which is the clock, can come before that.
         outside.start_worker(self);
@@ -166,6 +176,22 @@ impl App {
                 self.script = running.script;
             }
             Err(problem) => log::error(&problem),
+        }
+    }
+
+    fn watch_for_end(&mut self) {
+        self.end_timer
+            .start(TimerMode::Repeated, END_CHECK_EVERY, || {
+                with_app(|app| app.look_for_end(sys::end_asked()));
+            });
+    }
+
+    /// Takes whether the system has asked the program to end, which goes as any quitting does: the
+    /// worker gets to cancel an upload, once the event loop has stopped.
+    pub(in crate::ui_linux) fn look_for_end(&mut self, asked: bool) {
+        if asked {
+            self.end_timer.stop();
+            self.quit();
         }
     }
 

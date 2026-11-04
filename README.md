@@ -171,7 +171,7 @@ unkludge [--pid <HEX>] [--dry-run] [--timing] [--verbose] <COMMAND>
 | `--delay <MS>` | Milliseconds per frame, instead of what the file says |
 | `--truncate` | Keeps the frames that fit the model's limit. Without it, a file with too many frames is an error |
 
-With more than 6 frames and a delay shorter than the model's draw time (180 ms on the S85 ES), only some of the frames get sent. The output says how many. Ctrl+C during `screen` asks the keyboard to abort, which can take a few seconds if it has stalled. A second Ctrl+C quits at once and leaves the upload unfinished.
+With more than 6 frames and a delay shorter than the model's draw time (180 ms on the S85 ES), only some of the frames get sent. The output says how many. Ctrl+C during `screen` asks the keyboard to abort, which can take a few seconds if it has stalled. A second Ctrl+C quits at once and leaves the upload unfinished. Closing the terminal, logging off, shutting down and SIGTERM or SIGHUP do the same as Ctrl+C, for both programs, as far as the system leaves time: about 5 seconds on Windows. A stalled keyboard can take longer than that, and then the upload stays unfinished.
 
 `unkludge` exits with 0 when all went well and 1 on an error. If the keyboard took every frame of an upload but didn't acknowledge the finish, it prints a warning and exits with 2: the keyboard may or may not show the new animation.
 

@@ -7,6 +7,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 const APP_NAME: &str = "unkludge";
@@ -287,6 +288,35 @@ pub fn refresh_autostart(force: bool) {
     }
     if let (Some(file), Some(exe)) = (autostart_file(), app_exe()) {
         refresh_in(&file, &exe, force);
+    }
+}
+
+// Being told to end
+
+static END_ASKED: AtomicBool = AtomicBool::new(false);
+
+/// From here on, SIGTERM and SIGHUP, which is how a session ending usually goes, only set
+/// [`end_asked`]. So the app gets to quit in its usual way, and an upload gets its abort, as far as
+/// the system leaves it time. A second one ends the process at once.
+pub fn listen_for_end_signals() {
+    // SAFETY: the handler only makes calls that are safe in a signal handler, and lives as long as
+    // the process.
+    unsafe {
+        for signal in [libc::SIGTERM, libc::SIGHUP] {
+            libc::signal(signal, on_end_signal as *const () as libc::sighandler_t);
+        }
+    }
+}
+
+pub fn end_asked() -> bool {
+    END_ASKED.load(Ordering::SeqCst)
+}
+
+extern "C" fn on_end_signal(signal: libc::c_int) {
+    END_ASKED.store(true, Ordering::SeqCst);
+    // SAFETY: this is safe in a signal handler.
+    unsafe {
+        libc::signal(signal, libc::SIG_DFL);
     }
 }
 
@@ -780,6 +810,48 @@ mod tests {
     #[should_panic(expected = "tests must not change")]
     fn a_test_cant_refresh_the_real_entry_by_accident() {
         refresh_autostart(true);
+    }
+
+    const SIGNAL_VARIABLE: &str = "UNKLUDGE_TEST_END_SIGNAL";
+
+    /// Raises a signal for real. A process of its own, which the test below starts, as it can't be
+    /// undone and goes for the whole process.
+    #[test]
+    #[ignore = "started by the test below, in a process of its own"]
+    fn a_process_told_to_end() {
+        let Some(signal) = std::env::var(SIGNAL_VARIABLE)
+            .ok()
+            .and_then(|text| text.parse::<libc::c_int>().ok())
+        else {
+            return;
+        };
+        listen_for_end_signals();
+        assert!(!end_asked());
+        // SAFETY: the handler is in place, and raising a signal has no other requirements.
+        unsafe {
+            assert_eq!(libc::raise(signal), 0);
+        }
+        assert!(end_asked());
+        println!("it only got noted");
+    }
+
+    #[test]
+    fn being_told_to_end_is_only_noted_for_the_app_to_quit_in_its_usual_way() {
+        for signal in [libc::SIGTERM, libc::SIGHUP] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "sys::tests::a_process_told_to_end",
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .env(SIGNAL_VARIABLE, signal.to_string())
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{signal}: {output:?}");
+            let text = String::from_utf8_lossy(&output.stdout);
+            assert!(text.contains("it only got noted"), "{signal}: {text}");
+        }
     }
 
     #[test]

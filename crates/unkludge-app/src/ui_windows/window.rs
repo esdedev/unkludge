@@ -624,8 +624,14 @@ impl App {
                 self.show();
                 Some(0)
             }
-            WM_ENDSESSION if wp.0 != 0 => {
+            WM_ENDSESSION if session_is_ending(wp) => {
                 self.save_settings();
+                // Logging off or shutting down. The worker cancels an upload and the keyboard gets
+                // its abort, which is what the moment this waits is for. The system ends the process
+                // soon after this returns, so everything has to be done by then.
+                if let Some(worker) = self.worker.take() {
+                    worker.shutdown();
+                }
                 Some(0)
             }
             tray::WM_TRAY => {
@@ -752,9 +758,25 @@ impl App {
     }
 }
 
+/// Whether a `WM_ENDSESSION` means it's really happening. It can also say that it won't after all.
+fn session_is_ending(wp: WPARAM) -> bool {
+    wp.0 != 0
+}
+
 pub(super) fn trim_memory() {
     // SAFETY: both values together mean to give back what the system wants.
     unsafe {
         let _ = SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_session_that_is_really_ending_counts() {
+        assert!(session_is_ending(WPARAM(1)));
+        assert!(!session_is_ending(WPARAM(0)));
     }
 }
