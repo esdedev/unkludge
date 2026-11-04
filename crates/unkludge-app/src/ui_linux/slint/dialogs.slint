@@ -1,0 +1,343 @@
+// What takes over the window for a moment. There are no system dialogs for colours, and none for files
+// when no program for it is installed, so these are drawn here. While one is up nothing behind it can
+// be used, which each part knows from View.modal.
+
+import { Actions, DialogKind, View } from "view.slint";
+import { Palette, Pressable, Slider, TextButton } from "parts.slint";
+
+component DialogFrame {
+    in property <string> title;
+    in property <length> card-h;
+    x: 0;
+    y: 0;
+    width: 100%;
+    height: 100%;
+    // Takes the mouse, and takes Escape from anything inside that doesn't want it.
+    Rectangle {
+        background: #000000A6;
+    }
+    TouchArea { }
+    FocusScope {
+        focus-on-click: false;
+        focus-on-tab-navigation: false;
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                Actions.dialog-dismissed();
+                return accept;
+            }
+            return reject;
+        }
+        Rectangle {
+            x: (root.width - self.width) / 2;
+            y: (root.height - self.height) / 2;
+            width: 460px;
+            height: root.card-h;
+            background: Palette.card;
+            border-radius: 14px;
+            border-width: View.hairline;
+            border-color: Palette.border-hi;
+            accessible-role: groupbox;
+            accessible-label: root.title;
+            Text {
+                x: 20px;
+                y: 14px;
+                width: parent.width - 40px;
+                height: 24px;
+                text: root.title;
+                color: Palette.text;
+                font-size: 15px;
+                font-weight: 600;
+                vertical-alignment: center;
+                accessible-role: none;
+            }
+            @children
+        }
+    }
+}
+
+component Field {
+    in property <string> name;
+    in property <string> text;
+    in property <bool> enabled: false;
+    // What comes from outside replaces what's in the field. What the user types stays as it is.
+    property <string> incoming: root.text;
+    changed incoming => {
+        input.text = incoming;
+    }
+    callback edited(string);
+    callback accepted(string);
+
+    public function take-focus() {
+        input.focus();
+    }
+
+    public function value() -> string {
+        return input.text;
+    }
+
+    Rectangle {
+        background: Palette.well;
+        border-radius: 8px;
+        border-width: input.has-focus ? 2px : View.hairline;
+        border-color: input.has-focus ? Palette.accent-hi : Palette.border-hi;
+    }
+    input := TextInput {
+        enabled: root.enabled;
+        x: 10px;
+        width: root.width - 20px;
+        height: root.height;
+        text: root.text;
+        color: Palette.text;
+        font-size: 13px;
+        single-line: true;
+        vertical-alignment: center;
+        accessible-label: root.name;
+        edited => {
+            root.edited(self.text);
+        }
+        accepted => {
+            root.accepted(self.text);
+        }
+    }
+}
+
+component ColorPicker inherits DialogFrame {
+    title: View.color-dialog.title;
+    property <bool> warned: View.color-dialog.warning != "";
+    property <length> top: warned ? 110px : 46px;
+    card-h: top + 214px;
+
+    public function take-focus() {
+        red.take-focus();
+    }
+
+    if root.warned: Text {
+        x: 20px;
+        y: 42px;
+        width: parent.width - 40px;
+        height: 64px;
+        text: View.color-dialog.warning;
+        color: Palette.amber;
+        font-size: 11px;
+        wrap: word-wrap;
+    }
+    red := Slider {
+        x: 20px;
+        y: root.top;
+        width: 300px;
+        height: 44px;
+        name: View.t.red;
+        value: View.color-dialog.red;
+        step: View.color-dialog.red;
+        steps: 256;
+        marks: false;
+        fill: #FF5468;
+        in-dialog: true;
+        dragged(x, x0, x1) => {
+            Actions.color-channel(0, Math.round((x - x0) / (x1 - x0) * 255));
+        }
+        nudged(by) => {
+            Actions.color-channel(0, View.color-dialog.red + by);
+        }
+    }
+    Slider {
+        x: 20px;
+        y: root.top + 48px;
+        width: 300px;
+        height: 44px;
+        name: View.t.green;
+        value: View.color-dialog.green;
+        step: View.color-dialog.green;
+        steps: 256;
+        marks: false;
+        fill: #2FD27A;
+        in-dialog: true;
+        dragged(x, x0, x1) => {
+            Actions.color-channel(1, Math.round((x - x0) / (x1 - x0) * 255));
+        }
+        nudged(by) => {
+            Actions.color-channel(1, View.color-dialog.green + by);
+        }
+    }
+    Slider {
+        x: 20px;
+        y: root.top + 96px;
+        width: 300px;
+        height: 44px;
+        name: View.t.blue;
+        value: View.color-dialog.blue;
+        step: View.color-dialog.blue;
+        steps: 256;
+        marks: false;
+        fill: #38BDF8;
+        in-dialog: true;
+        dragged(x, x0, x1) => {
+            Actions.color-channel(2, Math.round((x - x0) / (x1 - x0) * 255));
+        }
+        nudged(by) => {
+            Actions.color-channel(2, View.color-dialog.blue + by);
+        }
+    }
+    Rectangle {
+        x: 340px;
+        y: root.top + 4px;
+        width: 100px;
+        height: 72px;
+        border-radius: 10px;
+        border-width: View.hairline;
+        border-color: Palette.border-hi;
+        background: View.color-dialog.color;
+        accessible-role: image;
+        accessible-label: View.t.color-preview;
+        accessible-value: View.color-dialog.code;
+    }
+    Field {
+        x: 340px;
+        y: root.top + 92px;
+        width: 100px;
+        height: 34px;
+        name: View.t.color-code;
+        enabled: View.dialog == DialogKind.color;
+        text: View.color-dialog.code;
+        edited(text) => {
+            Actions.color-code-edited(text);
+        }
+        accepted => {
+            Actions.color-ok();
+        }
+    }
+    TextButton {
+        x: parent.width - 20px - 150px - 10px - 100px;
+        y: root.top + 154px;
+        width: 100px;
+        height: 36px;
+        label: View.t.cancel;
+        in-dialog: true;
+        activated => {
+            Actions.dialog-dismissed();
+        }
+    }
+    TextButton {
+        x: parent.width - 20px - 150px;
+        y: root.top + 154px;
+        width: 150px;
+        height: 36px;
+        label: View.t.use-color;
+        primary: true;
+        in-dialog: true;
+        activated => {
+            Actions.color-ok();
+        }
+    }
+}
+
+component PathEntry inherits DialogFrame {
+    title: View.t.path-title;
+    card-h: 200px;
+
+    public function take-focus() {
+        field.take-focus();
+    }
+
+    Text {
+        x: 20px;
+        y: 44px;
+        width: parent.width - 40px;
+        height: 36px;
+        text: View.t.path-hint;
+        color: Palette.muted;
+        font-size: 11px;
+        wrap: word-wrap;
+    }
+    field := Field {
+        x: 20px;
+        y: 88px;
+        width: parent.width - 40px;
+        height: 34px;
+        name: View.t.path-field;
+        enabled: View.dialog == DialogKind.path;
+        accepted(text) => {
+            Actions.path-ok(text);
+        }
+    }
+    TextButton {
+        x: parent.width - 20px - 100px - 10px - 100px;
+        y: 142px;
+        width: 100px;
+        height: 36px;
+        label: View.t.cancel;
+        in-dialog: true;
+        activated => {
+            Actions.dialog-dismissed();
+        }
+    }
+    TextButton {
+        x: parent.width - 20px - 100px;
+        y: 142px;
+        width: 100px;
+        height: 36px;
+        label: View.t.open-file;
+        primary: true;
+        in-dialog: true;
+        activated => {
+            Actions.path-ok(field.value());
+        }
+    }
+}
+
+component TrayNote inherits DialogFrame {
+    title: View.t.note-title;
+    card-h: 170px;
+
+    public function take-focus() {
+        ok.take-focus();
+    }
+
+    Text {
+        x: 20px;
+        y: 44px;
+        width: parent.width - 40px;
+        height: 64px;
+        text: View.t.note-text;
+        color: Palette.silver;
+        font-size: 12.5px;
+        wrap: word-wrap;
+    }
+    ok := TextButton {
+        x: parent.width - 20px - 100px;
+        y: 116px;
+        width: 100px;
+        height: 36px;
+        label: View.t.ok;
+        primary: true;
+        in-dialog: true;
+        activated => {
+            Actions.dialog-dismissed();
+        }
+    }
+}
+
+export component Dialogs {
+    width: 100%;
+    height: 100%;
+
+    public function take-focus() {
+        if (View.dialog == DialogKind.color) {
+            color.take-focus();
+        } else if (View.dialog == DialogKind.path) {
+            path.take-focus();
+        } else if (View.dialog == DialogKind.note) {
+            note.take-focus();
+        }
+    }
+
+    color := ColorPicker {
+        visible: View.dialog == DialogKind.color;
+    }
+    path := PathEntry {
+        visible: View.dialog == DialogKind.path;
+    }
+    note := TrayNote {
+        visible: View.dialog == DialogKind.note;
+    }
+}

@@ -38,7 +38,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq libudev-dev libfontconfig1-dev
+          sudo apt-get install -y -qq libudev-dev libfontconfig1-dev libxkbcommon-dev
       - name: Rust toolchain
         shell: bash
         run: |

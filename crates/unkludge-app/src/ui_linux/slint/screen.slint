@@ -1,0 +1,384 @@
+// The screen section: the preview, the file, how it fits, and the upload. Places are in the window's
+// coordinates, so this takes up the whole window with nothing of its own to see.
+
+import { Actions, View } from "view.slint";
+import { Card, Chip, Icon, Icons, Palette, Pressable, TextButton } from "parts.slint";
+
+component PreviewWell inherits Pressable {
+    x: View.frame.well.x;
+    y: View.frame.well.y;
+    width: View.frame.well.w;
+    height: View.frame.well.h;
+    property <length> pane-x: View.frame.preview.x - View.frame.well.x;
+    property <length> pane-y: View.frame.preview.y - View.frame.well.y;
+    property <length> pane-w: View.frame.preview.w;
+    property <length> pane-h: View.frame.preview.h;
+    ring-radius: 14px;
+    accessible-role: button;
+    accessible-label: View.screen.preview-name;
+    activated(by-keyboard) => {
+        Actions.choose-file(by-keyboard);
+    }
+    Rectangle {
+        background: Palette.well;
+        border-radius: 12px;
+        border-width: View.hairline;
+        border-color: root.hovered ? Palette.border-hi : Palette.border;
+    }
+    // A thin frame, as the screen has on the keyboard.
+    Rectangle {
+        x: root.pane-x - 2px;
+        y: root.pane-y - 2px;
+        width: root.pane-w + 4px;
+        height: root.pane-h + 4px;
+        border-radius: 4px;
+        background: Palette.accent.with-alpha(View.screen.has-picture ? 0.45 : 0.25);
+    }
+    Rectangle {
+        x: root.pane-x;
+        y: root.pane-y;
+        width: root.pane-w;
+        height: root.pane-h;
+        border-radius: 2px;
+        background: Palette.screen-dark;
+    }
+    Image {
+        visible: View.screen.has-picture;
+        x: root.pane-x;
+        y: root.pane-y;
+        width: root.pane-w;
+        height: root.pane-h;
+        source: View.picture;
+        image-fit: fill;
+        accessible-role: none;
+    }
+    // A small screen can't hold the words, so they go under it and it keeps the arrow.
+    property <bool> words-fit: hint.preferred-width + 16px <= root.pane-w;
+    property <length> middle: root.pane-y + root.pane-h / 2;
+    property <length> text-top: words-fit ? middle - 14px : root.pane-y + root.pane-h + 6px;
+    property <bool> asks: !View.screen.has-picture && View.screen.asks;
+    Icon {
+        visible: root.asks;
+        x: (root.width - self.width) / 2;
+        y: (root.words-fit ? root.middle - 28px : root.middle) - 8px;
+        commands: Icons.arrow-up;
+        color: Palette.accent-hi;
+    }
+    hint := Text {
+        visible: !View.screen.has-picture;
+        x: 4px;
+        y: root.asks ? root.text-top : root.pane-y;
+        width: root.width - 8px;
+        height: root.asks ? 20px : root.pane-h;
+        text: View.screen.hint-main;
+        color: root.asks ? Palette.text : Palette.silver;
+        font-size: 13px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+    Text {
+        visible: root.asks;
+        x: 4px;
+        y: root.text-top + 20px;
+        width: root.width - 8px;
+        height: 18px;
+        text: View.screen.hint-more;
+        color: Palette.muted;
+        font-size: 11px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+}
+
+component FileRow {
+    public function take-focus() {
+        choose.take-focus();
+    }
+
+    x: View.frame.file.x;
+    y: View.frame.file.y;
+    width: View.frame.file.w;
+    height: View.frame.file.h;
+    property <length> button-w: Math.max(measure.preferred-width + 26px, 110px);
+    measure := Text {
+        visible: false;
+        text: View.t.choose-file;
+        font-size: 12.5px;
+        font-weight: 600;
+        accessible-role: none;
+    }
+    if View.screen.has-file: Text {
+        x: 0;
+        y: 0;
+        width: root.width - root.button-w - 10px;
+        height: 19px;
+        text: View.screen.file-name;
+        color: Palette.text;
+        font-size: 13px;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+    if View.screen.has-file: Text {
+        x: 0;
+        y: 19px;
+        width: root.width - root.button-w - 10px;
+        height: root.height - 19px;
+        text: View.screen.file-detail;
+        color: Palette.muted;
+        font-size: 11px;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+    if !View.screen.has-file: Text {
+        x: 0;
+        width: root.width - root.button-w - 10px;
+        height: root.height;
+        text: View.t.no-file;
+        color: Palette.muted;
+        font-size: 13px;
+        vertical-alignment: center;
+    }
+    choose := TextButton {
+        x: root.width - root.button-w;
+        y: 2px;
+        width: root.button-w;
+        height: root.height - 4px;
+        label: View.t.choose-file;
+        activated(by-keyboard) => {
+            Actions.choose-file(by-keyboard);
+        }
+    }
+}
+
+component FitRow {
+    x: 0;
+    y: 0;
+    width: 100%;
+    height: 100%;
+    for choice[index] in View.fits: Chip {
+        x: choice.area.x;
+        y: choice.area.y;
+        width: choice.area.w;
+        height: choice.area.h;
+        label: choice.label;
+        name: choice.name;
+        on: choice.on;
+        activated => {
+            Actions.pick-fit(index);
+        }
+    }
+    property <length> right: View.frame.fit.x + View.frame.fit.w;
+    if View.screen.animated: Chip {
+        x: root.right - 118px;
+        y: View.frame.fit.y;
+        width: 30px;
+        height: View.frame.fit.h;
+        label: "\u{2212}";
+        name: View.t.frame-time + ": " + View.t.faster;
+        accessible-role: button;
+        accessible-checkable: false;
+        activated => {
+            Actions.faster();
+        }
+    }
+    if View.screen.animated: Text {
+        x: root.right - 88px;
+        y: View.frame.fit.y;
+        width: 58px;
+        height: View.frame.fit.h;
+        text: View.screen.delay;
+        color: Palette.silver;
+        font-size: 11px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    if View.screen.animated: Chip {
+        x: root.right - 30px;
+        y: View.frame.fit.y;
+        width: 30px;
+        height: View.frame.fit.h;
+        label: "+";
+        name: View.t.frame-time + ": " + View.t.slower;
+        accessible-role: button;
+        accessible-checkable: false;
+        activated => {
+            Actions.slower();
+        }
+    }
+}
+
+component ActionRow {
+    x: View.frame.action.x;
+    y: View.frame.action.y;
+    width: View.frame.action.w;
+    height: View.frame.action.h;
+
+    public function focus-cancel() {
+        cancel.take-focus();
+    }
+
+    public function focus-upload() {
+        upload.take-focus();
+    }
+
+    // It went to Cancel by keyboard, so it comes back to Upload, in sight. If it got there any other
+    // way nobody's looking for it, so it goes away.
+    public function upload-ended() {
+        if (cancel.focus-by-keyboard) {
+            upload.take-focus();
+        } else if (cancel.has-focus) {
+            Actions.drop-focus();
+        }
+    }
+
+    upload := TextButton {
+        visible: View.screen.idle;
+        x: 0;
+        width: 196px;
+        height: root.height;
+        label: View.t.upload;
+        primary: true;
+        enabled: View.screen.idle && View.screen.can-upload;
+        click-takes-focus: false;
+        activated(by-keyboard) => {
+            Actions.upload(by-keyboard);
+        }
+    }
+    Text {
+        visible: View.screen.idle;
+        x: 206px;
+        width: root.width - 206px;
+        height: root.height;
+        text: View.screen.estimate;
+        color: Palette.muted;
+        font-size: 11px;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+
+    property <length> cancel-w: Math.max(cancel-measure.preferred-width + 28px, 84px);
+    property <length> bar-w: root.width - cancel-w - 12px;
+    cancel-measure := Text {
+        visible: false;
+        text: View.t.cancel;
+        font-size: 12.5px;
+        font-weight: 600;
+        accessible-role: none;
+    }
+    Rectangle {
+        visible: !View.screen.idle;
+        x: 0;
+        width: root.bar-w;
+        accessible-role: progress-indicator;
+        accessible-label: View.t.uploading;
+        accessible-value: View.screen.progress-percent;
+        accessible-value-minimum: 0;
+        accessible-value-maximum: 100;
+        Text {
+            x: 0;
+            y: 0;
+            width: 120px;
+            height: 18px;
+            text: View.screen.progress-label;
+            color: Palette.text;
+            font-size: 11px;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+        Text {
+            x: 120px;
+            y: 0;
+            width: parent.width - 120px;
+            height: 18px;
+            text: View.screen.progress-remaining;
+            color: Palette.muted;
+            font-size: 11px;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+        Rectangle {
+            x: 0;
+            y: parent.height - 11px;
+            width: 100%;
+            height: 8px;
+            border-radius: 4px;
+            background: Palette.track;
+        }
+        Rectangle {
+            x: 0;
+            y: parent.height - 11px;
+            width: parent.width * Math.clamp(View.screen.share, 0, 1);
+            height: 8px;
+            border-radius: 4px;
+            background: View.screen.cancelling ? Palette.cyan : Palette.accent-hi;
+        }
+    }
+    cancel := TextButton {
+        visible: !View.screen.idle;
+        x: root.width - root.cancel-w;
+        width: root.cancel-w;
+        height: root.height;
+        label: View.t.cancel;
+        enabled: !View.screen.idle && !View.screen.cancelling;
+        activated => {
+            Actions.cancel();
+        }
+    }
+}
+
+export component ScreenCard {
+    width: 100%;
+    height: 100%;
+
+    public function focus-cancel() {
+        action.focus-cancel();
+    }
+
+    public function focus-upload() {
+        action.focus-upload();
+    }
+
+    public function upload-ended() {
+        action.upload-ended();
+    }
+
+    public function focus-choose-file() {
+        file.take-focus();
+    }
+
+    Card {
+        area: View.frame.screen;
+        title: View.t.screen;
+        icon: Icons.monitor;
+        Text {
+            x: parent.width - 240px;
+            y: 14px;
+            width: 222px;
+            height: 20px;
+            text: View.screen.info;
+            color: Palette.muted;
+            font-size: 11px;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+    }
+    PreviewWell { }
+    file := FileRow { }
+    FitRow { }
+    Text {
+        x: View.frame.notes.x;
+        y: View.frame.notes.y;
+        width: View.frame.notes.w;
+        height: View.frame.notes.h;
+        text: View.screen.notes;
+        color: Palette.tone(View.screen.notes-tone);
+        font-size: 11px;
+        wrap: word-wrap;
+        vertical-alignment: top;
+        accessible-live-region: polite;
+    }
+    action := ActionRow { }
+}

@@ -1,5 +1,5 @@
 //! Where things go in the window, in DIPs (1/96 inch). Pure numbers, so that they're tested without
-//! a window. The Windows interface draws to these; the rest of what it draws is its own business.
+//! a window. Both interfaces draw to these; the rest of what they draw is their own business.
 
 /// A rectangle: left, top, right, bottom.
 pub type Rect = (f32, f32, f32, f32);

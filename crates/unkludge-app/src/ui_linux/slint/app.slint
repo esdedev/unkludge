@@ -1,0 +1,86 @@
+// The window. The order things come in here is the order Tab goes through them.
+
+import { Actions, Area, Banner, Choice, ColorDialog, DialogKind, EmptyView, Frame, FooterView, Header as HeaderData, Labels, LightsView, ScreenView, Swatch, Tone, View } from "view.slint";
+import { Palette } from "parts.slint";
+import { Banners, EmptyCard, Footer, Header } from "chrome.slint";
+import { ClockCard, LightsCard } from "lights.slint";
+import { ScreenCard } from "screen.slint";
+import { Dialogs } from "dialogs.slint";
+
+export { Actions, Area, Banner, Choice, ColorDialog, DialogKind, EmptyView, Frame, FooterView, HeaderData, Labels, LightsView, Palette, ScreenView, Swatch, Tone, View }
+
+export component AppWindow inherits Window {
+    title: View.window-title;
+    icon: View.icon;
+    width: 900px;
+    height: View.frame.height;
+    background: Palette.bg;
+    forward-focus: keys;
+
+    public function drop-focus() {
+        keys.focus();
+    }
+
+    public function focus-cancel() {
+        screen.focus-cancel();
+    }
+
+    public function focus-upload() {
+        screen.focus-upload();
+    }
+
+    public function upload-ended() {
+        screen.upload-ended();
+    }
+
+    public function focus-custom-color() {
+        lights.focus-custom-color();
+    }
+
+    public function focus-choose-file() {
+        screen.focus-choose-file();
+    }
+
+    public function focus-dialog() {
+        dialogs.take-focus();
+    }
+
+    // Takes what no control wanted, and holds the focus when no control should.
+    keys := FocusScope {
+        focus-on-click: false;
+        focus-on-tab-navigation: false;
+        key-pressed(event) => {
+            // Without a tray, this is the one way out.
+            if (event.modifiers.control && (event.text == "q" || event.text == "Q")) {
+                Actions.quit();
+                return accept;
+            }
+            // Among chips and the like, the arrows move as Tab does.
+            if (event.text == Key.RightArrow || event.text == Key.DownArrow) {
+                Actions.move-focus(true);
+                return accept;
+            }
+            if (event.text == Key.LeftArrow || event.text == Key.UpArrow) {
+                Actions.move-focus(false);
+                return accept;
+            }
+            return reject;
+        }
+        Header { }
+        Banners { }
+        screen := ScreenCard {
+            visible: View.header.connected;
+        }
+        lights := LightsCard {
+            visible: View.header.connected;
+        }
+        ClockCard {
+            visible: View.header.connected;
+        }
+        EmptyCard {
+            visible: !View.header.connected;
+        }
+        Footer { }
+        dialogs := Dialogs { }
+    }
+}

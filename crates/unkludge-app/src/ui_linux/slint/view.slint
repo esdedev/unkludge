@@ -1,0 +1,224 @@
+// What the window shows, all set from Rust (see view.rs), and what using it asks for. The markup only
+// draws this and passes on what's done to it: what follows from either lives in the shared state.
+
+export enum Tone { neutral, good, warning, bad }
+
+export enum DialogKind { none, color, path, note }
+
+// A place in the window, from the shared layout.
+export struct Area { x: length, y: length, w: length, h: length }
+
+export struct Banner { area: Area, text: string, tone: Tone }
+
+// One of a set of choices: what it says, and what a screen reader calls it, which has to make sense
+// on its own.
+export struct Choice { area: Area, label: string, name: string, on: bool }
+
+export struct Swatch { color: color, name: string, on: bool }
+
+export struct Frame {
+    height: length,
+    screen: Area,
+    lights: Area,
+    clock: Area,
+    empty: Area,
+    footer: Area,
+    well: Area,
+    file: Area,
+    fit: Area,
+    notes: Area,
+    action: Area,
+    effects: Area,
+    brightness: Area,
+    speed: Area,
+    colors: Area,
+    sleep: Area,
+    preview: Area,
+}
+
+export struct Header {
+    title: string,
+    subtitle: string,
+    status: string,
+    status-tone: Tone,
+    experimental: bool,
+    report: bool,
+    demo: bool,
+    connected: bool,
+}
+
+export struct ScreenView {
+    info: string,
+    has-picture: bool,
+    // The preview is asking for a file, rather than saying how one is coming along.
+    asks: bool,
+    hint-main: string,
+    hint-more: string,
+    preview-name: string,
+    has-file: bool,
+    file-name: string,
+    file-detail: string,
+    animated: bool,
+    delay: string,
+    notes: string,
+    notes-tone: Tone,
+    idle: bool,
+    can-upload: bool,
+    estimate: string,
+    cancelling: bool,
+    share: float,
+    progress-label: string,
+    progress-remaining: string,
+    progress-percent: string,
+}
+
+export struct LightsView {
+    enabled: bool,
+    has-effect: bool,
+    note: string,
+    has-brightness: bool,
+    brightness-step: int,
+    brightness-steps: int,
+    brightness-text: string,
+    has-speed: bool,
+    speed-step: int,
+    speed-steps: int,
+    speed-text: string,
+    own-colors: bool,
+    has-colors: bool,
+    has-rainbow: bool,
+    rainbow-on: bool,
+    has-sleep: bool,
+    sleep-other: string,
+}
+
+export struct EmptyView {
+    headline: string,
+    detail: string,
+    tone: Tone,
+    can-grant: bool,
+    granting: bool,
+    grant-why: string,
+}
+
+export struct FooterView {
+    message: string,
+    tone: Tone,
+    demo: bool,
+    autostart: bool,
+    auto-clock: bool,
+}
+
+export struct ColorDialog {
+    title: string,
+    warning: string,
+    red: int,
+    green: int,
+    blue: int,
+    code: string,
+    color: color,
+}
+
+// The words that never change while the app runs.
+export struct Labels {
+    send-report: string,
+    experimental: string,
+    demo: string,
+    screen: string,
+    lights: string,
+    clock: string,
+    choose-file: string,
+    no-file: string,
+    fit: string,
+    frame-time: string,
+    slower: string,
+    faster: string,
+    upload: string,
+    uploading: string,
+    cancel: string,
+    brightness: string,
+    speed: string,
+    color: string,
+    rainbow: string,
+    custom-color: string,
+    own-colors: string,
+    sleep: string,
+    sync-clock: string,
+    auto-clock: string,
+    auto-clock-more: string,
+    auto-clock-name: string,
+    start-with-system: string,
+    grant-access: string,
+    red: string,
+    green: string,
+    blue: string,
+    color-code: string,
+    color-preview: string,
+    use-color: string,
+    path-title: string,
+    path-hint: string,
+    path-field: string,
+    open-file: string,
+    note-title: string,
+    note-text: string,
+    ok: string,
+}
+
+export global View {
+    in property <string> window-title: "Unkludge";
+    in property <image> icon;
+    in property <image> picture;
+    in property <Labels> t;
+    in property <Frame> frame;
+    // The width of a thin border: less than a real pixel isn't drawn at all, when the window is
+    // drawn smaller to fit a small screen.
+    in property <length> hairline: 1px;
+    in property <Header> header;
+    in property <[Banner]> banners;
+    in property <ScreenView> screen;
+    in property <LightsView> lights;
+    in property <EmptyView> empty;
+    in property <FooterView> footer;
+    in property <[Choice]> fits;
+    in property <[Choice]> effects;
+    in property <[Choice]> sleeps;
+    in property <[Swatch]> swatches;
+    in property <DialogKind> dialog;
+    in property <ColorDialog> color-dialog;
+    out property <bool> modal: dialog != DialogKind.none;
+}
+
+export global Actions {
+    callback report();
+    // These two open something, and whether the keyboard asked says where the focus goes after.
+    callback choose-file(bool);
+    callback pick-fit(int);
+    callback slower();
+    callback faster();
+    // Whether it came from the keyboard, where the focus has to follow along.
+    callback upload(bool);
+    callback cancel();
+    callback sync-clock();
+    callback toggle-auto-clock();
+    callback pick-effect(int);
+    callback drag-brightness(length, length, length);
+    callback nudge-brightness(int);
+    callback drag-speed(length, length, length);
+    callback nudge-speed(int);
+    callback pick-slot(int);
+    callback pick-rainbow();
+    callback custom-color(bool);
+    callback pick-sleep(int);
+    callback toggle-autostart();
+    callback grant-access();
+    callback color-channel(int, int);
+    callback color-code-edited(string);
+    callback color-ok();
+    callback path-ok(string);
+    callback dialog-dismissed();
+    // Moves on to the next thing that can be used, or back, as Tab does.
+    callback move-focus(bool);
+    // Leaves nothing with the focus for Space to find.
+    callback drop-focus();
+    callback quit();
+}

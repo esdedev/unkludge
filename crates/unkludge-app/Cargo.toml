@@ -51,6 +51,11 @@ windows = { workspace = true, features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc.workspace = true
+slint.workspace = true
+ksni.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+i-slint-backend-testing.workspace = true
 
 [dev-dependencies]
 unkludge-protocol = { path = "../unkludge-protocol", features = ["fake"] }

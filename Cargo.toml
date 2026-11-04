@@ -36,3 +36,11 @@ windows-core = "=0.62.2"
 windows-numerics = "=0.3.1"
 # Ctrl+C on Linux. Already in the tree through hidapi.
 libc = "=0.2.191"
+# The Linux interface: drawn in software, on X11 and Wayland, with no GPU libraries to depend on.
+# Screen readers need `accessibility`. Dropped files and the screen's size need `unstable-winit-030`,
+# which is an API and no code of its own, and is why this stays pinned to one version.
+slint = { version = "=1.18.1", default-features = false, features = ["std", "backend-winit", "renderer-software", "compat-1-2", "accessibility", "unstable-winit-030"] }
+# The Linux tray. No `tokio`: a thread of its own is all it needs.
+ksni = { version = "=0.3.7", default-features = false, features = ["blocking", "async-io"] }
+# The Linux interface's tests look through what screen readers would see.
+i-slint-backend-testing = "=1.18.1"

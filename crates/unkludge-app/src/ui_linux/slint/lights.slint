@@ -1,0 +1,371 @@
+// The lights section and the clock's card. Places are in the window's coordinates, as in screen.slint.
+
+import { Actions, View } from "view.slint";
+import { Card, Chip, Icons, Palette, Pressable, Slider, TextButton, ToggleKnob } from "parts.slint";
+
+// A line over a part of the card, to set it apart from what's above.
+component Rule inherits Rectangle {
+    height: 1px;
+    background: Palette.border;
+}
+
+// All the colours in one circle. It's made of slices because the software renderer doesn't round the
+// corners of a gradient.
+component RainbowFill {
+    width: 24px;
+    height: 24px;
+    for slice in [
+        { color: #FF4D4D, commands: "M 12 12 L 12 0 A 12 12 0 0 1 22.39 6 Z" },
+        { color: #FFD24D, commands: "M 12 12 L 22.39 6 A 12 12 0 0 1 22.39 18 Z" },
+        { color: #4DFF88, commands: "M 12 12 L 22.39 18 A 12 12 0 0 1 12 24 Z" },
+        { color: #4DD2FF, commands: "M 12 12 L 12 24 A 12 12 0 0 1 1.61 18 Z" },
+        { color: #6A4DFF, commands: "M 12 12 L 1.61 18 A 12 12 0 0 1 1.61 6 Z" },
+        { color: #FF4DD2, commands: "M 12 12 L 1.61 6 A 12 12 0 0 1 12 0 Z" },
+    ]: Path {
+        width: 24px;
+        height: 24px;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        commands: slice.commands;
+        fill: slice.color;
+    }
+}
+
+// A colour to choose: a circle, with a ring when it's the one chosen.
+component Dot inherits Pressable {
+    in property <color> fill;
+    in property <bool> rainbow;
+    in property <string> name;
+    in property <bool> on;
+    width: 24px;
+    height: 24px;
+    ring-radius: 15px;
+    accessible-role: radio-button;
+    accessible-label: name;
+    accessible-checkable: true;
+    accessible-checked: on;
+    Rectangle {
+        width: 24px;
+        height: 24px;
+        border-radius: 12px;
+        background: root.rainbow ? transparent : root.fill;
+        opacity: root.usable ? 1 : 0.35;
+        if root.rainbow: RainbowFill { }
+    }
+    if root.on: Rectangle {
+        x: -3px;
+        y: -3px;
+        width: 30px;
+        height: 30px;
+        border-radius: 15px;
+        border-width: 1.5px;
+        border-color: root.usable ? Palette.text : Palette.silver;
+    }
+    if root.hovered && !root.on: Rectangle {
+        x: -2px;
+        y: -2px;
+        width: 28px;
+        height: 28px;
+        border-radius: 14px;
+        border-width: View.hairline;
+        border-color: Palette.muted;
+    }
+}
+
+component Colors {
+    public function focus-custom() {
+        custom.take-focus();
+    }
+
+    x: View.frame.colors.x;
+    y: View.frame.colors.y;
+    width: View.frame.colors.w;
+    height: View.frame.colors.h;
+    property <bool> usable: View.lights.enabled;
+    property <length> top: root.height - 27px;
+    property <length> rainbow-x: View.swatches.length * 32px;
+    property <length> custom-x: rainbow-x + (View.lights.has-rainbow ? 32px : 0);
+    Rule {
+        y: -5px;
+        x: 0;
+        width: root.width;
+    }
+    Text {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: 17px;
+        text: View.t.color;
+        color: root.usable ? Palette.silver : Palette.text-disabled;
+        font-size: 11px;
+        vertical-alignment: center;
+    }
+    if View.lights.own-colors: Text {
+        x: 0;
+        y: 18px;
+        width: root.width;
+        height: root.height - 18px;
+        text: View.t.own-colors;
+        color: Palette.muted;
+        font-size: 11px;
+    }
+    for swatch[slot] in View.swatches: Dot {
+        x: slot * 32px;
+        y: root.top;
+        fill: swatch.color;
+        name: swatch.name;
+        on: swatch.on;
+        enabled: root.usable;
+        activated => {
+            Actions.pick-slot(slot);
+        }
+    }
+    if View.lights.has-rainbow: Dot {
+        x: root.rainbow-x;
+        y: root.top;
+        rainbow: true;
+        name: View.t.color + ": " + View.t.rainbow;
+        on: View.lights.rainbow-on;
+        enabled: root.usable;
+        activated => {
+            Actions.pick-rainbow();
+        }
+    }
+    // A custom colour goes into the first slot, so that's the one that shows it.
+    custom := Pressable {
+        visible: View.lights.has-colors;
+        x: root.custom-x;
+        y: root.top;
+        width: 24px + 6px + custom-label.preferred-width;
+        height: 24px;
+        enabled: root.usable && View.lights.has-colors;
+        ring-radius: 14px;
+        accessible-role: button;
+        accessible-label: View.t.custom-color;
+        activated(by-keyboard) => {
+            Actions.custom-color(by-keyboard);
+        }
+        Rectangle {
+            x: 0;
+            width: 24px;
+            height: 24px;
+            border-radius: 12px;
+            border-width: View.hairline;
+            border-color: parent.usable ? (parent.hovered ? Palette.text : Palette.muted) : Palette.text-disabled;
+            Text {
+                text: "+";
+                color: parent.border-color;
+                font-size: 13px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                accessible-role: none;
+            }
+        }
+        custom-label := Text {
+            x: 30px;
+            height: 24px;
+            text: View.t.custom-color;
+            color: parent.usable ? Palette.muted : Palette.text-disabled;
+            font-size: 11px;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+}
+
+component Sleep {
+    x: View.frame.sleep.x;
+    y: View.frame.sleep.y;
+    width: View.frame.sleep.w;
+    height: View.frame.sleep.h;
+    Rule {
+        y: -5px;
+        x: 0;
+        width: root.width;
+    }
+    if View.lights.has-sleep: Text {
+        x: 0;
+        y: 0;
+        width: 120px;
+        height: 17px;
+        text: View.t.sleep;
+        color: View.lights.enabled ? Palette.silver : Palette.text-disabled;
+        font-size: 11px;
+        vertical-alignment: center;
+    }
+    if View.lights.has-sleep: Text {
+        x: 120px;
+        y: 0;
+        width: root.width - 120px;
+        height: 17px;
+        text: View.lights.sleep-other;
+        color: Palette.muted;
+        font-size: 11px;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+}
+
+export component LightsCard {
+    width: 100%;
+    height: 100%;
+
+    public function focus-custom-color() {
+        colors.focus-custom();
+    }
+
+    Card {
+        area: View.frame.lights;
+        title: View.t.lights;
+        icon: Icons.sun;
+    }
+    for choice[index] in View.effects: Chip {
+        x: choice.area.x;
+        y: choice.area.y;
+        width: choice.area.w;
+        height: choice.area.h;
+        label: choice.label;
+        name: choice.name;
+        on: choice.on;
+        enabled: View.lights.enabled;
+        activated => {
+            Actions.pick-effect(index);
+        }
+    }
+    if View.lights.has-effect: Rule {
+        x: View.frame.brightness.x;
+        y: View.frame.brightness.y - 5px;
+        width: View.frame.speed.x + View.frame.speed.w - self.x;
+    }
+    if !View.lights.has-effect: Text {
+        x: View.frame.brightness.x;
+        y: View.frame.brightness.y + 8px;
+        width: View.frame.colors.w;
+        height: View.frame.colors.y + View.frame.colors.h - self.y;
+        text: View.lights.note;
+        color: Palette.muted;
+        font-size: 11px;
+        wrap: word-wrap;
+    }
+    if View.lights.has-brightness: Slider {
+        x: View.frame.brightness.x;
+        y: View.frame.brightness.y;
+        width: View.frame.brightness.w;
+        height: View.frame.brightness.h;
+        name: View.t.brightness;
+        value: View.lights.brightness-text;
+        step: View.lights.brightness-step;
+        steps: View.lights.brightness-steps;
+        enabled: View.lights.enabled;
+        dragged(x, x0, x1) => {
+            Actions.drag-brightness(x, x0, x1);
+        }
+        nudged(by) => {
+            Actions.nudge-brightness(by);
+        }
+    }
+    if View.lights.has-speed: Slider {
+        x: View.frame.speed.x;
+        y: View.frame.speed.y;
+        width: View.frame.speed.w;
+        height: View.frame.speed.h;
+        name: View.t.speed;
+        value: View.lights.speed-text;
+        step: View.lights.speed-step;
+        steps: View.lights.speed-steps;
+        enabled: View.lights.enabled;
+        dragged(x, x0, x1) => {
+            Actions.drag-speed(x, x0, x1);
+        }
+        nudged(by) => {
+            Actions.nudge-speed(by);
+        }
+    }
+    colors := Colors {
+        visible: View.lights.has-effect;
+    }
+    Sleep { }
+    for choice[index] in View.sleeps: Chip {
+        x: choice.area.x;
+        y: choice.area.y;
+        width: choice.area.w;
+        height: choice.area.h;
+        label: choice.label;
+        name: choice.name;
+        on: choice.on;
+        enabled: View.lights.enabled;
+        activated => {
+            Actions.pick-sleep(index);
+        }
+    }
+}
+
+export component ClockCard {
+    width: 100%;
+    height: 100%;
+    property <length> right: View.frame.clock.x + View.frame.clock.w;
+    property <length> sync-w: Math.max(sync-measure.preferred-width + 28px, 120px);
+    sync-measure := Text {
+        visible: false;
+        text: View.t.sync-clock;
+        font-size: 12.5px;
+        font-weight: 600;
+        accessible-role: none;
+    }
+    Card {
+        area: View.frame.clock;
+        title: View.t.clock;
+        icon: Icons.clock;
+    }
+    TextButton {
+        x: root.right - 18px - root.sync-w;
+        y: View.frame.clock.y + 11px;
+        width: root.sync-w;
+        height: 27px;
+        label: View.t.sync-clock;
+        activated => {
+            Actions.sync-clock();
+        }
+    }
+    Pressable {
+        x: View.frame.clock.x + 18px;
+        y: View.frame.clock.y + 42px;
+        width: View.frame.clock.w - 36px;
+        height: View.frame.clock.h - 48px;
+        accessible-role: switch;
+        accessible-label: View.t.auto-clock-name;
+        accessible-checkable: true;
+        accessible-checked: View.footer.auto-clock;
+        activated => {
+            Actions.toggle-auto-clock();
+        }
+        Text {
+            x: 0;
+            y: 0;
+            width: parent.width - 56px;
+            height: 19px;
+            text: View.t.auto-clock;
+            color: Palette.text;
+            font-size: 13px;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+        Text {
+            x: 0;
+            y: 18px;
+            width: parent.width - 56px;
+            height: parent.height - 18px;
+            text: View.t.auto-clock-more;
+            color: Palette.muted;
+            font-size: 11px;
+            overflow: elide;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+        ToggleKnob {
+            x: parent.width - 44px;
+            y: 6px;
+            on: View.footer.auto-clock;
+        }
+    }
+}

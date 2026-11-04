@@ -1,0 +1,448 @@
+// The window's small parts. Whatever can be used is a Pressable, which is where the rules about the
+// keyboard live. Colours and sizes follow the Windows interface's, except that nothing disabled goes
+// under the contrast the rest of the app keeps to: tests read these colours.
+
+import { Actions, Area, Tone, View } from "view.slint";
+
+export global Palette {
+    out property <color> bg: #0B0B0F;
+    out property <color> card: #15151B;
+    out property <color> well: #0D0D12;
+    out property <color> surface: #1F1F27;
+    out property <color> surface-hi: #2A2A35;
+    out property <color> border: #282831;
+    out property <color> border-hi: #44444F;
+    out property <color> track: #787888;
+    out property <color> track-disabled: #64646F;
+    out property <color> selected-disabled: #4C4C58;
+    out property <color> key-art: #2E2E38;
+    out property <color> text: #F4F4F5;
+    out property <color> silver: #C9CDD6;
+    out property <color> muted: #9696A3;
+    out property <color> text-disabled: #8A8A96;
+    out property <color> accent: #6448F0;
+    out property <color> accent-hi: #A796FF;
+    out property <color> screen-dark: #121022;
+    out property <color> lume: #E9E4FF;
+    out property <color> green: #2FD27A;
+    out property <color> amber: #F5A524;
+    out property <color> red: #FF5468;
+    out property <color> cyan: #38BDF8;
+
+    public pure function tone(which: Tone) -> color {
+        if (which == Tone.good) {
+            return green;
+        }
+        if (which == Tone.warning) {
+            return amber;
+        }
+        if (which == Tone.bad) {
+            return red;
+        }
+        return muted;
+    }
+}
+
+// The ring around what has the focus, once the keyboard has been used to get there.
+component FocusRing inherits Rectangle {
+    in property <length> radius: 10px;
+    x: -3px;
+    y: -3px;
+    border-radius: radius;
+    border-width: 2px;
+    border-color: Palette.accent-hi;
+    background: Palette.accent-hi.with-alpha(0.12);
+}
+
+// Anything that does something when clicked, or with Space or Enter.
+export component Pressable {
+    in property <bool> enabled: true;
+    // Inside a dialog, which is the one thing that can be used while it's up.
+    in property <bool> in-dialog: false;
+    // Upload doesn't: a later Space would start another upload nobody can see was asked for.
+    in property <bool> click-takes-focus: true;
+    in property <length> ring-radius: 10px;
+    out property <bool> usable: enabled && (!View.modal || in-dialog);
+    out property <bool> hovered: touch.has-hover && usable;
+    out property <bool> has-focus: scope.has-focus;
+    out property <bool> focus-by-keyboard: by-keyboard && scope.has-focus;
+    property <bool> by-keyboard;
+
+    callback activated(bool);
+
+    public function take-focus() {
+        by-keyboard = true;
+        scope.focus();
+    }
+
+    accessible-enabled: usable;
+    accessible-action-default => {
+        if (usable) {
+            root.activated(true);
+        }
+    }
+
+    @children
+
+    touch := TouchArea {
+        enabled: root.usable;
+        mouse-cursor: pointer;
+        clicked => {
+            by-keyboard = false;
+            if (root.click-takes-focus) {
+                scope.focus();
+            } else {
+                Actions.drop-focus();
+            }
+            root.activated(false);
+        }
+    }
+
+    scope := FocusScope {
+        enabled: root.usable;
+        focus-on-click: false;
+        focus-gained(reason) => {
+            if (reason == FocusReason.tab-navigation) {
+                by-keyboard = true;
+            }
+        }
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                // Holding it down mustn't write to the keyboard over and over.
+                if (!event.repeat && root.usable) {
+                    by-keyboard = true;
+                    root.activated(true);
+                }
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    if root.focus-by-keyboard: FocusRing {
+        width: root.width + 6px;
+        height: root.height + 6px;
+        radius: root.ring-radius;
+    }
+}
+
+export component Chip inherits Pressable {
+    in property <string> label;
+    in property <string> name;
+    in property <bool> on;
+    in property <length> radius: Math.min(self.height / 2, 9px);
+    // The names have to fit whatever font the system has, and some are wider than others.
+    property <float> room: (self.width - 6px) / Math.max(measure.preferred-width, 1px);
+    accessible-role: radio-button;
+    accessible-label: name;
+    accessible-checkable: true;
+    accessible-checked: on;
+    measure := Text {
+        visible: false;
+        text: root.label;
+        font-size: 12px;
+        font-weight: 500;
+        accessible-role: none;
+    }
+    Rectangle {
+        border-radius: root.radius;
+        border-width: root.on && root.usable ? 0 : View.hairline;
+        background: root.on ? (root.usable ? Palette.accent : Palette.selected-disabled)
+            : root.hovered ? Palette.surface-hi : Palette.surface;
+        border-color: root.on ? Palette.muted : root.hovered ? Palette.border-hi : Palette.border;
+        Text {
+            x: 3px;
+            width: parent.width - 6px;
+            text: root.label;
+            color: root.on ? Palette.text : root.usable ? Palette.silver : Palette.text-disabled;
+            font-size: Math.max(12px * Math.min(root.room, 1), 9px);
+            font-weight: 500;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+            accessible-role: none;
+        }
+    }
+}
+
+export component TextButton inherits Pressable {
+    in property <string> label;
+    in property <string> name: label;
+    in property <bool> primary;
+    accessible-role: button;
+    accessible-label: name;
+    Rectangle {
+        border-radius: 9px;
+        border-width: root.primary && root.usable ? 0 : View.hairline;
+        border-color: root.hovered ? Palette.border-hi : Palette.border;
+        background: !root.usable ? Palette.surface
+            : root.primary ? (root.hovered ? Palette.accent-hi : Palette.accent)
+            : root.hovered ? Palette.surface-hi : Palette.surface;
+        drop-shadow-blur: root.primary && root.usable ? 14px : 0;
+        drop-shadow-color: Palette.accent.with-alpha(0.3);
+        Text {
+            text: root.label;
+            color: !root.usable ? Palette.text-disabled
+                : root.primary && root.hovered ? Palette.bg : Palette.text;
+            font-size: 12.5px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+            accessible-role: none;
+        }
+    }
+}
+
+// The track and knob of an on/off switch, for a row that's the part to press.
+export component ToggleKnob {
+    in property <bool> on;
+    width: 44px;
+    height: 24px;
+    Rectangle {
+        border-radius: 12px;
+        background: root.on ? Palette.accent : Palette.track;
+        drop-shadow-blur: root.on ? 10px : 0;
+        drop-shadow-color: Palette.accent.with-alpha(0.5);
+        animate background { duration: 150ms; }
+    }
+    Rectangle {
+        width: 18px;
+        height: 18px;
+        y: 3px;
+        x: root.on ? root.width - self.width - 3px : 3px;
+        border-radius: 9px;
+        background: Palette.text;
+        animate x { duration: 160ms; easing: ease-out; }
+    }
+}
+
+// A slider: its name and value on one line, and under them a track with a mark per step.
+export component Slider {
+    in property <string> name;
+    in property <string> value;
+    in property <int> step;
+    in property <int> steps;
+    in property <bool> enabled: true;
+    in property <bool> in-dialog: false;
+    in property <bool> marks: true;
+    in property <color> fill: Palette.accent-hi;
+    out property <bool> usable: enabled && (!View.modal || in-dialog);
+    property <length> x0: 8px;
+    property <length> x1: root.width - 8px;
+    property <length> track-y: root.height - 11px;
+    property <length> at: steps < 2 ? x0 : x0 + (x1 - x0) * step / (steps - 1);
+    property <bool> by-keyboard;
+
+    callback dragged(length, length, length);
+    callback nudged(int);
+
+    public function take-focus() {
+        by-keyboard = true;
+        scope.focus();
+    }
+
+    accessible-role: slider;
+    accessible-label: name;
+    accessible-value: value;
+    accessible-enabled: usable;
+    accessible-value-minimum: 0;
+    accessible-value-maximum: Math.max(steps - 1, 0);
+    accessible-value-step: 1;
+    accessible-action-increment => {
+        if (usable) {
+            root.nudged(1);
+        }
+    }
+    accessible-action-decrement => {
+        if (usable) {
+            root.nudged(-1);
+        }
+    }
+
+    Text {
+        y: 0;
+        x: 0;
+        width: root.width - 50px;
+        height: 17px;
+        text: root.name;
+        color: root.usable ? Palette.silver : Palette.text-disabled;
+        font-size: 11px;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+    Text {
+        y: 0;
+        x: root.width - 50px;
+        width: 50px;
+        height: 17px;
+        text: root.value;
+        color: root.usable ? Palette.text : Palette.text-disabled;
+        font-size: 11px;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+    Rectangle {
+        x: root.x0;
+        y: root.track-y - 3px;
+        width: root.x1 - root.x0;
+        height: 6px;
+        border-radius: 3px;
+        background: root.usable ? Palette.track : Palette.track-disabled;
+    }
+    Rectangle {
+        x: root.x0;
+        y: root.track-y - 3px;
+        width: root.at - root.x0;
+        height: 6px;
+        border-radius: 3px;
+        background: root.usable ? root.fill : Palette.text-disabled;
+    }
+    for mark in (root.marks ? root.steps : 0): Rectangle {
+        x: root.x0 + (root.x1 - root.x0) * mark / Math.max(root.steps - 1, 1) - 1.5px;
+        y: root.track-y - 1.5px;
+        width: 3px;
+        height: 3px;
+        border-radius: 1.5px;
+        background: Palette.bg.with-alpha(0.7);
+    }
+    Rectangle {
+        x: root.at - 8px;
+        y: root.track-y - 8px;
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        background: root.usable ? Palette.text : Palette.text-disabled;
+        drop-shadow-blur: root.usable ? 10px : 0;
+        drop-shadow-color: Palette.accent;
+    }
+    Rectangle {
+        x: root.at - 3px;
+        y: root.track-y - 3px;
+        width: 6px;
+        height: 6px;
+        border-radius: 3px;
+        background: root.usable ? Palette.accent : Palette.card;
+    }
+    touch := TouchArea {
+        y: root.track-y - 12px;
+        height: 24px;
+        enabled: root.usable;
+        mouse-cursor: ew-resize;
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                by-keyboard = false;
+                scope.focus();
+                root.dragged(self.mouse-x, root.x0, root.x1);
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                root.dragged(self.mouse-x, root.x0, root.x1);
+            }
+        }
+    }
+    scope := FocusScope {
+        y: root.track-y - 12px;
+        height: 24px;
+        enabled: root.usable;
+        focus-on-click: false;
+        focus-gained(reason) => {
+            if (reason == FocusReason.tab-navigation) {
+                by-keyboard = true;
+            }
+        }
+        // These are meant to repeat, and the worker waits for them to settle before writing.
+        key-pressed(event) => {
+            if (event.text == Key.RightArrow || event.text == Key.UpArrow) {
+                by-keyboard = true;
+                root.nudged(1);
+                return accept;
+            }
+            if (event.text == Key.LeftArrow || event.text == Key.DownArrow) {
+                by-keyboard = true;
+                root.nudged(-1);
+                return accept;
+            }
+            return reject;
+        }
+    }
+    if scope.has-focus && by-keyboard: Rectangle {
+        x: -3px;
+        y: root.track-y - 15px;
+        width: root.width + 6px;
+        height: 30px;
+        border-radius: 10px;
+        border-width: 2px;
+        border-color: Palette.accent-hi;
+        background: Palette.accent-hi.with-alpha(0.12);
+    }
+}
+
+// A line drawing on a 16 by 16 grid.
+export component Icon {
+    in property <string> commands;
+    in property <color> color: Palette.muted;
+    width: 16px;
+    height: 16px;
+    Path {
+        width: 16px;
+        height: 16px;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        commands: root.commands;
+        stroke: root.color;
+        stroke-width: 1.3px;
+    }
+}
+
+export global Icons {
+    out property <string> monitor: "M 2 3 L 14 3 L 14 11 L 2 11 Z M 6 14 L 10 14 M 8 11 L 8 14";
+    out property <string> sun: "M 8 5 A 3 3 0 1 1 8 11 A 3 3 0 1 1 8 5 M 8 1 L 8 3 M 8 13 L 8 15 M 1 8 L 3 8 M 13 8 L 15 8 M 3 3 L 4.4 4.4 M 11.6 11.6 L 13 13 M 3 13 L 4.4 11.6 M 11.6 4.4 L 13 3";
+    out property <string> clock: "M 8 1.5 A 6.5 6.5 0 1 1 8 14.5 A 6.5 6.5 0 1 1 8 1.5 M 8 4.5 L 8 8 L 10.5 9.5";
+    out property <string> warning: "M 8 2 L 15 14 L 1 14 Z M 8 6.5 L 8 10 M 8 11.5 L 8 12.5";
+    out property <string> arrow-up: "M 8 14 L 8 3 M 3.5 7.5 L 8 3 L 12.5 7.5";
+}
+
+// A section of the window, with what it's for at the top.
+export component Card inherits Rectangle {
+    in property <Area> area;
+    in property <string> title;
+    in property <string> icon;
+    x: area.x;
+    y: area.y;
+    width: area.w;
+    height: area.h;
+    background: Palette.card;
+    border-radius: 14px;
+    border-width: View.hairline;
+    border-color: Palette.border;
+    accessible-role: groupbox;
+    accessible-label: title;
+    Rectangle {
+        x: 18px;
+        y: 17px;
+        width: 3px;
+        height: 14px;
+        border-radius: 1.5px;
+        background: Palette.accent;
+    }
+    Icon {
+        x: 28px;
+        y: 16px;
+        commands: root.icon;
+    }
+    Text {
+        x: 50px;
+        y: 14px;
+        height: 20px;
+        text: root.title;
+        color: Palette.text;
+        font-size: 11.5px;
+        font-weight: 600;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+    @children
+}

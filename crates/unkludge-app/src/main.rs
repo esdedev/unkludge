@@ -4,8 +4,6 @@
 
 // No console window in a release build. A debug build keeps its console, for what it prints.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
-// The Linux interface comes later, and it's what will use most of these there.
-#![cfg_attr(not(windows), allow(dead_code))]
 
 mod args;
 mod crash;
@@ -23,7 +21,6 @@ mod worker;
 
 // The app itself only needs the PNG writer, for the demo's pictures. The rest is for `build.rs`, and
 // compiled here for its tests.
-#[cfg(any(windows, test))]
 #[cfg_attr(not(test), allow(dead_code))]
 mod winres;
 
@@ -34,6 +31,9 @@ mod sys;
 
 #[cfg(windows)]
 mod ui_windows;
+
+#[cfg(target_os = "linux")]
+mod ui_linux;
 
 use args::{Args, Language};
 
@@ -60,7 +60,7 @@ fn run(args: Args) {
     ui_windows::run(args);
 }
 
-#[cfg(not(windows))]
-fn run(_args: Args) {
-    eprintln!("unkludge: the Linux interface comes in the next task. The CLI works meanwhile.");
+#[cfg(target_os = "linux")]
+fn run(args: Args) {
+    ui_linux::run(args);
 }

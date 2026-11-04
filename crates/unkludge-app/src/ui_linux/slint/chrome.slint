@@ -1,0 +1,377 @@
+// What's around the sections: the header, the banners, the foot of the window, and what's shown when
+// there's no keyboard.
+
+import { Actions, Tone, View } from "view.slint";
+import { Icon, Icons, Palette, Pressable, TextButton, ToggleKnob } from "parts.slint";
+
+export component Header {
+    x: 0;
+    y: 0;
+    width: 100%;
+    height: 72px;
+    // What the app's accent colour does at the top left of the window.
+    Rectangle {
+        x: -360px;
+        y: -280px;
+        width: 860px;
+        height: 560px;
+        background: @radial-gradient(circle, #6448F033 0%, #6448F000 70%);
+    }
+    Image {
+        x: 20px;
+        y: 18px;
+        width: 42px;
+        height: 42px;
+        source: View.icon;
+        accessible-role: none;
+    }
+    title := Text {
+        x: 78px;
+        y: 16px;
+        height: 28px;
+        text: View.header.title;
+        color: Palette.text;
+        font-size: 22px;
+        font-weight: 600;
+        vertical-alignment: center;
+    }
+    Text {
+        x: 79px;
+        y: 42px;
+        height: 18px;
+        text: View.header.subtitle;
+        color: Palette.muted;
+        font-size: 11px;
+        vertical-alignment: center;
+    }
+    property <length> after-title: 78px + title.preferred-width + 14px;
+    if View.header.experimental: Rectangle {
+        x: root.after-title;
+        y: 21px;
+        width: badge.preferred-width + 20px;
+        height: 20px;
+        border-radius: 10px;
+        background: Palette.amber.with-alpha(0.12);
+        border-width: View.hairline;
+        border-color: Palette.amber.with-alpha(0.5);
+        badge := Text {
+            text: View.t.experimental;
+            color: Palette.amber;
+            font-size: 10.5px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    property <length> badge-w: View.header.experimental ? badge-measure.preferred-width + 30px : 0;
+    badge-measure := Text {
+        visible: false;
+        text: View.t.experimental;
+        font-size: 10.5px;
+        font-weight: 600;
+        accessible-role: none;
+    }
+    if View.header.report: Pressable {
+        x: root.after-title + root.badge-w;
+        y: 21px;
+        width: link.preferred-width + 2px;
+        height: 20px;
+        ring-radius: 6px;
+        accessible-role: button;
+        accessible-label: View.t.send-report;
+        activated => {
+            Actions.report();
+        }
+        link := Text {
+            text: View.t.send-report;
+            color: parent.hovered ? Palette.text : Palette.accent-hi;
+            font-size: 11px;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+        Rectangle {
+            y: 16px;
+            height: 1px;
+            background: (parent.hovered ? Palette.text : Palette.accent-hi).with-alpha(0.5);
+        }
+    }
+    property <length> pill-w: status.preferred-width + 46px;
+    property <color> status-color: Palette.tone(View.header.status-tone);
+    Rectangle {
+        x: root.width - 20px - root.pill-w;
+        y: 25px;
+        width: root.pill-w;
+        height: 28px;
+        border-radius: 14px;
+        background: root.status-color.with-alpha(0.10);
+        border-width: View.hairline;
+        border-color: root.status-color.with-alpha(0.35);
+        accessible-role: text;
+        accessible-label: View.header.status;
+        accessible-live-region: polite;
+        Rectangle {
+            x: 14px;
+            y: 10px;
+            width: 8px;
+            height: 8px;
+            border-radius: 4px;
+            background: root.status-color;
+            drop-shadow-blur: 8px;
+            drop-shadow-color: root.status-color;
+        }
+        status := Text {
+            x: 30px;
+            text: View.header.status;
+            color: Palette.text;
+            font-size: 10.5px;
+            font-weight: 600;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+    if View.header.demo: Rectangle {
+        x: root.width - 20px - root.pill-w - 10px - self.width;
+        y: 28px;
+        width: demo.preferred-width + 24px;
+        height: 22px;
+        border-radius: 11px;
+        background: Palette.cyan.with-alpha(0.15);
+        border-width: View.hairline;
+        border-color: Palette.cyan.with-alpha(0.7);
+        demo := Text {
+            text: View.t.demo;
+            color: Palette.cyan;
+            font-size: 10.5px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    // A line under the header, fading out.
+    Rectangle {
+        x: 20px;
+        y: 68px;
+        width: root.width - 40px;
+        height: 1px;
+        background: @linear-gradient(90deg, #6448F099 0%, #6448F000 100%);
+    }
+}
+
+export component Banners {
+    width: 100%;
+    height: 100%;
+    for banner in View.banners: Rectangle {
+        x: banner.area.x;
+        y: banner.area.y;
+        width: banner.area.w;
+        height: banner.area.h;
+        property <color> tone: Palette.tone(banner.tone);
+        border-radius: 10px;
+        background: self.tone.with-alpha(0.10);
+        border-width: View.hairline;
+        border-color: self.tone.with-alpha(0.45);
+        accessible-role: text;
+        accessible-label: banner.text;
+        accessible-live-region: assertive;
+        Icon {
+            x: 16px;
+            y: (parent.height - self.height) / 2;
+            commands: Icons.warning;
+            color: parent.tone;
+        }
+        Text {
+            x: 42px;
+            y: 2px;
+            width: parent.width - 56px;
+            height: parent.height - 4px;
+            text: banner.text;
+            color: Palette.text;
+            font-size: 11.5px;
+            wrap: word-wrap;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+}
+
+export component Footer inherits Rectangle {
+    x: View.frame.footer.x;
+    y: View.frame.footer.y;
+    width: View.frame.footer.w;
+    height: View.frame.footer.h;
+    background: Palette.card;
+    border-radius: 12px;
+    border-width: View.hairline;
+    border-color: Palette.border;
+    property <length> row-w: 224px;
+    property <length> row-x: root.width - 10px - row-w;
+    if View.footer.message != "": Rectangle {
+        x: 14.5px;
+        y: (root.height - 7px) / 2;
+        width: 7px;
+        height: 7px;
+        border-radius: 3.5px;
+        background: View.footer.demo ? Palette.cyan : Palette.tone(View.footer.tone);
+    }
+    Text {
+        x: 32px;
+        y: 2px;
+        width: root.row-x - 44px;
+        height: root.height - 4px;
+        text: View.footer.message;
+        color: View.footer.demo ? Palette.muted : Palette.silver;
+        font-size: 11.5px;
+        wrap: word-wrap;
+        overflow: elide;
+        vertical-alignment: center;
+        accessible-live-region: polite;
+    }
+    Rectangle {
+        x: root.row-x;
+        y: 10px;
+        width: 1px;
+        height: root.height - 20px;
+        background: Palette.border;
+    }
+    Pressable {
+        x: root.row-x;
+        width: root.row-w;
+        height: root.height;
+        accessible-role: switch;
+        accessible-label: View.t.start-with-system;
+        accessible-checkable: true;
+        accessible-checked: View.footer.autostart;
+        activated => {
+            Actions.toggle-autostart();
+        }
+        Text {
+            x: 6px;
+            width: parent.width - 60px;
+            height: parent.height;
+            text: View.t.start-with-system;
+            color: Palette.silver;
+            font-size: 11px;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+        ToggleKnob {
+            x: parent.width - 44px;
+            y: (parent.height - self.height) / 2;
+            on: View.footer.autostart;
+        }
+    }
+}
+
+// A keyboard with a little screen, waiting.
+component KeyboardArt inherits Rectangle {
+    width: 500px;
+    height: 176px;
+    background: Palette.surface;
+    border-radius: 16px;
+    border-width: View.hairline;
+    border-color: Palette.border;
+    accessible-role: none;
+    property <length> pad: 14px;
+    property <length> gap: 5px;
+    property <int> columns: 15;
+    property <length> key-w: (self.width - 2 * pad - gap * (columns - 1)) / columns;
+    property <length> key-h: (self.height - 2 * pad - gap * 4) / 5;
+    for key[index] in 75: Rectangle {
+        property <int> key-column: Math.mod(index, 15);
+        property <int> key-row: index / 15;
+        // The screen takes the keyboard's top right corner.
+        visible: !(key-row < 2 && key-column >= 12);
+        x: root.pad + key-column * (root.key-w + root.gap);
+        y: root.pad + key-row * (root.key-h + root.gap);
+        width: root.key-w;
+        height: root.key-h;
+        border-radius: 4px;
+        background: Palette.key-art;
+    }
+    Rectangle {
+        x: root.pad + 12 * (root.key-w + root.gap);
+        y: root.pad;
+        width: 3 * root.key-w + 2 * root.gap;
+        height: 2 * root.key-h + root.gap;
+        border-radius: 5px;
+        background: Palette.screen-dark;
+        border-width: View.hairline;
+        border-color: Palette.accent.with-alpha(0.7);
+        Rectangle {
+            x: 16px;
+            y: parent.height / 2 - 3px;
+            width: parent.width - 32px;
+            height: 6px;
+            border-radius: 2px;
+            background: Palette.lume.with-alpha(0.7);
+        }
+    }
+}
+
+// With no keyboard there's nothing to set, so this takes the sections' place.
+export component EmptyCard inherits Rectangle {
+    x: View.frame.empty.x;
+    y: View.frame.empty.y;
+    width: View.frame.empty.w;
+    height: View.frame.empty.h;
+    background: Palette.card;
+    border-radius: 14px;
+    border-width: View.hairline;
+    border-color: Palette.border;
+    property <length> art-top: (root.height - 176px - 104px) / 2;
+    property <length> text-top: art-top + 176px + 28px;
+    KeyboardArt {
+        x: (root.width - self.width) / 2;
+        y: root.art-top;
+    }
+    Text {
+        x: 20px;
+        y: root.text-top;
+        width: root.width - 40px;
+        height: 30px;
+        text: View.empty.headline;
+        color: Palette.text;
+        font-size: 19px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-live-region: polite;
+    }
+    Text {
+        x: 30px;
+        y: root.text-top + 34px;
+        width: root.width - 60px;
+        height: 38px;
+        text: View.empty.detail;
+        color: View.empty.tone == Tone.neutral || View.empty.tone == Tone.good ? Palette.muted : Palette.tone(View.empty.tone);
+        font-size: 13px;
+        horizontal-alignment: center;
+        vertical-alignment: top;
+        wrap: word-wrap;
+        accessible-live-region: polite;
+    }
+    if View.empty.grant-why != "": Text {
+        x: 30px;
+        y: root.text-top + 74px;
+        width: root.width - 60px;
+        height: 18px;
+        text: View.empty.grant-why;
+        color: Palette.muted;
+        font-size: 11px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    if View.empty.can-grant: TextButton {
+        x: (root.width - self.width) / 2;
+        y: root.text-top + 98px;
+        width: 180px;
+        height: 34px;
+        primary: true;
+        label: View.t.grant-access;
+        enabled: !View.empty.granting;
+        activated => {
+            Actions.grant-access();
+        }
+    }
+}
