@@ -186,9 +186,9 @@ mod tests {
         let node = std::env::temp_dir().join(format!("unkludge-transport-{}", std::process::id()));
         std::fs::write(&node, "").unwrap();
         let lock = NodeLock::take(&node).unwrap();
-        // This asks the system nothing about keyboards. It would fail either way, as a file isn't a
-        // keyboard, but only the lock says it like this.
-        let api = HidApi::new_without_enumerate().unwrap();
+        // This only lists what's there. Opening would fail either way, as a file isn't a keyboard,
+        // but only the lock says it like this.
+        let api = HidApi::new().unwrap();
         let path = CString::new(node.to_str().unwrap()).unwrap();
         assert_eq!(
             HidTransport::open(&api, &path).err(),
