@@ -414,3 +414,14 @@ fn a_folder_that_wont_open_says_so_and_where_the_report_is() {
     assert_eq!(note.tone, Tone::Bad);
     assert!(!note.fades());
 }
+
+#[test]
+fn the_real_keyboard_only_opens_with_the_lock() {
+    use unkludge_shared::device_lock::{DeviceLock, Place};
+
+    // The real lock, as a command running would hold it. If the app really is running here it has
+    // the lock already, and this must say the same.
+    let place = Place::system().unwrap();
+    let _lock = DeviceLock::take(&place, Duration::from_secs(5)).ok();
+    assert_eq!(open_real_keyboard().err(), Some(Error::DeviceBusy));
+}

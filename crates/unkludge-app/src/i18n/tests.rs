@@ -19,6 +19,12 @@ fn a_screen_reader_gets_the_caveat_on_the_chip_it_is_about() {
 }
 
 #[test]
+fn the_clock_is_only_said_to_be_sent_as_nothing_confirms_it() {
+    assert_eq!(EN.clock_synced, "Clock sent");
+    assert_eq!(ES.clock_synced, "Hora enviada");
+}
+
+#[test]
 fn the_system_language_gives_one_of_the_tables() {
     let table = t().no_keyboard;
     assert!(table == EN.no_keyboard || table == ES.no_keyboard);
