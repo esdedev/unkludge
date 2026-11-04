@@ -231,7 +231,18 @@ mod imp {
     /// Held until dropped.
     #[derive(Debug)]
     pub struct DeviceLock {
-        _file: File,
+        file: File,
+    }
+
+    impl Drop for DeviceLock {
+        /// Says so rather than leaving it to the file closing. A program being started from this one
+        /// has a copy of the file for a moment, and with that the lock would last until it's done.
+        fn drop(&mut self) {
+            // SAFETY: the descriptor comes from a file that's open here.
+            unsafe {
+                libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+            }
+        }
     }
 
     impl DeviceLock {
@@ -244,7 +255,7 @@ mod imp {
                 // SAFETY: the descriptor comes from a file that's open here. The lock goes away with
                 // the file, which programs started from this one don't inherit.
                 if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-                    return Ok(DeviceLock { _file: file });
+                    return Ok(DeviceLock { file });
                 }
                 let error = io::Error::last_os_error();
                 match error.raw_os_error() {
