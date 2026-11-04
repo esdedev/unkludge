@@ -869,6 +869,69 @@ fn a_supported_keyboard_with_no_usable_collection_says_so_and_offers_a_report() 
 }
 
 #[test]
+fn a_keyboard_found_but_not_usable_offers_a_report_whatever_the_reason() {
+    for error in [
+        Error::NoUsableCollection(0x0265),
+        Error::NotOnUsb(0x0265),
+        Error::ReportLengthUnknown {
+            pid: 0x0265,
+            detail: "no answer".to_string(),
+        },
+    ] {
+        let mut state = State::default();
+        state.apply(Event::CannotOpen(error.clone()), &mut Settings::default());
+        assert!(state.offers_report(), "{error:?}");
+        assert_eq!(state.status().tone, Tone::Warning, "{error:?}");
+    }
+}
+
+fn device_error() -> Event {
+    Event::Error(Problem::Device(Error::Hid("refused".to_string())))
+}
+
+#[test]
+fn a_device_error_goes_when_the_next_command_works() {
+    let (mut state, mut settings) = connected();
+    state.apply(device_error(), &mut settings);
+    assert!(state.message.is_some());
+    let lighting = CurrentLighting {
+        mode: LightMode::Off,
+        brightness: None,
+        speed: None,
+        color: None,
+        sleep: unkludge_protocol::lighting::SleepSetting::Unknown(0),
+    };
+    state.apply(Event::Lighting(lighting), &mut settings);
+    assert_eq!(state.message, None);
+
+    state.apply(device_error(), &mut settings);
+    state.apply(Event::UploadDone, &mut settings);
+    assert_eq!(state.message, None);
+
+    state.apply(device_error(), &mut settings);
+    state.apply(Event::ClockSynced, &mut settings);
+    assert_eq!(state.message.as_ref().unwrap().text, t().clock_synced);
+    // That one isn't a device error any more, so what comes next leaves it alone.
+    state.apply(Event::Lighting(lighting), &mut settings);
+    assert_eq!(state.message.as_ref().unwrap().text, t().clock_synced);
+}
+
+#[test]
+fn other_problems_stay_when_a_command_works() {
+    let (mut state, mut settings) = connected();
+    state.apply(Event::Error(Problem::Busy), &mut settings);
+    let lighting = CurrentLighting {
+        mode: LightMode::Off,
+        brightness: None,
+        speed: None,
+        color: None,
+        sleep: unkludge_protocol::lighting::SleepSetting::Unknown(0),
+    };
+    state.apply(Event::Lighting(lighting), &mut settings);
+    assert_eq!(state.message.as_ref().unwrap().text, t().busy);
+}
+
+#[test]
 fn a_keyboard_a_command_has_says_so_and_doesnt_ask_to_connect_it() {
     let mut state = State::default();
     state.apply(

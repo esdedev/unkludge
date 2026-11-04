@@ -178,6 +178,8 @@ pub struct State {
     pub settings_unreadable: bool,
     /// Anything else, at the foot of the window.
     pub message: Option<Note>,
+    /// [`State::message`] is a device error, which the next command that works makes old news.
+    device_problem: bool,
     /// Slider values on their way to the keyboard, which the next word from it replaces.
     pending: LightingChange,
 }
@@ -198,6 +200,7 @@ impl Default for State {
             unconfirmed: false,
             settings_unreadable: false,
             message: None,
+            device_problem: false,
             pending: LightingChange::default(),
         }
     }
@@ -250,6 +253,7 @@ impl State {
             Event::Lighting(lighting) => {
                 self.lighting = Some(lighting);
                 self.pending = LightingChange::default();
+                self.clear_device_problem();
             }
             Event::PalettesChanged { pid, palettes } => {
                 settings.palettes.insert(pid, *palettes);
@@ -301,6 +305,7 @@ impl State {
             }
             Event::UploadDone => {
                 self.upload = Upload::Idle;
+                self.clear_device_problem();
                 // After `UploadUnconfirmed`, that's the news.
                 self.outcome = Some(if std::mem::take(&mut self.unconfirmed) {
                     Note::new(t().upload_unconfirmed, Tone::Warning)
@@ -321,6 +326,7 @@ impl State {
             }
             Event::ClockSynced => {
                 self.message = Some(Note::new(t().clock_synced, Tone::Good));
+                self.device_problem = false;
             }
             Event::Error(problem) => {
                 // An upload that was asked for and refused never starts.
@@ -334,6 +340,7 @@ impl State {
                 }
                 self.pending = LightingChange::default();
                 self.message = Some(Note::new(t().problem(&problem), Tone::Bad));
+                self.device_problem = matches!(problem, Problem::Device(_));
             }
             Event::RkAppRunning(running) => self.rk_app = running,
             Event::Hung => self.hung = true,
@@ -341,6 +348,12 @@ impl State {
             Event::ReportReady(data) => reaction.report = Some(data),
         }
         reaction
+    }
+
+    fn clear_device_problem(&mut self) {
+        if std::mem::take(&mut self.device_problem) {
+            self.message = None;
+        }
     }
 
     fn lost_keyboard(&mut self) {
@@ -654,9 +667,11 @@ impl State {
             Link::Absent => Note::new(t().disconnected, Tone::Bad),
             Link::Blocked(Error::Unsupported(_)) => Note::new(t().unsupported_short, Tone::Warning),
             Link::Blocked(Error::DeviceBusy) => Note::new(t().in_use_short, Tone::Warning),
-            Link::Blocked(Error::NoUsableCollection(_)) => {
-                Note::new(t().cannot_open_short, Tone::Warning)
-            }
+            Link::Blocked(
+                Error::NoUsableCollection(_)
+                | Error::NotOnUsb(_)
+                | Error::ReportLengthUnknown { .. },
+            ) => Note::new(t().cannot_open_short, Tone::Warning),
             Link::Blocked(_) => Note::new(t().cannot_open_short, Tone::Bad),
             Link::Connected(_) => Note::new(t().connected, Tone::Good),
         }
@@ -673,7 +688,12 @@ impl State {
         self.is_experimental()
             || matches!(
                 self.link,
-                Link::Blocked(Error::Unsupported(_) | Error::NoUsableCollection(_))
+                Link::Blocked(
+                    Error::Unsupported(_)
+                        | Error::NoUsableCollection(_)
+                        | Error::NotOnUsb(_)
+                        | Error::ReportLengthUnknown { .. }
+                )
             )
     }
 
