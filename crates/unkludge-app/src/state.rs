@@ -174,7 +174,7 @@ pub struct State {
     pub file_note: Option<Note>,
     /// The upload that's running didn't get its finish confirmed.
     unconfirmed: bool,
-    /// The settings file couldn't be read, so these are the defaults and nothing gets saved.
+    /// The settings file couldn't be read, so nothing gets saved. See [`Settings::read_error`].
     pub settings_unreadable: bool,
     /// Anything else, at the foot of the window.
     pub message: Option<Note>,

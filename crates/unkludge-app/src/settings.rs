@@ -1,5 +1,10 @@
 //! The settings, in a text file of `key=value` lines. Whatever can't be read in it is skipped, so a
-//! damaged file costs the settings at worst, never a crash.
+//! damaged file costs the settings at worst, never a crash. The app writes UTF-8, and takes what a
+//! text editor may save instead: UTF-8 with a BOM and UTF-16 with one.
+//!
+//! What matters most here is the automatic clock, as it writes to the keyboard unasked. Someone who
+//! turned it off in this file mustn't get it back: a value this doesn't know means off, and so does a
+//! file that's there and can't be made sense of, which also stays as it is.
 //!
 //! Whether the app starts with the system isn't here: the system's own entry says that, and the user
 //! can also change it from outside the app.
@@ -15,7 +20,7 @@ const AUTO_CLOCK: &str = "auto_clock";
 const TRAY_NOTE_SHOWN: &str = "tray_note_shown";
 const PALETTES_PREFIX: &str = "palettes.";
 /// Far more than these settings can ever take, for all the models there are. A larger file isn't one
-/// of ours, and gets treated like any other damaged one.
+/// of ours, so it counts as unreadable.
 const MAX_FILE_BYTES: u64 = 1 << 20;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -60,10 +65,10 @@ impl Settings {
         }
     }
 
-    /// Never fails. A damaged file gives the defaults and gets replaced at the next save. One that
-    /// can't be read, or a folder that can't be made for it, gives the defaults and keeps the reason
-    /// in [`Settings::read_error`]. All of those count as having existed, so that they don't look
-    /// like a first launch and turn autostart on again.
+    /// Never fails. A file with a line that's damaged loses that line. One that can't be read, or has
+    /// nothing in it this knows, or a folder that can't be made for it, gives the defaults with the
+    /// automatic clock off, and keeps the reason in [`Settings::read_error`]. All of those count as
+    /// having existed, so that they don't look like a first launch and turn autostart on again.
     pub fn load_from(path: &Path) -> Settings {
         let bytes = match read_limited(path) {
             Ok(bytes) => bytes,
@@ -75,42 +80,50 @@ impl Settings {
             }
             Err(error) => return Settings::unreadable(&error),
         };
-        Settings {
-            existed: true,
-            ..Settings::from_text(&String::from_utf8_lossy(&bytes))
-        }
+        Settings::from_text(&decode(&bytes))
     }
 
     fn unreadable(error: &io::Error) -> Settings {
         crate::log::error(&format!("the settings can't be read: {error}"));
         Settings {
+            auto_clock: false,
             existed: true,
             read_error: Some(error.to_string()),
             ..Settings::default()
         }
     }
 
+    /// Nothing written in the text, or at least one setting from it. Anything else isn't a file of
+    /// these settings, whatever it is, and it might be one this just can't read.
     fn from_text(text: &str) -> Settings {
-        let mut settings = Settings::default();
+        let mut settings = Settings {
+            existed: true,
+            ..Settings::default()
+        };
+        let mut known = false;
         for line in text.lines() {
             let Some((key, value)) = line.split_once('=') else {
                 continue;
             };
             let (key, value) = (key.trim(), value.trim());
             if key == AUTO_CLOCK {
-                match value {
-                    "1" => settings.auto_clock = true,
-                    "0" => settings.auto_clock = false,
-                    _ => {}
-                }
+                known = true;
+                settings.auto_clock = auto_clock_value(value);
             } else if key == TRAY_NOTE_SHOWN {
+                known = true;
                 settings.tray_note_shown = value == "1";
-            } else if let Some(pid) = key.strip_prefix(PALETTES_PREFIX).and_then(parse_pid)
-                && let Some(palettes) =
-                    decode_hex(value).and_then(|bytes| Palettes::from_bytes(&bytes).ok())
-            {
-                settings.palettes.insert(pid, palettes);
+            } else if let Some(pid) = key.strip_prefix(PALETTES_PREFIX) {
+                known = true;
+                if let Some(pid) = parse_pid(pid)
+                    && let Some(palettes) =
+                        decode_hex(value).and_then(|bytes| Palettes::from_bytes(&bytes).ok())
+                {
+                    settings.palettes.insert(pid, palettes);
+                }
             }
+        }
+        if !known && !text.trim().is_empty() {
+            return Settings::unreadable(&io::Error::other("it has no setting this knows"));
         }
         settings
     }
@@ -155,16 +168,47 @@ impl Settings {
     }
 }
 
-/// The file's contents, or nothing at all if it's past the limit.
+/// The file's contents. One past the limit is an error.
 fn read_limited(path: &Path) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     File::open(path)?
         .take(MAX_FILE_BYTES + 1)
         .read_to_end(&mut bytes)?;
     if bytes.len() as u64 > MAX_FILE_BYTES {
-        bytes.clear();
+        return Err(io::Error::other("it's far too large to be this file"));
     }
     Ok(bytes)
+}
+
+/// Text, going by the BOM if there is one, and as UTF-8 if not. Bytes that make no sense in those
+/// come out as replacement characters, and only cost the line they're on.
+fn decode(bytes: &[u8]) -> String {
+    match bytes {
+        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
+        [0xFF, 0xFE, rest @ ..] => decode_utf16(rest, u16::from_le_bytes),
+        [0xFE, 0xFF, rest @ ..] => decode_utf16(rest, u16::from_be_bytes),
+        other => String::from_utf8_lossy(other).into_owned(),
+    }
+}
+
+fn decode_utf16(bytes: &[u8], unit: fn([u8; 2]) -> u16) -> String {
+    let (units, _) = bytes.as_chunks::<2>();
+    let units: Vec<u16> = units.iter().map(|&pair| unit(pair)).collect();
+    String::from_utf16_lossy(&units)
+}
+
+/// Only `1` turns the automatic clock on, as it writes to the keyboard unasked.
+fn auto_clock_value(value: &str) -> bool {
+    match value {
+        "1" => true,
+        "0" => false,
+        other => {
+            crate::log::error(&format!(
+                "{AUTO_CLOCK} has the value {other:?}, which isn't 0 or 1, so it counts as off"
+            ));
+            false
+        }
+    }
 }
 
 fn temp_path(path: &Path) -> PathBuf {
@@ -305,23 +349,117 @@ mod tests {
         assert_eq!(lines.len(), 2);
     }
 
-    #[test]
-    fn a_corrupt_file_gives_the_defaults() {
-        let dir = TempDir::new("corrupt");
-        std::fs::write(dir.file(), [0xFF, 0xFE, 0x00, b'=', 0x80, b'\n', 0xC3]).unwrap();
+    fn utf16(text: &str, bom: [u8; 2], unit: fn(u16) -> [u8; 2]) -> Vec<u8> {
+        let mut bytes = bom.to_vec();
+        bytes.extend(text.encode_utf16().flat_map(unit));
+        bytes
+    }
+
+    /// What's on disk after loading a file like this and quitting.
+    fn after_a_save(dir: &TempDir, bytes: &[u8]) -> (Settings, String) {
+        std::fs::write(dir.file(), bytes).unwrap();
         let loaded = Settings::load_from(&dir.file());
-        assert!(loaded.existed, "autostart must not be turned on again");
-        assert!(loaded.auto_clock);
-        assert!(loaded.palettes.is_empty());
+        loaded.save_to(&dir.file()).unwrap();
+        let text = std::fs::read_to_string(dir.file()).unwrap();
+        (loaded, text)
     }
 
     #[test]
-    fn a_folder_in_place_of_the_file_gives_the_defaults() {
+    fn turning_the_automatic_clock_off_survives_what_an_editor_may_save() {
+        let dir = TempDir::new("opt-out");
+        let line = "auto_clock=0\r\n";
+        let mut bom = vec![0xEF, 0xBB, 0xBF];
+        bom.extend(line.as_bytes());
+        for bytes in [
+            line.as_bytes().to_vec(),
+            bom,
+            utf16(line, [0xFF, 0xFE], u16::to_le_bytes),
+            utf16(line, [0xFE, 0xFF], u16::to_be_bytes),
+        ] {
+            let (loaded, text) = after_a_save(&dir, &bytes);
+            assert!(!loaded.auto_clock, "{bytes:02X?}");
+            assert!(loaded.read_error.is_none(), "{bytes:02X?}");
+            assert_eq!(text, "auto_clock=0\n", "{bytes:02X?}");
+        }
+    }
+
+    #[test]
+    fn a_value_this_doesnt_know_turns_the_automatic_clock_off() {
+        let dir = TempDir::new("off-word");
+        for value in ["off", "no", "false", "maybe", "", "2", "01"] {
+            let (loaded, text) = after_a_save(&dir, format!("auto_clock={value}\n").as_bytes());
+            assert!(!loaded.auto_clock, "{value:?}");
+            assert_eq!(text, "auto_clock=0\n", "{value:?}");
+        }
+    }
+
+    #[test]
+    fn a_later_line_about_the_clock_replaces_an_earlier_one() {
+        assert!(Settings::from_text("auto_clock=0\nauto_clock=1\n").auto_clock);
+        assert!(!Settings::from_text("auto_clock=1\nauto_clock=off\n").auto_clock);
+    }
+
+    #[test]
+    fn utf16_settings_keep_everything_else_too() {
+        let good = "00".repeat(PALETTES_LEN);
+        let text = format!("auto_clock=1\ntray_note_shown=1\npalettes.0265={good}\n");
+        let dir = TempDir::new("utf16-all");
+        std::fs::write(dir.file(), utf16(&text, [0xFF, 0xFE], u16::to_le_bytes)).unwrap();
+        let loaded = Settings::load_from(&dir.file());
+        assert!(loaded.auto_clock);
+        assert!(loaded.tray_note_shown);
+        assert!(loaded.palettes.contains_key(&0x0265));
+    }
+
+    #[test]
+    fn half_a_character_at_the_end_of_utf16_costs_nothing_else() {
+        let mut bytes = utf16("auto_clock=0\n", [0xFF, 0xFE], u16::to_le_bytes);
+        bytes.push(0x41);
+        assert!(!Settings::from_text(&decode(&bytes)).auto_clock);
+    }
+
+    #[test]
+    fn a_file_with_nothing_known_in_it_is_unreadable_and_stays_as_it_is() {
+        let dir = TempDir::new("unknown");
+        let cases: [&[u8]; 5] = [
+            // Binary rubbish, starting with what looks like a BOM.
+            &[0xFF, 0xFE, 0x00, b'=', 0x80, b'\n', 0xC3],
+            b"no equals sign",
+            b"future_setting=1\n",
+            // UTF-16 with no BOM, as nothing says what it is.
+            b"a\0u\0t\0o\0_\0c\0l\0o\0c\0k\0=\00\0",
+            b"AUTO_CLOCK=0\n",
+        ];
+        for bytes in cases {
+            std::fs::write(dir.file(), bytes).unwrap();
+            let loaded = Settings::load_from(&dir.file());
+            assert!(loaded.existed, "autostart must not be turned on again");
+            assert!(loaded.read_error.is_some(), "{bytes:02X?}");
+            assert!(!loaded.auto_clock, "{bytes:02X?}");
+            assert!(loaded.save_to(&dir.file()).is_err(), "{bytes:02X?}");
+            assert_eq!(std::fs::read(dir.file()).unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn an_empty_file_is_just_the_defaults() {
+        let dir = TempDir::new("empty");
+        for bytes in [&b""[..], b" \r\n\n", &[0xEF, 0xBB, 0xBF], &[0xFF, 0xFE]] {
+            std::fs::write(dir.file(), bytes).unwrap();
+            let loaded = Settings::load_from(&dir.file());
+            assert!(loaded.existed, "{bytes:02X?}");
+            assert!(loaded.read_error.is_none(), "{bytes:02X?}");
+            assert!(loaded.auto_clock, "{bytes:02X?}");
+        }
+    }
+
+    #[test]
+    fn a_folder_in_place_of_the_file_is_unreadable() {
         let dir = TempDir::new("folder");
         std::fs::create_dir(dir.file()).unwrap();
         let loaded = Settings::load_from(&dir.file());
         assert!(loaded.existed);
-        assert!(loaded.auto_clock);
+        assert!(!loaded.auto_clock);
         assert!(loaded.read_error.is_some());
     }
 
@@ -390,20 +528,17 @@ mod tests {
     }
 
     #[test]
-    fn a_file_past_the_limit_is_damaged_and_gets_replaced() {
+    fn a_file_past_the_limit_is_unreadable_and_stays_as_it_is() {
         let dir = TempDir::new("too-big");
         let mut text = String::from("auto_clock=0\n");
         text.push_str(&"#".repeat(MAX_FILE_BYTES as usize));
-        std::fs::write(dir.file(), text).unwrap();
+        std::fs::write(dir.file(), &text).unwrap();
         let loaded = Settings::load_from(&dir.file());
         assert!(loaded.existed);
-        assert!(loaded.auto_clock, "none of it counts");
-        assert!(loaded.read_error.is_none());
-        loaded.save_to(&dir.file()).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(dir.file()).unwrap(),
-            "auto_clock=1\n"
-        );
+        assert!(!loaded.auto_clock);
+        assert!(loaded.read_error.is_some());
+        assert!(loaded.save_to(&dir.file()).is_err());
+        assert_eq!(std::fs::read_to_string(dir.file()).unwrap(), text);
     }
 
     #[test]
@@ -450,7 +585,8 @@ mod tests {
             "00".repeat(PALETTES_LEN - 1),
         );
         let settings = Settings::from_text(&text);
-        assert!(settings.auto_clock);
+        assert!(!settings.auto_clock);
+        assert!(settings.read_error.is_none());
         let pids: Vec<u16> = settings.palettes.keys().copied().collect();
         assert_eq!(pids, [0x01A2]);
     }
