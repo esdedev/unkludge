@@ -12,10 +12,18 @@ use unkludge_protocol::screen::Fit;
 
 use crate::worker::Problem;
 
+mod linux;
+
+pub use linux::LinuxTr;
+
 /// One language's texts. In the private ones, `{name}` marks where a value goes.
 pub struct Tr {
-    /// Which language this is, for what needs to know, as text shaping does.
+    /// Which language this is, for what needs to know, as text shaping does on Windows.
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub spanish: bool,
+    /// What only the Linux interface says.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub linux: LinuxTr,
     /// Shown when there's no keyboard.
     pub connect_keyboard: &'static str,
     /// [`Problem::NoKeyboard`].
@@ -60,7 +68,8 @@ pub struct Tr {
     pub fit: &'static str,
     /// What a screen reader calls the automatic clock's toggle, which is read away from its card.
     pub auto_clock_name: &'static str,
-    /// The title of the message about a mistyped option.
+    /// The title of the message about a mistyped option. On Linux the message goes to the console.
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub bad_option: &'static str,
     pub looking: &'static str,
     pub connected: &'static str,
@@ -162,6 +171,7 @@ pub struct Tr {
 
 const EN: Tr = Tr {
     spanish: false,
+    linux: linux::EN,
     connect_keyboard: "Connect the keyboard by USB cable",
     no_keyboard: "No keyboard is connected",
     busy: "Not possible during an upload: wait for it to end, or cancel it",
@@ -296,6 +306,7 @@ const EN: Tr = Tr {
 
 const ES: Tr = Tr {
     spanish: true,
+    linux: linux::ES,
     connect_keyboard: "Conecta el teclado por cable USB",
     no_keyboard: "No hay ningún teclado conectado",
     busy: "No se puede durante una subida: espera a que termine o cancélala",

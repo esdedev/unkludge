@@ -209,6 +209,7 @@ fn is_unkludge_appimage(path: &Path) -> bool {
             .is_some_and(|name| name.to_string_lossy().to_lowercase().starts_with(APP_NAME))
 }
 
+#[cfg(test)]
 fn entry_program(file: &Path) -> Option<PathBuf> {
     let text = std::fs::read_to_string(file).ok()?;
     text.lines().find_map(exec_program)
@@ -341,8 +342,8 @@ fn lock_failure(os_error: Option<i32>) -> Lock {
     }
 }
 
-/// Whether this is the only copy running. If another one is, it gets asked to show its window, and
-/// this one should quit. The lock lasts until the process ends, however it ends.
+/// Whether this is the only copy running. If another one is, this one should quit. The lock lasts
+/// until the process ends, however it ends.
 pub fn claim_single_instance() -> bool {
     static LOCK: OnceLock<File> = OnceLock::new();
     let Some(dir) = data_dir() else {
@@ -354,11 +355,18 @@ pub fn claim_single_instance() -> bool {
             true
         }
         Lock::Untried => true,
-        Lock::Taken => {
-            ask_to_show(&show_socket());
-            false
-        }
+        Lock::Taken => false,
     }
+}
+
+/// Asks the copy that's running to show its window.
+pub fn show_other_copy() {
+    ask_to_show(&show_socket());
+}
+
+/// Whether the udev rule is in place, whoever put it there.
+pub fn udev_rule_installed() -> bool {
+    Path::new(UDEV_RULE_PATH).exists()
 }
 
 fn ask_to_show(socket: &Path) {

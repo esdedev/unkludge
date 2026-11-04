@@ -381,3 +381,22 @@ fn a_report_that_cant_be_saved_says_so_and_opens_nothing() {
     assert_eq!(outcome.note.tone, Tone::Bad);
     assert!(outcome.open.is_empty());
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_demo_only_pretends_to_grant_access() {
+    let session = Session::Demo(DemoArgs::default());
+    let granted = session.grant_access(|| panic!("a demo must not change the system"));
+    assert_eq!(granted, Ok(()));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn the_real_app_says_how_granting_access_went() {
+    let asked = |result| Session::Real.grant_access(|| result);
+    assert_eq!(asked(Ok(())), Ok(()));
+    assert_eq!(
+        asked(Err(sys::GrantError::Cancelled)),
+        Err(sys::GrantError::Cancelled)
+    );
+}

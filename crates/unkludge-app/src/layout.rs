@@ -90,7 +90,9 @@ pub fn keep_in_work_area(x: i32, y: i32, size: (i32, i32), work: PixelRect) -> (
     )
 }
 
-/// Where a window of this size goes to be in the middle of the work area.
+/// Where a window of this size goes to be in the middle of the work area. On Linux that's up to the
+/// window manager.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn centered_in_work_area(size: (i32, i32), work: PixelRect) -> (i32, i32) {
     let (left, top, right, bottom) = work;
     keep_in_work_area(
@@ -244,7 +246,9 @@ pub fn step_at(x: f32, x0: f32, x1: f32, steps: usize) -> usize {
     (share * (steps - 1) as f32).round() as usize
 }
 
-/// Where a step is on a slider running from `x0` to `x1`.
+/// Where a step is on a slider running from `x0` to `x1`. The Linux interface's markup works it out
+/// where it's drawn.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn step_x(step: usize, x0: f32, x1: f32, steps: usize) -> f32 {
     if steps < 2 {
         return x0;

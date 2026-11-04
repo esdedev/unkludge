@@ -193,6 +193,16 @@ impl Session {
         }
     }
 
+    /// Installs what gives this system's users access to keyboards. A demo only pretends, as it asks
+    /// for a password and changes the system.
+    #[cfg(target_os = "linux")]
+    pub fn grant_access(
+        &self,
+        install: impl FnOnce() -> Result<(), sys::GrantError>,
+    ) -> Result<(), sys::GrantError> {
+        if self.is_demo() { Ok(()) } else { install() }
+    }
+
     /// Starts the worker. `open_real` is the only way to a real keyboard, and only the real app
     /// uses it. `data_dir` is where a demo keeps its picture for as long as it runs.
     pub fn spawn_worker<T, F>(
