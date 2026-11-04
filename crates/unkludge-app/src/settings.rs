@@ -3,8 +3,9 @@
 //! text editor may save instead: UTF-8 with a BOM and UTF-16 with one.
 //!
 //! What matters most here is the automatic clock, as it writes to the keyboard unasked. Someone who
-//! turned it off in this file mustn't get it back: a value this doesn't know means off, and so does a
-//! file that's there and can't be made sense of, which also stays as it is.
+//! turned it off in this file mustn't get it back. So a file that's there has to say `auto_clock=1`
+//! for it to be on, and an empty one doesn't: someone made that on purpose, and this app never writes
+//! one without that line. A file that can't be made sense of also stays as it is.
 //!
 //! Whether the app starts with the system isn't here: the system's own entry says that, and the user
 //! can also change it from outside the app.
@@ -65,10 +66,11 @@ impl Settings {
         }
     }
 
-    /// Never fails. A file with a line that's damaged loses that line. One that can't be read, or has
-    /// nothing in it this knows, or a folder that can't be made for it, gives the defaults with the
-    /// automatic clock off, and keeps the reason in [`Settings::read_error`]. All of those count as
-    /// having existed, so that they don't look like a first launch and turn autostart on again.
+    /// Never fails. A file with a line that's damaged loses that line. With no good line about the
+    /// automatic clock, it's off. A file that can't be read, or has nothing in it this knows, or a
+    /// folder that can't be made for it, gives the defaults with the automatic clock off, and keeps
+    /// the reason in [`Settings::read_error`]. All of those count as having existed, so that they don't
+    /// look like a first launch and turn autostart on again.
     pub fn load_from(path: &Path) -> Settings {
         let bytes = match read_limited(path) {
             Ok(bytes) => bytes,
@@ -97,6 +99,7 @@ impl Settings {
     /// these settings, whatever it is, and it might be one this just can't read.
     fn from_text(text: &str) -> Settings {
         let mut settings = Settings {
+            auto_clock: false,
             existed: true,
             ..Settings::default()
         };
@@ -442,14 +445,47 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_file_is_just_the_defaults() {
+    fn an_empty_file_turns_the_clock_off_with_nothing_to_warn_about() {
         let dir = TempDir::new("empty");
         for bytes in [&b""[..], b" \r\n\n", &[0xEF, 0xBB, 0xBF], &[0xFF, 0xFE]] {
-            std::fs::write(dir.file(), bytes).unwrap();
-            let loaded = Settings::load_from(&dir.file());
+            let (loaded, text) = after_a_save(&dir, bytes);
             assert!(loaded.existed, "{bytes:02X?}");
             assert!(loaded.read_error.is_none(), "{bytes:02X?}");
-            assert!(loaded.auto_clock, "{bytes:02X?}");
+            assert!(!loaded.auto_clock, "{bytes:02X?}");
+            assert_eq!(text, "auto_clock=0\n", "{bytes:02X?}");
+        }
+    }
+
+    #[test]
+    fn a_file_with_other_settings_and_no_good_clock_line_turns_it_off_and_says_so_on_saving() {
+        let dir = TempDir::new("no-clock-line");
+        let good = "00".repeat(PALETTES_LEN);
+        for text in [
+            format!("AUTO_CLOCK=0\npalettes.0265={good}\n"),
+            format!("auto_clock\npalettes.0265={good}\n"),
+            format!("palettes.0265={good}\n"),
+            "tray_note_shown=1\n".to_string(),
+        ] {
+            let (loaded, saved) = after_a_save(&dir, text.as_bytes());
+            assert!(!loaded.auto_clock, "{text}");
+            assert!(loaded.read_error.is_none(), "{text}");
+            assert!(saved.starts_with("auto_clock=0\n"), "{text}: {saved}");
+        }
+    }
+
+    #[test]
+    fn a_file_this_app_wrote_keeps_the_clock_as_it_was() {
+        let dir = TempDir::new("own-file");
+        for auto_clock in [true, false] {
+            let settings = Settings {
+                auto_clock,
+                tray_note_shown: true,
+                ..Settings::default()
+            };
+            settings.save_to(&dir.file()).unwrap();
+            let loaded = Settings::load_from(&dir.file());
+            assert_eq!(loaded.auto_clock, auto_clock);
+            assert!(loaded.read_error.is_none());
         }
     }
 
