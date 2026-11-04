@@ -9,7 +9,7 @@ use super::gfx::{BORDER, DIM, Draw, MUTED, R, SILVER, TEXT, TRACK_DISABLED, alph
 use super::{App, Hit, Role};
 use crate::i18n::t;
 use crate::layout::{self, effect_chips, split_row};
-use crate::state::{LightControls, percent};
+use crate::state::{LightControls, brightness_text};
 
 fn color_of(rgb: Rgb) -> D2D1_COLOR_F {
     D2D1_COLOR_F {
@@ -33,14 +33,8 @@ impl App {
             self.paint_sliders(d, sliders, &controls);
             self.paint_colors(d, colors, &controls, rainbow);
         } else {
-            let note = match controls.mode {
-                Some(LightMode::Off) => t().lights_off_note,
-                Some(LightMode::Custom) => t().custom_mode_note,
-                Some(LightMode::Unknown(_)) => t().unknown_effect_note,
-                _ => "",
-            };
             d.text(
-                note,
+                self.state.light_note(),
                 &self.fonts.note,
                 R::new(sliders.x0, sliders.y0 + 8.0, sliders.x1, colors.y1),
                 MUTED,
@@ -97,13 +91,12 @@ impl App {
         d.line(area.x0, area.y0 - 5.0, area.x1, area.y0 - 5.0, BORDER, 1.0);
         let parts = split_row((area.x0, area.y0, area.x1, area.y1), 2, 24.0);
         if let Some((step, steps)) = controls.brightness {
-            let value = format!("{} %", percent(step, steps));
             self.paint_slider(
                 d,
                 parts[0].into(),
                 Hit::Brightness,
                 t().brightness,
-                value,
+                brightness_text(step, steps),
                 (step, steps),
                 controls.enabled,
             );

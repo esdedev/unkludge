@@ -10,6 +10,7 @@
 mod args;
 mod crash;
 mod demo;
+mod drive;
 mod i18n;
 mod icon;
 mod layout;

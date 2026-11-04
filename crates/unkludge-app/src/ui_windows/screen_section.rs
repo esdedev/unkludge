@@ -3,7 +3,6 @@
 use std::sync::Arc;
 
 use unkludge_protocol::model::ScreenSpec;
-use unkludge_protocol::screen::Fit;
 use windows::Win32::Graphics::Direct2D::ID2D1Bitmap;
 
 use super::gfx::{
@@ -14,18 +13,8 @@ use super::header::{fitted_text, tone_color};
 use super::{App, Hit, Role, TextItem};
 use crate::i18n::t;
 use crate::layout::{self, centered, split_row};
-use crate::state::{Upload, preview_frame};
+use crate::state::{FITS, Upload, WellHint, preview_frame};
 use crate::worker::rgb_from_565;
-
-const FITS: [Fit; 3] = [Fit::Cover, Fit::Contain, Fit::Stretch];
-
-fn fit_name(fit: Fit) -> &'static str {
-    match fit {
-        Fit::Cover => t().fit_cover,
-        Fit::Contain => t().fit_contain,
-        Fit::Stretch => t().fit_stretch,
-    }
-}
 
 /// `R G B` pixels as the `B G R A` a bitmap holds.
 fn bgra_from_rgb(rgb: &[u8]) -> Vec<u8> {
@@ -143,18 +132,18 @@ impl App {
             Some(bitmap) => d.bitmap(bitmap, pane, self.dpi == 96.0),
             None => self.paint_well_hint(d, well, pane),
         }
-        let name = match self.state.file_name() {
-            Some(file) => format!("{}: {file}", t().preview),
-            None => format!("{}: {}", t().preview, t().drop_hint),
-        };
-        self.item(well, Hit::Preview, name, Role::Button, false, true);
+        self.item(
+            well,
+            Hit::Preview,
+            self.state.preview_name(),
+            Role::Button,
+            false,
+            true,
+        );
     }
 
     fn paint_well_hint(&self, d: &Draw, well: R, pane: R) {
-        let (main, more) = match self.state.file_detail() {
-            detail if !detail.is_empty() => (detail, String::new()),
-            _ => (t().drop_hint.to_string(), t().drop_hint_more.to_string()),
-        };
+        let WellHint { main, more } = self.state.well_hint();
         if more.is_empty() {
             d.text(&main, &self.fonts.body_c, pane, SILVER);
             return;
@@ -238,27 +227,22 @@ impl App {
             let selected = self.state.fit == *fit;
             d.chip(
                 part.into(),
-                fit_name(*fit),
+                t().fit_name(*fit),
                 &self.fonts.chip,
                 self.look(hit, selected, true),
             );
             self.item(
                 part.into(),
                 hit,
-                t().labelled(t().fit, fit_name(*fit)),
+                t().labelled(t().fit, t().fit_name(*fit)),
                 Role::Choice,
                 selected,
                 true,
             );
         }
-        let animated = self
-            .state
-            .animation()
-            .is_some_and(|animation| animation.frames().len() > 1);
-        if !animated {
+        let Some(delay) = self.state.frame_delay() else {
             return;
-        }
-        let delay = self.state.animation().map_or(0, |a| a.delay_ms());
+        };
         let slower = R::new(row.x1 - 30.0, row.y0, row.x1, row.y1);
         let faster = R::new(row.x1 - 118.0, row.y0, row.x1 - 88.0, row.y1);
         d.chip(
@@ -332,13 +316,7 @@ impl App {
                     false,
                     enabled,
                 );
-                let estimate = self
-                    .state
-                    .file
-                    .as_ref()
-                    .and_then(|file| file.loaded.as_ref())
-                    .map(|image| t().about(image.estimate));
-                if let Some(estimate) = estimate {
+                if let Some(estimate) = self.state.estimate_text() {
                     d.text(
                         &estimate,
                         &self.fonts.small_r,
@@ -374,26 +352,21 @@ impl App {
 
         let area = R::new(row.x0, row.y0, cancel.x0 - 12.0, row.y1);
         let share = self.state.upload.share();
-        let percent = format!("{:.0} %", share * 100.0);
+        let progress = self.state.progress_text();
         self.text_item(
             area,
             TextItem::Progress,
             t().uploading,
-            Some(percent.clone()),
+            Some(progress.percent.clone()),
         );
-        let left = format!("{}  ·  {percent}", t().uploading);
-        let right = match self.state.upload {
-            Upload::Running { remaining, .. } => t().time_left(remaining),
-            _ => String::new(),
-        };
         d.text(
-            &left,
+            &progress.label,
             &self.fonts.small,
             R::new(area.x0, area.y0, area.x0 + 110.0, area.y0 + 18.0),
             TEXT,
         );
         d.text(
-            &right,
+            &progress.remaining,
             &self.fonts.small_r,
             R::new(area.x0 + 110.0, area.y0, area.x1, area.y0 + 18.0),
             MUTED,

@@ -126,8 +126,7 @@ impl App {
 
     pub fn paint_header(&self, d: &Draw) {
         d.logo(R::new(20.0, 18.0, 62.0, 60.0));
-        let model = self.state.model();
-        let title = model.map_or_else(|| "UNKLUDGE".to_string(), |m| m.name.to_uppercase());
+        let title = self.state.title();
         let title_width = d.text_width(&title, &self.fonts.title);
         d.text(
             &title,
@@ -135,12 +134,8 @@ impl App {
             R::new(78.0, 16.0, 78.0 + title_width + 2.0, 44.0),
             TEXT,
         );
-        let sub = match model {
-            Some(m) => format!("Unkludge  ·  PID {:04X}", m.pid),
-            None => t().tagline.to_string(),
-        };
         d.text(
-            &sub,
+            &self.state.subtitle(),
             &self.fonts.sub,
             R::new(79.0, 42.0, 620.0, 60.0),
             MUTED,

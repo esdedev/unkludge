@@ -1,114 +1,75 @@
-//! What the worker says, and what follows from it in the window. A scripted demo moves along here too.
+//! What the worker says, and what follows from it in the window. See `drive` for what doesn't depend
+//! on the window.
 
 use std::sync::atomic::Ordering;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use windows::Win32::UI::Input::KeyboardAndMouse::VK_TAB;
 use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
 
 use super::App;
 use super::window::{TIMER_MESSAGE, TIMER_PREVIEW, TIMER_SHOT};
-use crate::demo::{Script, Step};
-use crate::state::{Reaction, preview_interval};
-use crate::worker::{self, Cmd, Event};
+use crate::demo::Script;
+use crate::drive::{Drained, MESSAGE_TIME, PROGRESS_PAINT_GAP, Parts};
+use crate::state::preview_interval;
+use crate::worker::Cmd;
 use crate::{log, sys};
-
-/// How long passing news stays at the foot of the window.
-const MESSAGE_TIME_MS: u32 = 6000;
-const PROGRESS_PAINT_GAP: Duration = Duration::from_millis(250);
 
 impl App {
     pub(super) fn drain_events(&mut self) {
         self.woken.store(false, Ordering::SeqCst);
-        let was_uploading = !self.state.upload.is_idle();
-        let message_before = self.state.message.clone();
-        let mut image_changed = false;
-        let mut only_progress = true;
-        while let Some(event) = self
-            .events
-            .as_ref()
-            .and_then(|events| events.try_recv().ok())
-        {
-            only_progress &= matches!(event, Event::Progress { .. });
-            if cfg!(debug_assertions) {
-                print_event(&event);
-            }
-            image_changed |= matches!(
-                event,
-                Event::ImageLoaded(_) | Event::Disconnected | Event::ImageFailed(_)
-            );
-            self.take_event(event);
+        let drained = self.take_events();
+        if drained.save_settings {
+            self.save_settings();
         }
-        if was_uploading && self.state.upload.is_idle() {
+        self.to_open.extend(drained.to_open);
+        if drained.upload_ended {
             self.upload_ended();
         }
         self.refresh_frame();
-        if image_changed {
+        if drained.image_changed {
             self.restart_preview();
         }
-        if self.state.message != message_before
-            && let Some(message) = &self.state.message
-        {
+        if let Some(fades) = drained.message_fades {
             // SAFETY: the handle is this window's own.
             unsafe {
-                if message.fades() {
-                    SetTimer(Some(self.hwnd), TIMER_MESSAGE, MESSAGE_TIME_MS, None);
+                if fades {
+                    SetTimer(
+                        Some(self.hwnd),
+                        TIMER_MESSAGE,
+                        MESSAGE_TIME.as_millis() as u32,
+                        None,
+                    );
                 } else {
                     let _ = KillTimer(Some(self.hwnd), TIMER_MESSAGE);
                 }
             }
         }
         self.maybe_schedule_shot();
-        // A chunk can go every few milliseconds, and the bar needn't show every one.
-        if !only_progress || self.last_paint.elapsed() >= PROGRESS_PAINT_GAP {
+        if !drained.only_progress || self.last_paint.elapsed() >= PROGRESS_PAINT_GAP {
             self.invalidate();
         }
     }
 
-    fn take_event(&mut self, event: Event) {
-        let steps = match &mut self.script {
-            Some(script) => script.on_event(&event),
-            None => Vec::new(),
+    fn take_events(&mut self) -> Drained {
+        let Some(events) = &self.events else {
+            return Drained::default();
         };
-        let reaction = self.state.apply(event, &mut self.settings);
-        self.react(reaction);
-        for step in steps {
-            match step {
-                Step::ChooseFile(path) => {
-                    let cmd = self.state.choose_file(path);
-                    self.send(cmd);
-                }
-                Step::Upload => {
-                    let cmd = self.state.start_upload();
-                    self.send(cmd);
-                }
-                Step::Cancel => {
-                    let cmd = self.state.cancel_upload();
-                    self.send(cmd);
-                }
-                Step::Report => self.send(Some(Cmd::Report)),
-                Step::Pretend(event) => self.take_event(event),
+        let worker = &self.worker;
+        let mut send = |cmd: Cmd| {
+            if let Some(worker) = worker {
+                worker.send(cmd);
             }
+        };
+        Parts {
+            state: &mut self.state,
+            settings: &mut self.settings,
+            session: &self.session,
+            script: &mut self.script,
+            data_dir: sys::data_dir(),
+            send: &mut send,
         }
-    }
-
-    fn react(&mut self, reaction: Reaction) {
-        for cmd in reaction.cmds {
-            self.send(Some(cmd));
-        }
-        if reaction.save_settings {
-            self.save_settings();
-        }
-        if let Some(data) = reaction.report {
-            self.report_ready(&data);
-        }
-    }
-
-    fn report_ready(&mut self, data: &worker::ReportData) {
-        let dir = sys::data_dir();
-        let outcome = self.session.report_ready(data, dir.as_deref());
-        self.state.message = Some(outcome.note);
-        self.to_open.extend(outcome.open);
+        .drain(events)
     }
 
     /// Starts an animation's preview from its first frame.
@@ -175,22 +136,5 @@ impl App {
             log::error(&format!("the picture can't be saved: {error}"));
         }
         self.quit = true;
-    }
-}
-
-/// What the worker says, on the console of a debug build. Frames are many, and progress is constant.
-fn print_event(event: &Event) {
-    match event {
-        Event::ImageLoaded(image) => {
-            eprintln!(
-                "image: {} frames, {} sent, {} chunks each, {:?}",
-                image.animation.frames().len(),
-                image.plan.frame_count(),
-                image.plan.chunks_per_frame,
-                image.estimate
-            );
-        }
-        Event::Progress { .. } => {}
-        other => eprintln!("{other:?}"),
     }
 }

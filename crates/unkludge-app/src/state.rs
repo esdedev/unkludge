@@ -20,6 +20,10 @@ use crate::layout::step_at;
 use crate::settings::Settings;
 use crate::worker::{Cmd, Event, LoadedImage, Problem, ReportData};
 
+mod texts;
+
+pub use texts::{FITS, WellHint, brightness_text};
+
 /// The kind of thing a text says, for its colour.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tone {

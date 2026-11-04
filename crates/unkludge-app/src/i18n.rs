@@ -8,6 +8,7 @@ use std::time::Duration;
 use unkludge_protocol::Error;
 use unkludge_protocol::config::SleepTime;
 use unkludge_protocol::model::Effect;
+use unkludge_protocol::screen::Fit;
 
 use crate::worker::Problem;
 
@@ -559,6 +560,14 @@ impl Tr {
         match sleep {
             SleepTime::NoSleep => self.no_sleep,
             other => other.label(),
+        }
+    }
+
+    pub fn fit_name(&self, fit: Fit) -> &'static str {
+        match fit {
+            Fit::Cover => self.fit_cover,
+            Fit::Contain => self.fit_contain,
+            Fit::Stretch => self.fit_stretch,
         }
     }
 
