@@ -214,7 +214,7 @@ The order to test in, from least to most risky, is in [CONTRIBUTING.md](CONTRIBU
 
 There's no public repository yet, so **there's nowhere to send a report for now**. `unkludge report` prints the details: Unkludge's version, the system, whether RK's app is running, the USB IDs and HID collections of any device of this vendor the system lists, the model, and the config block in hex. No names, accounts or files.
 
-The app has a **Send report** link on experimental and unsupported models. There's no form to send it to yet, so for now the link only saves `unkludge-report.txt` in the data folder, opens that folder and tells you to send the file.
+The app has a **Send report** link on experimental and unsupported models, and on a supported keyboard it finds but can't use. There's no form to send it to yet, so for now the link only saves `unkludge-report.txt` in the data folder, opens that folder and tells you to send the file.
 
 ## Notes
 

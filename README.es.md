@@ -214,7 +214,7 @@ El orden para probar, de menos a más riesgo, está en [CONTRIBUTING.md](CONTRIB
 
 Aún no hay repositorio público, así que **de momento no hay dónde enviar un informe**. `unkludge report` imprime los datos: la versión de Unkludge, el sistema, si el programa de RK está en marcha, los ID USB y las colecciones HID de cualquier dispositivo de este fabricante que liste el sistema, el modelo y el bloque de configuración en hexadecimal. Sin nombres, cuentas ni archivos.
 
-La app tiene un enlace **Enviar informe** en los modelos experimentales y en los no compatibles. Todavía no hay ningún formulario, así que por ahora el enlace solo guarda `unkludge-report.txt` en la carpeta de datos, abre esa carpeta y te dice que envíes el archivo.
+La app tiene un enlace **Enviar informe** en los modelos experimentales y en los no compatibles, y en un teclado compatible que encuentra pero no puede usar. Todavía no hay ningún formulario, así que por ahora el enlace solo guarda `unkludge-report.txt` en la carpeta de datos, abre esa carpeta y te dice que envíes el archivo.
 
 ## Notas
 

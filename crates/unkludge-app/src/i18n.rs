@@ -270,7 +270,7 @@ const EN: Tr = Tr {
     unknown_effect_note: "The keyboard is showing an effect Unkludge doesn't know: choosing one replaces it",
     sleep: "Sleep",
     no_sleep: "No sleep",
-    sleep_caveat: "No sleep: what it does on the keyboard is unconfirmed",
+    sleep_caveat: "No sleep: what it does is unconfirmed",
     first_custom_title: "First custom colour",
     first_custom_warning: "The keyboard can't say what colours it holds, and a custom colour is written together with the colours of every effect. So this first time, any colours you set on other effects with another app go back to Unkludge's defaults. Unkludge remembers them from then on.",
 
@@ -416,7 +416,7 @@ const ES: Tr = Tr {
     unknown_effect_note: "El teclado muestra un efecto que Unkludge no conoce: al elegir uno se sustituye",
     sleep: "Suspensión",
     no_sleep: "Sin suspensión",
-    sleep_caveat: "Sin suspensión: qué hace en el teclado está sin confirmar",
+    sleep_caveat: "Sin suspensión: efecto sin confirmar",
     first_custom_title: "Primer color propio",
     first_custom_warning: "El teclado no puede decir qué colores tiene, y un color propio se escribe junto con los de todos los efectos. Así que esta primera vez, los colores que hayas puesto a otros efectos con otro programa vuelven a los predeterminados de Unkludge. A partir de entonces, Unkludge los recuerda.",
 
