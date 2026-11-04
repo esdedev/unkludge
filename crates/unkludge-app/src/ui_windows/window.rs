@@ -91,6 +91,7 @@ impl App {
             script: None,
             shot_timer_set: false,
             to_open: Vec::new(),
+            draw_problem: log::Repeating::default(),
             shared: Rc::new(RefCell::new(Shared {
                 items: Vec::new(),
                 focus: None,
@@ -339,9 +340,11 @@ impl App {
 
     pub(super) fn paint(&mut self) {
         if let Err(error) = self.ensure_gfx() {
-            log::error(&format!("nothing can be drawn: {error}"));
+            self.draw_problem
+                .error(&format!("nothing can be drawn: {error}"));
             return;
         }
+        self.draw_problem.clear();
         self.update_preview();
         self.render();
         self.announce_changes();

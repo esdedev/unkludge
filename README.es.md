@@ -218,7 +218,7 @@ La app tiene un enlace **Enviar informe** en los modelos experimentales y en los
 
 ## Notas
 
-- Los ajustes y registros (`settings.txt`, `unkludge.log`, `crash.log`, `unkludge-report.txt`) están en `%APPDATA%\Unkludge` en Windows y en `~/.config/unkludge` en Linux, o en `$XDG_CONFIG_HOME/unkludge` si está definido.
+- Los ajustes y registros (`settings.txt`, `unkludge.log`, `crash.log`, `unkludge-report.txt`) están en `%APPDATA%\Unkludge` en Windows y en `~/.config/unkludge` en Linux, o en `$XDG_CONFIG_HOME/unkludge` si está definido. Un registro que llega a 256 KB pasa a ser `unkludge.log.old` o `crash.log.old`, en lugar del anterior.
 - `unkludge-app --tray` arranca escondida en la bandeja. Si la app ya está en marcha, volver a abrirla enseña su ventana.
 - En Linux, el socket con el que se pide esa ventana y el bloqueo del teclado están en `$XDG_RUNTIME_DIR` si está definido y es tuyo, y si no, en la carpeta de datos.
 - Para quitar Unkludge: apaga *Arrancar con el sistema*, sal de la app y borra los programas y la carpeta de datos y, en Linux, la [regla udev](#acceso-en-linux).

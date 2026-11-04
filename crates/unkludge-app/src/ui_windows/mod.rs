@@ -192,6 +192,8 @@ pub struct App {
     shot_timer_set: bool,
     /// What's waiting to be opened, which can take a while, so not while handling a message.
     to_open: Vec<PathBuf>,
+    /// Why nothing can be drawn, which would otherwise be logged on every paint.
+    draw_problem: crate::log::Repeating,
     shared: Rc<RefCell<Shared>>,
     accessible: Option<IAccessible>,
     /// What the last paint told a screen reader about, to tell it only what changes.
