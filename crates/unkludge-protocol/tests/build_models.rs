@@ -62,10 +62,49 @@ id = 1
 label = \"Esc\"
 rect = [25, 34, 52, 64]
 "
-    )
-    .replace("sleep = true", "sleep = true\nled_mask = 3")
-    .replace("{ id = 1,", "{ id = 1, hw = 7,");
+    );
     assert!(parse_model("0265.toml", &text).is_ok());
+}
+
+/// A model of the old protocol, which this version only knows the name of.
+fn unsupported(text: &str) -> String {
+    text.replace("fw = 1", "fw = 0").replace("\"v2\"", "\"v1\"")
+}
+
+#[test]
+fn a_supported_model_that_hides_effects_is_rejected() {
+    let text = GOOD.replace("sleep = true", "sleep = true\nled_mask = 3");
+    let e = parse_err("0265.toml", &text);
+    assert!(e.contains("0265.toml") && e.contains("led_mask"), "{e}");
+}
+
+#[test]
+fn a_supported_model_with_effect_numbers_of_its_own_is_rejected() {
+    let text = GOOD.replace("{ id = 1,", "{ id = 1, hw = 7,");
+    let e = parse_err("0265.toml", &text);
+    assert!(e.contains("0265.toml") && e.contains("hw = 7"), "{e}");
+}
+
+#[test]
+fn zero_in_those_fields_changes_nothing() {
+    let text = GOOD
+        .replace("sleep = true", "sleep = true\nled_mask = 0")
+        .replace("{ id = 1,", "{ id = 1, hw = 0,");
+    assert!(parse_model("0265.toml", &text).is_ok());
+}
+
+#[test]
+fn a_model_this_version_doesnt_support_can_have_them() {
+    let masked = unsupported(&GOOD.replace("sleep = true", "sleep = true\nled_mask = 3"));
+    assert!(parse_model("0265.toml", &masked).is_ok());
+    let renumbered = unsupported(&GOOD.replace("{ id = 1,", "{ id = 1, hw = 7,"));
+    assert!(parse_model("0265.toml", &renumbered).is_ok());
+    // Nor does one with no screen, on the right protocol.
+    let screen_at = GOOD.find("[screen]").unwrap();
+    let lighting_at = GOOD.find("[lighting]").unwrap();
+    let no_screen = format!("{}{}", &GOOD[..screen_at], &GOOD[lighting_at..])
+        .replace("sleep = true", "sleep = true\nled_mask = 3");
+    assert!(parse_model("0265.toml", &no_screen).is_ok());
 }
 
 #[test]

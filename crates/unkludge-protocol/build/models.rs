@@ -1,8 +1,10 @@
 //! Parses one `data/models/<PID>.toml` and renders the table as Rust source. Used by `build.rs`
 //! and by `tests/build_models.rs`.
 //!
-//! Fields not named here (key positions, wireless IDs, hardware effect numbers) are ignored:
-//! this version doesn't use them, and compiling them in would only grow the binary.
+//! Fields not named here (key positions, wireless IDs) are ignored: this version doesn't use them,
+//! and compiling them in would only grow the binary. Two are read only to be refused on a model this
+//! version supports, as ignoring them would give it wrong effect numbers: `hw`, an effect number other
+//! than the effect's own, and `led_mask`, which hides effects and so changes which are offered.
 
 use std::collections::BTreeMap;
 use std::fmt::Write;
@@ -49,6 +51,9 @@ struct RawEffect {
     speed: bool,
     brightness: bool,
     rainbow: bool,
+    /// Absent means 0, which means the effect's number is its `id`.
+    #[serde(default)]
+    hw: u32,
 }
 
 #[derive(Deserialize)]
@@ -58,6 +63,8 @@ struct RawLighting {
     speed: Option<RawSpeed>,
     sleep: bool,
     effects: Vec<RawEffect>,
+    #[serde(default)]
+    led_mask: u32,
 }
 
 /// One model, checked on its own. [`render`] checks the models against each other.
@@ -111,7 +118,28 @@ pub fn parse_model(file: &str, text: &str) -> Result<RawModel, String> {
         parse_layout(layout).map_err(|e| format!("{file}: {e}"))?;
     }
 
+    if model.fw == 1 && model.screen.is_some() {
+        check_supported_lighting(&model.lighting).map_err(|e| format!("{file}: {e}"))?;
+    }
+
     Ok(model)
+}
+
+/// What a model this version supports can't have, as its effect numbers would come out wrong.
+fn check_supported_lighting(lighting: &RawLighting) -> Result<(), String> {
+    if lighting.led_mask != 0 {
+        return Err(format!(
+            "led_mask {:#06X} hides effects, which this version doesn't do",
+            lighting.led_mask
+        ));
+    }
+    if let Some(effect) = lighting.effects.iter().find(|effect| effect.hw != 0) {
+        return Err(format!(
+            "effect {} has hw = {}, so its number isn't its id, which this version doesn't do",
+            effect.id, effect.hw
+        ));
+    }
+    Ok(())
 }
 
 fn parse_layout(layout: &str) -> Result<u16, String> {
