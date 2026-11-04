@@ -52,3 +52,11 @@ jobs:
         run: cargo test --workspace --locked
       - name: Build
         run: cargo build --release --workspace --locked
+      - name: No simulated keyboard in the release programs
+        shell: bash
+        run: |
+          tree="$(cargo tree -p unkludge-cli -p unkludge-app -e normal,features --locked)"
+          if grep -F fake <<<"$tree"; then
+            echo "The release programs have the protocol crate's fake feature, which can't open a keyboard"
+            exit 1
+          fi
