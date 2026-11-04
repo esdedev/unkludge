@@ -23,7 +23,7 @@ struct Globals {
 
 /// The length in bytes of the feature report with this ID, counting the ID. `None` if the
 /// descriptor has no such report or is malformed.
-pub(super) fn feature_report_len(descriptor: &[u8], report_id: u8) -> Option<usize> {
+pub(crate) fn feature_report_len(descriptor: &[u8], report_id: u8) -> Option<usize> {
     let mut globals = Globals::default();
     let mut pushed = Vec::new();
     let mut bits = 0u64;

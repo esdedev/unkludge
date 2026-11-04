@@ -16,6 +16,13 @@ pub enum Error {
     NoUsableCollection(u16),
     #[error("USB error: {0}")]
     Hid(String),
+    /// How long this keyboard's reports are can't be found out, which could cut one short.
+    #[error(
+        "{} is connected, but the system won't say how long its reports are, so nothing is sent to \
+         it: {detail}",
+        keyboard_name(*.pid)
+    )]
+    ReportLengthUnknown { pid: u16, detail: String },
     /// The system says this keyboard is on another bus than USB. Nothing is sent to it.
     #[error(
         "{} isn't connected by USB, and Unkludge only works by USB cable. Connect it by cable",
@@ -91,6 +98,15 @@ mod tests {
             Error::NotOnUsb(0x0265).to_string(),
             "RK S85 ES (0265) isn't connected by USB, and Unkludge only works by USB cable. Connect \
              it by cable"
+        );
+        assert_eq!(
+            Error::ReportLengthUnknown {
+                pid: 0x0265,
+                detail: "no answer".to_string()
+            }
+            .to_string(),
+            "RK S85 ES (0265) is connected, but the system won't say how long its reports are, so \
+             nothing is sent to it: no answer"
         );
         let busy = Error::DeviceBusy.to_string();
         assert!(busy.contains("quit it first"), "{busy}");

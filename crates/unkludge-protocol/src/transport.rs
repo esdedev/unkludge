@@ -5,9 +5,12 @@ use std::ffi::CStr;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use hidapi::{HidApi, HidDevice, HidError, MAX_REPORT_DESCRIPTOR_SIZE};
+#[cfg(not(windows))]
+use hidapi::MAX_REPORT_DESCRIPTOR_SIZE;
+use hidapi::{HidApi, HidDevice, HidError};
 
 use crate::Error;
+use crate::device::descriptor;
 #[cfg(target_os = "linux")]
 use crate::device::node_lock::NodeLock;
 
@@ -39,8 +42,17 @@ pub trait Transport {
         Instant::now()
     }
 
-    /// The collection's HID report descriptor. Only needed for checking a possible second
-    /// collection, so transports that are never paired can leave this as it is.
+    /// How long a feature report with this ID is, counting the ID, for checking a collection before
+    /// sending it anything. `None` if there's no such report, as far as the system says.
+    fn feature_report_len(&self, report_id: u8) -> Result<Option<usize>, Error> {
+        Ok(descriptor::feature_report_len(
+            &self.report_descriptor()?,
+            report_id,
+        ))
+    }
+
+    /// The collection's HID report descriptor, which [`Transport::feature_report_len`] reads unless it
+    /// has a better way.
     fn report_descriptor(&self) -> Result<Vec<u8>, Error> {
         Err(Error::Hid("no report descriptor".to_string()))
     }
@@ -50,6 +62,9 @@ pub trait Transport {
 /// itself.
 pub struct HidTransport {
     device: HidDevice,
+    /// For asking the system about the collection, which goes by this.
+    #[cfg(windows)]
+    path: std::ffi::CString,
     /// Before anything else, and let go of after the device closes, as fields go in this order.
     #[cfg(target_os = "linux")]
     _node_lock: NodeLock,
@@ -62,9 +77,62 @@ impl HidTransport {
         let device = api.open_path(path).map_err(hid_error)?;
         Ok(HidTransport {
             device,
+            #[cfg(windows)]
+            path: path.to_owned(),
             #[cfg(target_os = "linux")]
             _node_lock,
         })
+    }
+}
+
+/// The feature report length the system has for this collection, counting the report ID. This only
+/// asks about the collection: it's opened with no access to read or write, so nothing can reach it.
+#[cfg(windows)]
+fn feature_report_byte_length(path: &CStr) -> Result<usize, Error> {
+    use std::ptr::{null, null_mut};
+    use windows_sys::Win32::Devices::HumanInterfaceDevice::{
+        HIDP_CAPS, HIDP_STATUS_SUCCESS, HidD_FreePreparsedData, HidD_GetPreparsedData, HidP_GetCaps,
+    };
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+
+    let last_error =
+        |what: &str| Error::Hid(format!("{what}: {}", std::io::Error::last_os_error()));
+    let wide: Vec<u16> = path.to_string_lossy().encode_utf16().chain([0]).collect();
+    // SAFETY: the path is NUL-terminated and outlives the call, null means no security attributes and
+    // no template, and each thing got here is checked before use and given back once. The structure
+    // is plain numbers, valid when zeroed, and is written by the call.
+    unsafe {
+        let handle = CreateFileW(
+            wide.as_ptr(),
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            null(),
+            OPEN_EXISTING,
+            0,
+            null_mut(),
+        );
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(last_error("can't look at the collection"));
+        }
+        let mut preparsed = 0;
+        let got = HidD_GetPreparsedData(handle, &mut preparsed);
+        let error = last_error("can't get the collection's details");
+        CloseHandle(handle);
+        if !got {
+            return Err(error);
+        }
+        let mut caps: HIDP_CAPS = std::mem::zeroed();
+        let status = HidP_GetCaps(preparsed, &mut caps);
+        HidD_FreePreparsedData(preparsed);
+        if status != HIDP_STATUS_SUCCESS {
+            return Err(Error::Hid(format!(
+                "can't read the collection's details: status {status:#x}"
+            )));
+        }
+        Ok(usize::from(caps.FeatureReportByteLength))
     }
 }
 
@@ -87,6 +155,16 @@ impl Transport for HidTransport {
         self.device.read_timeout(buf, ms).map_err(hid_error)
     }
 
+    /// On Windows this is the collection's own number, which is what the official app goes by and what
+    /// hidapi cuts reports to. A descriptor there is only hidapi's reconstruction of one, which can
+    /// differ from it by the padding at the end of a report. The number is for the longest feature
+    /// report in the collection, whichever its ID, as that's all the system gives.
+    #[cfg(windows)]
+    fn feature_report_len(&self, _report_id: u8) -> Result<Option<usize>, Error> {
+        feature_report_byte_length(&self.path).map(Some)
+    }
+
+    #[cfg(not(windows))]
     fn report_descriptor(&self) -> Result<Vec<u8>, Error> {
         let mut descriptor = vec![0; MAX_REPORT_DESCRIPTOR_SIZE];
         let len = self
@@ -118,5 +196,20 @@ mod tests {
         );
         drop(lock);
         std::fs::remove_file(&node).unwrap();
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use std::ffi::CString;
+
+    #[test]
+    fn a_collection_that_isnt_there_says_so() {
+        let path = CString::new(r"\\?\hid#vid_0000&pid_0000#nothing#{4d1e55b2}").unwrap();
+        let Err(Error::Hid(message)) = feature_report_byte_length(&path) else {
+            panic!("should have failed");
+        };
+        assert!(message.contains("can't look at"), "{message}");
     }
 }

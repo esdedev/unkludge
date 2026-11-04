@@ -14,7 +14,7 @@ use crate::packet::cmd::{Cmd, ReadCmd};
 use crate::packet::{self, Ack, AckExpect, HEADER_LEN, REPORT_ID, REPORT_LEN, Report};
 use crate::transport::{HidTransport, Transport};
 
-mod descriptor;
+pub(crate) mod descriptor;
 #[cfg(target_os = "linux")]
 pub(crate) mod node_lock;
 mod open;

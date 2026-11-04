@@ -12,7 +12,6 @@ use std::path::Path;
 
 use hidapi::{BusType, HidApi};
 
-use super::descriptor::feature_report_len;
 use super::{Device, fetch_block, request_block};
 use crate::Error;
 use crate::model::{self, Model, VID};
@@ -243,26 +242,23 @@ fn read_identity<T: Transport>(transport: &T) -> Result<Vec<u8>, Error> {
 /// cut short without any error on Windows, so this is checked before sending it anything.
 fn takes_full_reports<T: Transport>(candidate: &T) -> bool {
     candidate
-        .report_descriptor()
-        .is_ok_and(|descriptor| feature_report_len(&descriptor, REPORT_ID) == Some(REPORT_LEN))
+        .feature_report_len(REPORT_ID)
+        .is_ok_and(|length| length == Some(REPORT_LEN))
 }
 
 /// Refuses a keyboard's main collection if its feature reports aren't the full length. That covers
-/// a descriptor with no report 9 or that makes no sense, and one that can't be read at all. A report
-/// of unknown length is the same risk as one known to be wrong: on Windows a config write could be
-/// cut short and still say it worked. And what's lost is small, as a system that can't give the
-/// descriptor of a device it just opened is rare. So nothing goes out, and the message says which
-/// of the two it was.
+/// no report 9 or a descriptor that makes no sense, and a length that can't be found out at all. A
+/// report of unknown length is the same risk as one known to be wrong: on Windows a config write could
+/// be cut short and still say it worked. And what's lost is small, as a system that can't say that of
+/// a device it just opened is rare. So nothing goes out, and the message says which of the two it was.
 fn check_main<T: Transport>(main: &T, pid: u16) -> Result<(), Error> {
-    if let Err(error) = main.report_descriptor() {
-        return Err(Error::Hid(format!(
-            "can't read the keyboard's report descriptor, so its report length is unknown: {error}"
-        )));
-    }
-    if takes_full_reports(main) {
-        Ok(())
-    } else {
-        Err(Error::NoUsableCollection(pid))
+    match main.feature_report_len(REPORT_ID) {
+        Ok(Some(REPORT_LEN)) => Ok(()),
+        Ok(_) => Err(Error::NoUsableCollection(pid)),
+        Err(error) => Err(Error::ReportLengthUnknown {
+            pid,
+            detail: error.to_string(),
+        }),
     }
 }
 
@@ -1094,10 +1090,13 @@ mod tests {
     fn a_main_collection_whose_descriptor_cant_be_read_is_refused_and_says_so() {
         let main = FakeTransport::new();
         assert!(main.report_descriptor().is_err());
-        let Err(Error::Hid(message)) = assemble(main.clone(), no_candidates(), s85()) else {
+        let Err(Error::ReportLengthUnknown { pid, detail }) =
+            assemble(main.clone(), no_candidates(), s85())
+        else {
             panic!("should have been refused");
         };
-        assert!(message.contains("report descriptor"), "{message}");
+        assert_eq!(pid, S85_ES);
+        assert!(detail.contains("no report descriptor"), "{detail}");
         assert!(main.sent().is_empty());
     }
 

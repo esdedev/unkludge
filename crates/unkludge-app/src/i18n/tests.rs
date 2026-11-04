@@ -41,6 +41,14 @@ fn errors_read_in_english_with_each_detail_in_its_place() {
         ),
         (Error::Hid("gone".to_string()), "USB error: gone"),
         (
+            Error::ReportLengthUnknown {
+                pid: 0x0265,
+                detail: "no answer".to_string(),
+            },
+            "RK S85 ES (0265) is connected, but the system won't say how long its reports are, so \
+             nothing is sent to it: no answer",
+        ),
+        (
             Error::NotOnUsb(0x0265),
             "RK S85 ES (0265) isn't connected by USB, and Unkludge only works by USB cable. \
              Connect it by cable",
@@ -105,6 +113,14 @@ fn errors_read_in_spanish_with_each_detail_in_its_place() {
             "RK S85 ES (0265) está conectado, pero no con las colecciones HID que Unkludge puede usar",
         ),
         (Error::Hid("gone".to_string()), "Error de USB: gone"),
+        (
+            Error::ReportLengthUnknown {
+                pid: 0x0265,
+                detail: "no answer".to_string(),
+            },
+            "RK S85 ES (0265) está conectado, pero el sistema no dice cuánto miden sus paquetes, \
+             así que no se le envía nada: no answer",
+        ),
         (
             Error::NotOnUsb(0x0265),
             "RK S85 ES (0265) no está conectado por USB, y Unkludge solo funciona por cable USB. \
