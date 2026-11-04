@@ -80,8 +80,8 @@ Release sizes, as measured with the profile in `Cargo.toml`:
 
 | Program | Windows x64 | Linux x86-64 |
 |---|---|---|
-| `unkludge-app` | 1,046,016 bytes | 11,790,944 bytes |
-| `unkludge` | 994,816 bytes | 1,319,608 bytes |
+| `unkludge-app` | 1,067,008 bytes | 11,804,640 bytes |
+| `unkludge` | 1,029,120 bytes | 1,330,968 bytes |
 
 Most of the Linux app's size comes from Slint, its interface toolkit.
 
