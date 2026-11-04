@@ -42,6 +42,25 @@ struct HidEntry {
 }
 
 impl HidEntry {
+    /// Out of what the system lists. A device's listing can't be made up, but this can be tested.
+    fn new(
+        (vid, pid): (u16, u16),
+        (usage_page, usage): (u16, u16),
+        interface: i32,
+        path: CString,
+        bus: BusType,
+    ) -> HidEntry {
+        HidEntry {
+            vid,
+            pid,
+            usage_page,
+            usage,
+            interface,
+            path,
+            not_usb: is_not_usb(bus),
+        }
+    }
+
     fn usages(&self) -> (u16, u16) {
         (self.usage_page, self.usage)
     }
@@ -87,14 +106,14 @@ pub fn list_collections() -> Result<Vec<HidCollection>, Error> {
 fn entries(api: &HidApi) -> Vec<HidEntry> {
     api.device_list()
         .filter(|info| info.vendor_id() == VID)
-        .map(|info| HidEntry {
-            vid: info.vendor_id(),
-            pid: info.product_id(),
-            usage_page: info.usage_page(),
-            usage: info.usage(),
-            interface: info.interface_number(),
-            path: info.path().to_owned(),
-            not_usb: is_not_usb(info.bus_type()),
+        .map(|info| {
+            HidEntry::new(
+                (info.vendor_id(), info.product_id()),
+                (info.usage_page(), info.usage()),
+                info.interface_number(),
+                info.path().to_owned(),
+                info.bus_type(),
+            )
         })
         .collect()
 }
@@ -647,6 +666,23 @@ mod tests {
             select_linux(&list, None).err(),
             Some(Error::NotOnUsb(S85_ES))
         );
+    }
+
+    #[test]
+    fn what_the_system_lists_says_which_bus_it_is_on() {
+        let listed = |bus| {
+            let path = CString::new(windows_path(S85_ES, 1, 3)).unwrap();
+            HidEntry::new((VID, S85_ES), (0xFF02, 2), 1, path, bus)
+        };
+        let list = [listed(BusType::Bluetooth)];
+        assert_eq!(
+            select_windows(&list, None).err(),
+            Some(Error::NotOnUsb(S85_ES))
+        );
+        for bus in [BusType::Usb, BusType::Unknown] {
+            let list = [listed(bus)];
+            assert_eq!(select_windows(&list, None).unwrap().main, 0);
+        }
     }
 
     #[test]

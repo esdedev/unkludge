@@ -941,6 +941,41 @@ mod tests {
     }
 
     #[test]
+    fn what_a_device_keeps_goes_after_its_transports() {
+        struct Goes(&'static str, Arc<Mutex<Vec<&'static str>>>);
+
+        impl Drop for Goes {
+            fn drop(&mut self) {
+                self.1.lock().unwrap().push(self.0);
+            }
+        }
+
+        struct Quiet(#[allow(dead_code)] Goes);
+
+        impl Transport for Quiet {
+            fn send_feature(&self, _report: &[u8]) -> Result<(), Error> {
+                Ok(())
+            }
+
+            fn get_feature(&self, _buf: &mut [u8]) -> Result<usize, Error> {
+                Ok(0)
+            }
+
+            fn read_timeout(&self, _buf: &mut [u8], _ms: i32) -> Result<usize, Error> {
+                Ok(0)
+            }
+        }
+
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let main = Quiet(Goes("main", Arc::clone(&order)));
+        let screen = Quiet(Goes("screen", Arc::clone(&order)));
+        let mut device = Device::new(main, Some(screen), n99()).unwrap();
+        device.keep_until_closed(Box::new(Goes("kept", Arc::clone(&order))));
+        drop(device);
+        assert_eq!(*order.lock().unwrap(), ["main", "screen", "kept"]);
+    }
+
+    #[test]
     fn a_device_can_move_to_a_worker_thread() {
         fn assert_send<T: Send>() {}
         assert_send::<Device<FakeTransport>>();

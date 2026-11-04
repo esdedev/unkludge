@@ -323,9 +323,44 @@ mod tests {
         assert_eq!(take_from_elsewhere(&place), Ok(()));
     }
 
+    /// A handle of its own on the mutex, so that it goes on existing when its holder dies. That's what
+    /// makes it abandoned: with no handles left there would be no mutex at all, and a new one is free.
+    struct KeepsItExisting(windows_sys::Win32::Foundation::HANDLE);
+
+    impl KeepsItExisting {
+        fn new(place: &Place) -> KeepsItExisting {
+            use std::os::windows::ffi::OsStrExt;
+            let name: Vec<u16> = std::ffi::OsStr::new(&place.describe())
+                .encode_wide()
+                .chain([0])
+                .collect();
+            // SAFETY: the name is NUL-terminated, null attributes mean the default ones, and this
+            // doesn't ask to hold it.
+            let handle = unsafe {
+                windows_sys::Win32::System::Threading::CreateMutexW(
+                    std::ptr::null(),
+                    0,
+                    name.as_ptr(),
+                )
+            };
+            assert!(!handle.is_null());
+            KeepsItExisting(handle)
+        }
+    }
+
+    impl Drop for KeepsItExisting {
+        fn drop(&mut self) {
+            // SAFETY: the handle is this one's own.
+            unsafe {
+                windows_sys::Win32::Foundation::CloseHandle(self.0);
+            }
+        }
+    }
+
     #[test]
     fn a_process_that_dies_holding_the_lock_doesnt_keep_it() {
         let place = Place::scratch("killed");
+        let _keeps_it_existing = KeepsItExisting::new(&place);
         let mut helper = Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
