@@ -152,6 +152,8 @@ unkludge [--pid <HEX>] [--dry-run] [--timing] [--verbose] <COMANDO>
 | `unkludge screen <ARCHIVO>` | Envía un archivo GIF, PNG, JPEG, BMP o WebP | **Escribe** |
 | `unkludge report` | Imprime los datos que hacen falta para avisar de un problema | Lee |
 
+Un comando que abre un teclado se niega mientras la app esté conectada a él, así que cierra antes la app: ver [Un solo programa de Unkludge a la vez](#antes-de-abrir-la-app).
+
 Opciones de `light`:
 
 | Opción | Valores |

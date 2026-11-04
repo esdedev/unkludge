@@ -152,6 +152,8 @@ unkludge [--pid <HEX>] [--dry-run] [--timing] [--verbose] <COMMAND>
 | `unkludge screen <FILE>` | Sends a GIF, PNG, JPEG, BMP or WebP file | **Writes** |
 | `unkludge report` | Prints the details a bug report needs | Reads |
 
+A command that opens a keyboard refuses while the app is connected to it, so quit the app first: see [One Unkludge program at a time](#before-you-open-the-app).
+
 `light` options:
 
 | Option | Values |
