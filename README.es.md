@@ -41,7 +41,7 @@ El programa de RK solo funciona en Windows. Unkludge quiere cubrir toda la famil
 
 ## Modelos compatibles
 
-Solo por cable USB. Estos son los 29 modelos que Unkludge abre. La lista por ID de producto, generada a partir de la tabla de modelos, está en [docs/MODELS.md](docs/MODELS.md).
+Solo por cable USB: un teclado que el sistema dice que está conectado de otra forma se rechaza. Estos son los 29 modelos que Unkludge abre. La lista por ID de producto, generada a partir de la tabla de modelos, está en [docs/MODELS.md](docs/MODELS.md).
 
 | Teclado | ID de producto (fabricante `258A`) | Pantalla | Fotogramas máx. | Estado |
 |---|---|---|---|---|

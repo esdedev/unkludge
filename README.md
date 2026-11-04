@@ -41,7 +41,7 @@ RK's software only runs on Windows. Unkludge is meant to cover the whole family 
 
 ## Supported models
 
-Wired USB only. These are the 29 models Unkludge opens. The list by product ID, generated from the model table, is in [docs/MODELS.md](docs/MODELS.md).
+Wired USB only: a keyboard the system says is connected some other way is refused. These are the 29 models Unkludge opens. The list by product ID, generated from the model table, is in [docs/MODELS.md](docs/MODELS.md).
 
 | Keyboard | Product IDs (vendor `258A`) | Screen | Max frames | Status |
 |---|---|---|---|---|

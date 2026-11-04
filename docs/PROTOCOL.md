@@ -27,7 +27,7 @@ What "observed" means here:
 
 ## Transport
 
-- USB HID, vendor ID `258A`, wired only.
+- USB HID, vendor ID `258A`, wired only. The official app refuses screen uploads over wireless. Unkludge refuses a keyboard the system says is on another bus, Bluetooth for one, for reads too. Where the system doesn't say, it goes by the product IDs, which are the wired ones.
 - Which collection: usage page `0xFF02`, usage 2. `kind = 2` models also have a second collection, usage page `0xFF03`, usage 2.
 - On Linux, when the system doesn't list usages, Unkludge takes interface 1, the one that holds this collection on the S85.
 - Everything sent is a **feature report of 520 bytes** including the report ID, which is always `0x09`. Whatever a report doesn't use is zero. The official app only opens a collection whose feature reports have that length, and Unkludge checks the same, in the collection's report descriptor, before sending anything: a shorter report could be cut off with no error on Windows. A length it can't find out counts as a wrong one.

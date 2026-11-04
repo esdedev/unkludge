@@ -35,6 +35,11 @@ fn errors_read_in_english_with_each_detail_in_its_place() {
         ),
         (Error::Hid("gone".to_string()), "USB error: gone"),
         (
+            Error::NotOnUsb(0x0265),
+            "RK S85 ES (0265) isn't connected by USB, and Unkludge only works by USB cable. \
+             Connect it by cable",
+        ),
+        (
             Error::DeviceBusy,
             "Another Unkludge program is using the keyboard",
         ),
@@ -94,6 +99,11 @@ fn errors_read_in_spanish_with_each_detail_in_its_place() {
             "RK S85 ES (0265) está conectado, pero no con las colecciones HID que Unkludge puede usar",
         ),
         (Error::Hid("gone".to_string()), "Error de USB: gone"),
+        (
+            Error::NotOnUsb(0x0265),
+            "RK S85 ES (0265) no está conectado por USB, y Unkludge solo funciona por cable USB. \
+             Conéctalo por cable",
+        ),
         (
             Error::DeviceBusy,
             "Otro programa de Unkludge está usando el teclado",

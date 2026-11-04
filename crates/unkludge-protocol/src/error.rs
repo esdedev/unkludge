@@ -16,6 +16,12 @@ pub enum Error {
     NoUsableCollection(u16),
     #[error("USB error: {0}")]
     Hid(String),
+    /// The system says this keyboard is on another bus than USB. Nothing is sent to it.
+    #[error(
+        "{} isn't connected by USB, and Unkludge only works by USB cable. Connect it by cable",
+        keyboard_name(*.0)
+    )]
+    NotOnUsb(u16),
     /// Another Unkludge program has the keyboard. See `unkludge_shared::device_lock`.
     #[error(
         "another Unkludge program is using the keyboard. If the Unkludge app is running, quit it first \
@@ -80,6 +86,11 @@ mod tests {
             Error::NoUsableCollection(0xFFFE)
                 .to_string()
                 .starts_with("Keyboard FFFE is connected")
+        );
+        assert_eq!(
+            Error::NotOnUsb(0x0265).to_string(),
+            "RK S85 ES (0265) isn't connected by USB, and Unkludge only works by USB cable. Connect \
+             it by cable"
         );
         let busy = Error::DeviceBusy.to_string();
         assert!(busy.contains("quit it first"), "{busy}");

@@ -172,6 +172,7 @@ pub struct Tr {
     /// After [`Self::err_no_usable_collection`], in the window.
     no_collection_more: &'static str,
     err_usb: &'static str,
+    err_not_on_usb: &'static str,
     err_device_busy: &'static str,
     err_lock_failed: &'static str,
     err_start_no_ack: &'static str,
@@ -317,6 +318,7 @@ const EN: Tr = Tr {
     err_no_usable_collection: "{name} is connected, but not with the HID collections Unkludge can use",
     no_collection_more: "Send a report so it can be looked at",
     err_usb: "USB error: {detail}",
+    err_not_on_usb: "{name} isn't connected by USB, and Unkludge only works by USB cable. Connect it by cable",
     err_device_busy: "Another Unkludge program is using the keyboard",
     err_lock_failed: "The lock that keeps Unkludge programs off the keyboard at the same time failed: {detail}",
     err_start_no_ack: "The keyboard didn't acknowledge the start of the upload",
@@ -462,6 +464,7 @@ const ES: Tr = Tr {
     err_no_usable_collection: "{name} está conectado, pero no con las colecciones HID que Unkludge puede usar",
     no_collection_more: "Envía un informe para que se pueda estudiar",
     err_usb: "Error de USB: {detail}",
+    err_not_on_usb: "{name} no está conectado por USB, y Unkludge solo funciona por cable USB. Conéctalo por cable",
     err_device_busy: "Otro programa de Unkludge está usando el teclado",
     err_lock_failed: "Ha fallado el bloqueo que evita que dos programas de Unkludge usen el teclado a la vez: {detail}",
     err_start_no_ack: "El teclado no confirmó el inicio de la subida",
@@ -503,6 +506,7 @@ impl Tr {
                 .err_no_usable_collection
                 .replace("{name}", &keyboard_name(*pid)),
             Error::Hid(detail) => self.err_usb.replace("{detail}", detail),
+            Error::NotOnUsb(pid) => self.err_not_on_usb.replace("{name}", &keyboard_name(*pid)),
             Error::DeviceBusy => self.err_device_busy.to_string(),
             Error::LockFailed(detail) => self.err_lock_failed.replace("{detail}", detail),
             Error::StartNoAck => self.err_start_no_ack.to_string(),

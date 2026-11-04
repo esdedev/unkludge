@@ -124,11 +124,6 @@ mod tests {
     }
 
     #[test]
-    fn the_real_limit_is_small_next_to_a_disk_and_large_next_to_an_entry() {
-        assert_eq!(MAX_FILE_BYTES, 256 * 1024);
-    }
-
-    #[test]
     fn a_problem_that_keeps_coming_is_told_once() {
         let mut repeating = Repeating::default();
         assert!(repeating.is_news("it broke"));

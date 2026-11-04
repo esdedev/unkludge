@@ -10,7 +10,7 @@ use std::ffi::{CStr, CString};
 #[cfg(target_os = "linux")]
 use std::path::Path;
 
-use hidapi::HidApi;
+use hidapi::{BusType, HidApi};
 
 use super::descriptor::feature_report_len;
 use super::{Device, fetch_block, request_block};
@@ -38,6 +38,8 @@ struct HidEntry {
     usage: u16,
     interface: i32,
     path: CString,
+    /// The system says it's on another bus than USB. When it doesn't know, this is false.
+    not_usb: bool,
 }
 
 impl HidEntry {
@@ -93,14 +95,27 @@ fn entries(api: &HidApi) -> Vec<HidEntry> {
             usage: info.usage(),
             interface: info.interface_number(),
             path: info.path().to_owned(),
+            not_usb: is_not_usb(info.bus_type()),
         })
         .collect()
+}
+
+/// Whether the system says for sure that it isn't USB. It doesn't always know.
+fn is_not_usb(bus: BusType) -> bool {
+    match bus {
+        BusType::Usb | BusType::Unknown => false,
+        BusType::Bluetooth | BusType::I2c | BusType::Spi => true,
+    }
 }
 
 /// Picks the keyboard to open from the system's list, or the one with product ID `pid` if given.
 /// `usage_fallback` allows an entry without usages on the right interface. Only for Linux: on
 /// Windows those zeros can also mean that reading a collection's capabilities failed, and then it
 /// could be any collection. `device_of` says which device a collection is on: see [`device_of`].
+///
+/// A keyboard the system says isn't on USB is refused, for reading too: the official app won't upload
+/// over wireless, and nothing here has been looked at for it. Where the system doesn't know, it's
+/// taken as it comes.
 fn select(
     entries: &[HidEntry],
     pid: Option<u16>,
@@ -118,17 +133,25 @@ fn select(
             && pid.is_none_or(|pid| pid == e.pid)
             && model::find(e.pid).is_some_and(Model::is_supported)
     };
-    let position_of =
-        |wanted: fn(&HidEntry) -> bool| entries.iter().position(|e| keyboard(e) && wanted(e));
+    let position_of = |wanted: fn(&HidEntry) -> bool| {
+        entries
+            .iter()
+            .position(|e| keyboard(e) && !e.not_usb && wanted(e))
+    };
     let main = position_of(|e| e.usages() == MAIN_USAGE)
         .or_else(|| {
             position_of(|e| e.usages() == (0, 0) && e.interface == FALLBACK_INTERFACE)
                 .filter(|_| usage_fallback)
         })
-        .ok_or_else(|| match entries.iter().find(|e| keyboard(e)) {
-            // It's there, so asking to connect it would only send someone looking for a cable.
-            Some(entry) => Error::NoUsableCollection(entry.pid),
-            None => Error::NotFound,
+        .ok_or_else(|| {
+            let mut present = entries.iter().filter(|e| keyboard(e));
+            let on_usb = present.clone().find(|e| !e.not_usb);
+            match (on_usb, present.next()) {
+                // It's there, so asking to connect it would only send someone looking for a cable.
+                (Some(entry), _) => Error::NoUsableCollection(entry.pid),
+                (None, Some(entry)) => Error::NotOnUsb(entry.pid),
+                (None, None) => Error::NotFound,
+            }
         })?;
 
     let model = model::find(entries[main].pid).ok_or(Error::NotFound)?;
@@ -163,6 +186,7 @@ fn screen_candidates(
         .filter(|&i| {
             let entry = &entries[i];
             entry.vid == VID
+                && !entry.not_usb
                 && entry.usages() == SCREEN_USAGE
                 && entry.path != main.path
                 && device_of(&entry.path).as_ref() == Some(&device)
@@ -336,7 +360,13 @@ mod tests {
             usage,
             interface,
             path: CString::new(path).unwrap(),
+            not_usb: false,
         }
+    }
+
+    fn off_usb(mut entry: HidEntry) -> HidEntry {
+        entry.not_usb = true;
+        entry
     }
 
     fn windows_path(pid: u16, mi: u8, col: u8) -> String {
@@ -565,6 +595,72 @@ mod tests {
         list.extend(windows_list(S85_ES));
         assert_eq!(picked(&list, None).pid, 0x01FA);
         assert_eq!(picked(&list, Some(S85_ES)).pid, S85_ES);
+    }
+
+    #[test]
+    fn a_keyboard_on_another_bus_is_refused_and_says_so() {
+        let list: Vec<HidEntry> = windows_list(S85_ES).into_iter().map(off_usb).collect();
+        assert_eq!(
+            select_windows(&list, None).err(),
+            Some(Error::NotOnUsb(S85_ES))
+        );
+        assert_eq!(
+            select_windows(&list, Some(S85_ES)).err(),
+            Some(Error::NotOnUsb(S85_ES))
+        );
+        // Without usages it would have been the fallback, on Linux.
+        let list: Vec<HidEntry> = linux_list(S85_ES).into_iter().map(off_usb).collect();
+        assert_eq!(
+            select_linux(&list, None).err(),
+            Some(Error::NotOnUsb(S85_ES))
+        );
+    }
+
+    #[test]
+    fn a_bus_the_system_doesnt_know_is_taken_as_it_comes() {
+        assert!(!is_not_usb(BusType::Unknown));
+        assert!(!is_not_usb(BusType::Usb));
+        for bus in [BusType::Bluetooth, BusType::I2c, BusType::Spi] {
+            assert!(is_not_usb(bus), "{bus:?}");
+        }
+    }
+
+    #[test]
+    fn a_keyboard_on_usb_is_found_past_one_on_another_bus() {
+        let mut list: Vec<HidEntry> = windows_list(0x01FA).into_iter().map(off_usb).collect();
+        list.extend(windows_list(S85_ES));
+        assert_eq!(picked(&list, None).pid, S85_ES);
+    }
+
+    #[test]
+    fn a_keyboard_on_usb_with_nothing_usable_says_that_before_anything_about_another_bus() {
+        let mut list: Vec<HidEntry> = windows_list(0x01FA).into_iter().map(off_usb).collect();
+        list.push(entry(
+            VID,
+            S85_ES,
+            0xFF00,
+            1,
+            1,
+            &windows_path(S85_ES, 1, 2),
+        ));
+        assert_eq!(
+            select_windows(&list, None).err(),
+            Some(Error::NoUsableCollection(S85_ES))
+        );
+    }
+
+    #[test]
+    fn a_second_collection_on_another_bus_is_never_asked() {
+        let mut list = n99_list();
+        list.push(off_usb(entry(
+            VID,
+            N99,
+            0xFF03,
+            0x0002,
+            4,
+            &windows_path(N99, 4, 1),
+        )));
+        assert_eq!(select_windows(&list, None).unwrap().screen_candidates, [5]);
     }
 
     #[test]
