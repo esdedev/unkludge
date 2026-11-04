@@ -9,7 +9,8 @@ rust-version = "1.99"
 license = "GPL-3.0-only"
 
 [profile.release]
-opt-level = 3
+# For size. What's slow here is the keyboard, and decoding a large GIF stays quick with this.
+opt-level = "z"
 lto = true
 codegen-units = 1
 strip = true
