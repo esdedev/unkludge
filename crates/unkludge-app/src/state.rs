@@ -654,6 +654,9 @@ impl State {
             Link::Absent => Note::new(t().disconnected, Tone::Bad),
             Link::Blocked(Error::Unsupported(_)) => Note::new(t().unsupported_short, Tone::Warning),
             Link::Blocked(Error::DeviceBusy) => Note::new(t().in_use_short, Tone::Warning),
+            Link::Blocked(Error::NoUsableCollection(_)) => {
+                Note::new(t().cannot_open_short, Tone::Warning)
+            }
             Link::Blocked(_) => Note::new(t().cannot_open_short, Tone::Bad),
             Link::Connected(_) => Note::new(t().connected, Tone::Good),
         }
@@ -664,9 +667,14 @@ impl State {
             .is_some_and(|model| model.status == Status::Experimental)
     }
 
-    /// Whether a report is the thing to do next: a model not tried yet, or one not supported.
+    /// Whether a report is the thing to do next: a model not tried yet, one not supported, or one
+    /// that showed up in a way this version can't use.
     pub fn offers_report(&self) -> bool {
-        self.is_experimental() || matches!(self.link, Link::Blocked(Error::Unsupported(_)))
+        self.is_experimental()
+            || matches!(
+                self.link,
+                Link::Blocked(Error::Unsupported(_) | Error::NoUsableCollection(_))
+            )
     }
 
     /// What to show when there's no keyboard to set.
@@ -680,6 +688,11 @@ impl State {
             Link::Blocked(Error::Unsupported(pid)) => view(
                 t().unsupported_title,
                 t().unsupported_detail(*pid),
+                Tone::Warning,
+            ),
+            Link::Blocked(error @ Error::NoUsableCollection(_)) => view(
+                t().no_collection_title,
+                t().no_collection_detail(error),
                 Tone::Warning,
             ),
             Link::Blocked(Error::DeviceBusy) => view(

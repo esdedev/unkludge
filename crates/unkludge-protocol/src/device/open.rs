@@ -122,7 +122,11 @@ fn select(
             position_of(|e| e.usages() == (0, 0) && e.interface == FALLBACK_INTERFACE)
                 .filter(|_| usage_fallback)
         })
-        .ok_or(Error::NotFound)?;
+        .ok_or_else(|| match entries.iter().find(|e| keyboard(e)) {
+            // It's there, so asking to connect it would only send someone looking for a cable.
+            Some(entry) => Error::NoUsableCollection(entry.pid),
+            None => Error::NotFound,
+        })?;
 
     let model = model::find(entries[main].pid).ok_or(Error::NotFound)?;
     let screen_candidates = if model.has_second_collection() {
@@ -214,7 +218,12 @@ fn assemble<T: Transport>(
 ) -> Result<Device<T>, Error> {
     check_main(&main, model.pid)?;
     let screen = if model.has_second_collection() {
-        Some(pair_screen(&main, candidates)?)
+        let paired = pair_screen(&main, candidates).map_err(|error| match error {
+            // The keyboard is right there: it's its second collection that wasn't found.
+            Error::NotFound => Error::NoUsableCollection(model.pid),
+            other => other,
+        })?;
+        Some(paired)
     } else {
         None
     };
@@ -377,7 +386,56 @@ mod tests {
         // On Windows, failing to read a collection's capabilities also shows as 0 and 0, and that
         // collection could be any of them.
         let list = linux_list(S85_ES);
-        assert_eq!(select_windows(&list, None).err(), Some(Error::NotFound));
+        assert_eq!(
+            select_windows(&list, None).err(),
+            Some(Error::NoUsableCollection(S85_ES))
+        );
+    }
+
+    #[test]
+    fn a_supported_keyboard_with_no_usable_collection_isnt_taken_for_no_keyboard() {
+        let collections = vec![
+            entry(VID, S85_ES, 0x0001, 0x0006, 0, &windows_path(S85_ES, 0, 1)),
+            entry(VID, S85_ES, 0xFF00, 0x0001, 1, &windows_path(S85_ES, 1, 2)),
+        ];
+        assert_eq!(
+            select_windows(&collections, None).err(),
+            Some(Error::NoUsableCollection(S85_ES))
+        );
+        assert_eq!(
+            select_windows(&collections, Some(S85_ES)).err(),
+            Some(Error::NoUsableCollection(S85_ES))
+        );
+    }
+
+    #[test]
+    fn a_keyboard_with_no_usable_collection_doesnt_hide_one_that_has_one() {
+        let mut list = vec![entry(
+            VID,
+            0x01FA,
+            0xFF00,
+            1,
+            1,
+            &windows_path(0x01FA, 1, 2),
+        )];
+        list.extend(windows_list(S85_ES));
+        assert_eq!(picked(&list, None).pid, S85_ES);
+    }
+
+    #[test]
+    fn a_keyboard_with_no_usable_collection_doesnt_count_when_another_was_asked_for() {
+        let list = [entry(
+            VID,
+            0x01FA,
+            0xFF00,
+            1,
+            1,
+            &windows_path(0x01FA, 1, 2),
+        )];
+        assert_eq!(
+            select_windows(&list, Some(S85_ES)).err(),
+            Some(Error::NotFound)
+        );
     }
 
     #[test]
@@ -478,12 +536,10 @@ mod tests {
                 for interface in [-1, 0, 1, 2] {
                     let path = windows_path(model.pid, 1, 2);
                     let list = [entry(VID, model.pid, 0xFF00, usage, interface, &path)];
-                    assert_eq!(select_windows(&list, None).err(), Some(Error::NotFound));
-                    assert_eq!(select_linux(&list, None).err(), Some(Error::NotFound));
-                    assert_eq!(
-                        select_linux(&list, Some(model.pid)).err(),
-                        Some(Error::NotFound)
-                    );
+                    let refused = Some(Error::NoUsableCollection(model.pid));
+                    assert_eq!(select_windows(&list, None).err(), refused);
+                    assert_eq!(select_linux(&list, None).err(), refused);
+                    assert_eq!(select_linux(&list, Some(model.pid)).err(), refused);
                 }
             }
         }
@@ -511,7 +567,7 @@ mod tests {
             let list = [entry(VID, S85_ES, page, usage, interface, "x")];
             assert_eq!(
                 select_linux(&list, None).err(),
-                Some(Error::NotFound),
+                Some(Error::NoUsableCollection(S85_ES)),
                 "{page:04X} {usage} {interface}"
             );
         }
@@ -850,6 +906,14 @@ mod tests {
         assert_eq!(result.err(), Some(Error::NoUsableCollection(N99)));
         assert!(main.sent().is_empty());
         assert!(screen.sent().is_empty());
+    }
+
+    #[test]
+    fn a_keyboard_whose_second_collection_cant_be_found_isnt_taken_for_no_keyboard() {
+        let main = answers(&ID);
+        main.set_report_descriptor(&descriptor(519));
+        let result = assemble(main, no_candidates(), model::find(N99).unwrap());
+        assert_eq!(result.err(), Some(Error::NoUsableCollection(N99)));
     }
 
     #[test]

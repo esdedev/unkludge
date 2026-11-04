@@ -58,6 +58,8 @@ pub struct Tr {
     /// A keyboard is there that this version can't use.
     pub unsupported_title: &'static str,
     pub unsupported_short: &'static str,
+    /// A supported keyboard is there, in a way this version can't use.
+    pub no_collection_title: &'static str,
     /// A `unkludge` command has the keyboard for now.
     pub in_use_title: &'static str,
     pub in_use_detail: &'static str,
@@ -163,6 +165,8 @@ pub struct Tr {
     err_not_found: &'static str,
     err_unsupported: &'static str,
     err_no_usable_collection: &'static str,
+    /// After [`Self::err_no_usable_collection`], in the window.
+    no_collection_more: &'static str,
     err_usb: &'static str,
     err_device_busy: &'static str,
     err_lock_failed: &'static str,
@@ -204,6 +208,7 @@ const EN: Tr = Tr {
     tagline: "Royal Kludge keyboards, without the bloat",
     unsupported_title: "This keyboard isn't supported yet",
     unsupported_short: "Not supported",
+    no_collection_title: "This keyboard can't be used yet",
     in_use_title: "A unkludge command is using the keyboard",
     in_use_detail: "The keyboard shows up here by itself when the command ends",
     in_use_short: "In use",
@@ -304,6 +309,7 @@ const EN: Tr = Tr {
     err_not_found: "No supported keyboard found",
     err_unsupported: "Keyboard {pid} isn't supported",
     err_no_usable_collection: "{name} is connected, but not with the HID collections Unkludge can use",
+    no_collection_more: "Send a report so it can be looked at",
     err_usb: "USB error: {detail}",
     err_device_busy: "Another Unkludge program is using the keyboard",
     err_lock_failed: "The lock that keeps Unkludge programs off the keyboard at the same time failed: {detail}",
@@ -345,6 +351,7 @@ const ES: Tr = Tr {
     tagline: "Teclados Royal Kludge, sin lo que sobra",
     unsupported_title: "Este teclado aún no es compatible",
     unsupported_short: "No compatible",
+    no_collection_title: "Este teclado aún no se puede usar",
     in_use_title: "Un comando unkludge está usando el teclado",
     in_use_detail: "El teclado aparecerá aquí en cuanto termine el comando",
     in_use_short: "En uso",
@@ -445,6 +452,7 @@ const ES: Tr = Tr {
     err_not_found: "No se ha encontrado ningún teclado compatible",
     err_unsupported: "El teclado {pid} no es compatible",
     err_no_usable_collection: "{name} está conectado, pero no con las colecciones HID que Unkludge puede usar",
+    no_collection_more: "Envía un informe para que se pueda estudiar",
     err_usb: "Error de USB: {detail}",
     err_device_busy: "Otro programa de Unkludge está usando el teclado",
     err_lock_failed: "Ha fallado el bloqueo que evita que dos programas de Unkludge usen el teclado a la vez: {detail}",
@@ -567,6 +575,11 @@ impl Tr {
                 .replace("{pid}", &pid_text),
             None => self.unsupported_unknown.replace("{pid}", &pid_text),
         }
+    }
+
+    /// What to say about a supported keyboard this version can't use, and what to do next.
+    pub fn no_collection_detail(&self, error: &Error) -> String {
+        format!("{}. {}", self.error(error), self.no_collection_more)
     }
 
     /// A choice with what it's a choice of, for a screen reader, which reads it on its own.

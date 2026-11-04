@@ -50,6 +50,10 @@ pub enum DemoState {
     CannotOpen,
     /// A device of the same vendor that this version can't use.
     Unsupported,
+    /// A supported keyboard without the collection Unkludge uses.
+    NoCollection,
+    /// A `unkludge` command has the keyboard.
+    InUse,
     Connected,
     RkApp,
     Hung,
@@ -73,11 +77,13 @@ pub enum DemoState {
     Report,
 }
 
-const STATES: [(&str, DemoState); 23] = [
+const STATES: [(&str, DemoState); 25] = [
     ("no-keyboard", DemoState::NoKeyboard),
     ("no-keyboard-rk", DemoState::NoKeyboardRk),
     ("cannot-open", DemoState::CannotOpen),
     ("unsupported", DemoState::Unsupported),
+    ("no-collection", DemoState::NoCollection),
+    ("in-use", DemoState::InUse),
     ("connected", DemoState::Connected),
     ("rk-app", DemoState::RkApp),
     ("hung", DemoState::Hung),
@@ -148,6 +154,8 @@ pub struct DemoKeyboard {
     present: AtomicBool,
     open_error: AtomicBool,
     unsupported: AtomicBool,
+    no_collection: AtomicBool,
+    in_use: AtomicBool,
     rk_app: AtomicBool,
     /// How long each chunk's ack takes.
     chunk_ms: AtomicU32,
@@ -168,6 +176,8 @@ impl DemoKeyboard {
             present: AtomicBool::new(!absent),
             open_error: AtomicBool::new(state == DemoState::CannotOpen),
             unsupported: AtomicBool::new(state == DemoState::Unsupported),
+            no_collection: AtomicBool::new(state == DemoState::NoCollection),
+            in_use: AtomicBool::new(state == DemoState::InUse),
             rk_app: AtomicBool::new(matches!(state, DemoState::RkApp | DemoState::NoKeyboardRk)),
             chunk_ms: AtomicU32::new(1),
             stalled: AtomicBool::new(false),
@@ -188,6 +198,12 @@ impl DemoKeyboard {
         }
         if self.unsupported.load(Ordering::SeqCst) {
             return Err(Error::Unsupported(UNSUPPORTED_PID));
+        }
+        if self.no_collection.load(Ordering::SeqCst) {
+            return Err(Error::NoUsableCollection(self.model.pid));
+        }
+        if self.in_use.load(Ordering::SeqCst) {
+            return Err(Error::DeviceBusy);
         }
         if !self.present.load(Ordering::SeqCst) {
             return Err(Error::NotFound);
@@ -382,7 +398,13 @@ impl Script {
                 self.reached = true;
             }
             Event::CannotOpen(_)
-                if matches!(self.state, DemoState::CannotOpen | DemoState::Unsupported) =>
+                if matches!(
+                    self.state,
+                    DemoState::CannotOpen
+                        | DemoState::Unsupported
+                        | DemoState::NoCollection
+                        | DemoState::InUse
+                ) =>
             {
                 self.reached = true;
             }

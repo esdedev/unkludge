@@ -102,9 +102,8 @@ fn run_on_keyboard(cli: &Cli, command: &KeyboardCommand) -> Result<(), Failure> 
             Ok(())
         }
         Err(error) => {
-            let listed = list_collections().unwrap_or_default();
             let linux = cfg!(target_os = "linux");
-            Err(commands::open_failure(&error, cli.pid, &listed, linux).into())
+            Err(commands::open_failure(&error, cli.pid, linux).into())
         }
     }
 }

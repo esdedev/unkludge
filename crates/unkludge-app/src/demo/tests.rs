@@ -55,6 +55,21 @@ fn a_keyboard_this_version_cant_use_says_so() {
 }
 
 #[test]
+fn a_keyboard_with_no_usable_collection_says_so() {
+    let keyboard = keyboard(DemoState::NoCollection);
+    assert_eq!(
+        keyboard.open().err(),
+        Some(Error::NoUsableCollection(s85().pid))
+    );
+}
+
+#[test]
+fn a_keyboard_a_command_has_says_so() {
+    let keyboard = keyboard(DemoState::InUse);
+    assert_eq!(keyboard.open().err(), Some(Error::DeviceBusy));
+}
+
+#[test]
 fn a_keyboard_that_cant_be_opened_says_so() {
     let keyboard = keyboard(DemoState::CannotOpen);
     assert!(matches!(keyboard.open(), Err(Error::Hid(_))));

@@ -204,7 +204,7 @@ It also never opens any collection but the ones under [Transport](#transport). O
 These are guesses or open questions. A capture or a test on hardware can settle them.
 
 - Whether acks can arrive without their leading report ID on some platform. Unkludge accepts both forms.
-- Whether the other 28 models have usage page `0xFF02`, usage 2, as the S85 ES does. The official app also accepts other usages, which Unkludge doesn't open until one is seen.
+- Whether the other 28 models have usage page `0xFF02`, usage 2, as the S85 ES does. The official app also accepts other usages, which Unkludge doesn't open until one is seen. A model that doesn't is found but not used: the window and `unkludge` say so, and `unkludge report` and the window's report list the collections it has.
 - What the firmware does with the sleep byte. It may count in 30-second units, which fits the first three labels. What `0x3C` does is unknown, and it might be 30 minutes rather than no sleep.
 - That a colour in slot 0 of a palette entry is what the keyboard shows for that effect.
 - Why uploads are slow. The official app adds no pause between chunks, so the time goes on waiting for acks. An Unkludge upload hasn't been timed yet: `--timing` is there to measure it.

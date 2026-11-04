@@ -6,9 +6,8 @@ use std::sync::atomic::AtomicBool;
 
 use unkludge_protocol::clock::set_clock;
 use unkludge_protocol::config::Config;
-use unkludge_protocol::device::HidCollection;
 use unkludge_protocol::lighting::{self, CurrentLighting, LightingChange, Palettes};
-use unkludge_protocol::model::{self, Model};
+use unkludge_protocol::model::Model;
 use unkludge_protocol::screen::Animation;
 use unkludge_protocol::transport::Transport;
 use unkludge_protocol::{Device, Error};
@@ -86,36 +85,15 @@ pub fn warn_if_rk_app(running: bool, console: &mut Console) {
     }
 }
 
-/// What to say when a keyboard won't open, given what the system lists.
-pub fn open_failure(
-    error: &Error,
-    pid: Option<u16>,
-    listed: &[HidCollection],
-    linux: bool,
-) -> String {
+/// What to say when a keyboard won't open.
+pub fn open_failure(error: &Error, pid: Option<u16>, linux: bool) -> String {
     match error {
-        Error::NotFound => {
-            let present = listed
-                .iter()
-                .filter(|collection| pid.is_none_or(|pid| pid == collection.pid))
-                .find_map(|collection| {
-                    model::find(collection.pid).filter(|model| model.is_supported())
-                });
-            match (present, pid) {
-                (Some(model), _) => format!(
-                    "{} ({:04X}) is connected, but not with the HID collections Unkludge can use. \
-                     `unkludge report` lists them",
-                    model.name, model.pid
-                ),
-                (None, Some(pid)) => {
-                    format!("keyboard {pid:04X} not found. Is it connected by USB cable?")
-                }
-                (None, None) => format!(
-                    "{error}. Is it connected by USB cable? `unkludge models` lists the supported \
-                     ones"
-                ),
-            }
-        }
+        Error::NotFound => match pid {
+            Some(pid) => format!("keyboard {pid:04X} not found. Is it connected by USB cable?"),
+            None => format!(
+                "{error}. Is it connected by USB cable? `unkludge models` lists the supported ones"
+            ),
+        },
         Error::Hid(_) if linux => format!(
             "{error}. On Linux this usually means no permission to open the keyboard: \
              packaging/linux/70-unkludge.rules grants it"
@@ -569,38 +547,23 @@ mod tests {
         assert!(out.is_empty());
     }
 
-    fn listed(pid: u16, usage_page: u16) -> HidCollection {
-        HidCollection {
-            pid,
-            usage_page,
-            usage: 1,
-            interface: 0,
-        }
-    }
-
     #[test]
     fn nothing_connected_asks_about_the_cable() {
-        let text = open_failure(&Error::NotFound, None, &[], false);
+        let text = open_failure(&Error::NotFound, None, false);
         assert!(text.starts_with("no supported keyboard found."), "{text}");
         assert!(text.contains("USB cable"), "{text}");
 
-        // A device of the vendor's that isn't supported doesn't count, and neither does one with
-        // another product ID than the one asked for.
-        let other = [listed(0x002A, 0xFF00), listed(0x0265, 0xFF00)];
-        let text = open_failure(&Error::NotFound, Some(0x01A2), &other, false);
+        let text = open_failure(&Error::NotFound, Some(0x01A2), false);
         assert_eq!(
             text,
             "keyboard 01A2 not found. Is it connected by USB cable?"
         );
-        let text = open_failure(&Error::NotFound, None, &other[..1], false);
-        assert!(text.contains("USB cable"), "{text}");
     }
 
     #[test]
     fn a_supported_keyboard_with_other_collections_says_so() {
-        let found = [listed(0x002A, 0xFF00), listed(0x0265, 0xFF00)];
         for pid in [None, Some(0x0265)] {
-            let text = open_failure(&Error::NotFound, pid, &found, false);
+            let text = open_failure(&Error::NoUsableCollection(0x0265), pid, false);
             assert!(text.starts_with("RK S85 ES (0265) is connected"), "{text}");
             assert!(text.contains("unkludge report"), "{text}");
             assert!(!text.contains("USB cable"), "{text}");
@@ -610,15 +573,15 @@ mod tests {
     #[test]
     fn a_failure_to_open_hints_at_permissions_on_linux_only() {
         let error = Error::Hid("failed to open".to_string());
-        let linux = open_failure(&error, None, &[], true);
+        let linux = open_failure(&error, None, true);
         assert!(linux.starts_with("USB error: failed to open."), "{linux}");
         assert!(linux.contains("70-unkludge.rules"), "{linux}");
         assert_eq!(
-            open_failure(&error, None, &[], false),
+            open_failure(&error, None, false),
             "USB error: failed to open"
         );
         assert_eq!(
-            open_failure(&Error::Unsupported(0x002A), None, &[], true),
+            open_failure(&Error::Unsupported(0x002A), None, true),
             "keyboard 002A isn't supported"
         );
     }

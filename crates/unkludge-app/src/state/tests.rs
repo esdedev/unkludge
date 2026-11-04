@@ -853,6 +853,22 @@ fn a_keyboard_that_cant_be_opened_doesnt_ask_to_connect_it() {
 }
 
 #[test]
+fn a_supported_keyboard_with_no_usable_collection_says_so_and_offers_a_report() {
+    let mut state = State::default();
+    state.apply(
+        Event::CannotOpen(Error::NoUsableCollection(0x0265)),
+        &mut Settings::default(),
+    );
+    let view = state.empty_view();
+    assert_eq!(view.headline, t().no_collection_title);
+    assert_ne!(view.headline, t().connect_keyboard);
+    assert!(view.detail.contains("RK S85 ES (0265)"), "{}", view.detail);
+    assert_eq!(view.tone, Tone::Warning);
+    assert!(state.offers_report());
+    assert_eq!(state.status().text, t().cannot_open_short);
+}
+
+#[test]
 fn a_keyboard_a_command_has_says_so_and_doesnt_ask_to_connect_it() {
     let mut state = State::default();
     state.apply(

@@ -600,6 +600,23 @@ fn a_keyboard_a_command_has_isnt_an_unplug_and_gets_looked_at_again() {
 }
 
 #[test]
+fn a_keyboard_with_no_usable_collection_is_told_once_and_not_as_no_keyboard() {
+    let none = || Err(Error::NoUsableCollection(0x0265));
+    let mut rig = Rig::with_opens(VecDeque::from([none(), none()]), true, Arc::new(|| {}));
+    rig.step(0);
+    assert_eq!(
+        rig.drain(),
+        [
+            Event::RkAppRunning(false),
+            Event::CannotOpen(Error::NoUsableCollection(0x0265))
+        ]
+    );
+    rig.step(2000);
+    assert_eq!(rig.drain(), []);
+    assert_eq!(rig.opens_tried(), 2);
+}
+
+#[test]
 fn a_first_read_that_fails_on_the_usb_level_doesnt_connect() {
     // The fake has no reply queued, which is an I/O error.
     let fake = FakeTransport::new();
