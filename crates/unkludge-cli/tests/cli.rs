@@ -46,15 +46,34 @@ fn models_as_markdown_says_what_it_is_and_lists_the_29() {
     assert!(text.contains("| `258A:0265` | RK S85 ES | 320x172 | 60 |"));
 }
 
+/// Whatever's in the file, even something that isn't text, as when a shell wrote UTF-16.
+fn models_file_is_current(file: &[u8], printed: &str) -> bool {
+    String::from_utf8_lossy(file).replace("\r\n", "\n") == printed
+}
+
 #[test]
 fn the_list_in_docs_is_what_the_command_prints() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/MODELS.md");
-    let file = std::fs::read_to_string(path).unwrap().replace("\r\n", "\n");
-    assert_eq!(
-        file,
-        stdout(&unkludge(&["models", "--markdown"])),
-        "docs/MODELS.md is out of date: see the top of that file for how to regenerate it"
+    assert!(
+        models_file_is_current(
+            &std::fs::read(path).unwrap(),
+            &stdout(&unkludge(&["models", "--markdown"]))
+        ),
+        "docs/MODELS.md is out of date: CONTRIBUTING.md says how to regenerate it"
     );
+}
+
+#[test]
+fn a_list_in_docs_in_utf16_is_only_out_of_date() {
+    let printed = "# Supported models\n";
+    let mut utf16 = vec![0xFF, 0xFE];
+    utf16.extend(printed.encode_utf16().flat_map(u16::to_le_bytes));
+    assert!(!models_file_is_current(&utf16, printed));
+    assert!(models_file_is_current(printed.as_bytes(), printed));
+    assert!(models_file_is_current(
+        printed.replace('\n', "\r\n").as_bytes(),
+        printed
+    ));
 }
 
 #[test]

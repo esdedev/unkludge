@@ -17,7 +17,7 @@ Close the RK app first (`DeviceDriver.exe`). It polls the keyboard and sends its
 
 To see what a command would send, without opening anything, add `--dry-run --pid <PID>`, such as `unkludge --dry-run --pid 0265 clock`. A dry run has no keyboard to read settings from, so it reads as if the lights were off: changing a brightness, speed or colour there also needs `--mode`.
 
-On Linux, not being able to open the keyboard most likely means permissions. `packaging/linux/70-unkludge.rules`, which comes with the app, grants them.
+On Linux, not being able to open the keyboard most likely means permissions. `packaging/linux/70-unkludge.rules`, in this repository, grants them: the window's **Grant access** button installs it, and the [README](README.md#linux-access) says how to do it by hand.
 
 Test in this order, from least to most risky, and stop at the first thing that looks wrong:
 
@@ -42,7 +42,7 @@ The `kind = 2` models (`01B8`, `025E`, `025F`) and the models with `crc = true` 
 
 ### Reporting what you found
 
-Open an issue with the output of `unkludge report`, the commands you ran and what the keyboard did, good or bad.
+There's no public repository yet, so there's nowhere to open an issue for now. Once there is, open one with the output of `unkludge report`, the commands you ran and what the keyboard did, good or bad.
 
 The report contains the Unkludge version, the system, whether the RK app is running, the USB IDs and HID collections of any Royal Kludge device the system lists, the model, and the config block in hex: lighting settings and other keyboard settings. No names, accounts or files. Listing the collections sends nothing to the keyboard.
 
@@ -102,3 +102,11 @@ A model already marked `tested` stays that way.
 ```
 cargo run -p unkludge-cli -- models --markdown > docs/MODELS.md
 ```
+
+In Windows PowerShell 5, `>` writes UTF-16, which that test reports as out of date. There, go through `cmd`, which works in any Windows shell:
+
+```
+cmd /c "cargo run -p unkludge-cli -- models --markdown > docs\MODELS.md"
+```
+
+The udev rule in `packaging/linux/70-unkludge.rules` lists the supported models by hand, and a test fails if it disagrees with the model data.
