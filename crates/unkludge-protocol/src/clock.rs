@@ -1,6 +1,8 @@
 //! The clock on the keyboard's screen. Callers supply the time, so this crate has no calendar
 //! dependency.
 
+use std::time::Duration;
+
 use crate::packet::cmd;
 use crate::transport::Transport;
 use crate::{Device, Error};
@@ -83,12 +85,22 @@ pub fn set_clock<T: Transport>(device: &mut Device<T>, time: &DateTime) -> Resul
     device.send_generic(cmd::CLOCK, 0, &payload(time))
 }
 
+/// [`set_clock`], after `wait`. An invalid time doesn't wait.
+pub fn set_clock_after<T: Transport>(
+    device: &mut Device<T>,
+    wait: Duration,
+    time: &DateTime,
+) -> Result<(), Error> {
+    time.validate()?;
+    device.sleep(wait);
+    set_clock(device, time)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model;
     use crate::transport::fake::{FakeEvent, FakeTransport};
-    use std::time::Duration;
 
     /// 2026-10-29 01:24:07, a Thursday. Every field has a value of its own.
     fn thursday() -> DateTime {
@@ -135,6 +147,28 @@ mod tests {
         assert_eq!(&sent[0][..8], &[0x09, 0x0B, 0, 0, 1, 0, 14, 0]);
         assert_eq!(&sent[0][8..22], &payload(&thursday()));
         assert!(sent[0][22..].iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn set_clock_after_waits_and_then_sends_the_clock() {
+        let fake = FakeTransport::new();
+        let wait = Duration::from_millis(300);
+        set_clock_after(&mut device(&fake), wait, &thursday()).unwrap();
+        assert_eq!(fake.events()[0], FakeEvent::Sleep(wait));
+        assert_eq!(fake.sent().len(), 1);
+        assert_eq!(&fake.sent()[0][8..22], &payload(&thursday()));
+    }
+
+    #[test]
+    fn an_invalid_time_isnt_waited_for() {
+        let fake = FakeTransport::new();
+        let time = DateTime {
+            month: 13,
+            ..thursday()
+        };
+        let result = set_clock_after(&mut device(&fake), Duration::from_secs(1), &time);
+        assert!(matches!(result, Err(Error::Invalid(_))));
+        assert!(fake.events().is_empty());
     }
 
     #[test]

@@ -341,6 +341,8 @@ fn the_clock_is_set_on_connecting_only_with_auto_clock_on() {
 
 #[test]
 fn the_clock_is_the_local_time() {
+    use unkludge_shared::local_time::device_now;
+
     let fake = FakeTransport::new();
     queue_reads(&fake, 1);
     let mut rig = Rig::with_opens(VecDeque::from([Ok(fake.clone())]), true, Arc::new(|| {}));
@@ -349,6 +351,26 @@ fn the_clock_is_the_local_time() {
     let clock = sent.iter().find(|report| report[1] == CLOCK).unwrap();
     let year = u16::from_le_bytes([clock[HEADER + 3], clock[HEADER + 4]]);
     assert_eq!(year, device_now().unwrap().year);
+}
+
+#[test]
+fn the_clock_goes_out_as_a_second_starts() {
+    use unkludge_protocol::transport::fake::FakeEvent;
+
+    let fake = FakeTransport::new();
+    queue_reads(&fake, 1);
+    let mut rig = Rig::with_opens(VecDeque::from([Ok(fake.clone())]), true, Arc::new(|| {}));
+    rig.step(0);
+    let events = fake.events();
+    let clock = events
+        .iter()
+        .position(|event| matches!(event, FakeEvent::Sent(report) if report[1] == CLOCK))
+        .unwrap();
+    // Before it comes the pause every report has, and before that the wait for the second.
+    assert!(
+        matches!(events[clock - 2], FakeEvent::Sleep(wait) if wait <= Duration::from_secs(1)),
+        "{events:?}"
+    );
 }
 
 #[test]

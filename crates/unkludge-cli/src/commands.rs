@@ -5,14 +5,13 @@ use std::fmt::{self, Display, Formatter};
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
-use unkludge_protocol::clock::set_clock;
 use unkludge_protocol::config::Config;
 use unkludge_protocol::lighting::{self, CurrentLighting, LightingChange, Palettes};
 use unkludge_protocol::model::Model;
 use unkludge_protocol::screen::Animation;
 use unkludge_protocol::transport::Transport;
 use unkludge_protocol::{Device, Error};
-use unkludge_shared::local_time::device_time;
+use unkludge_shared::local_time::set_clock_to_next_second;
 use unkludge_shared::report_lines::{config_lines, config_report, keyboard_header, report_header};
 
 use crate::args::{KeyboardCommand, LightArgs, ScreenArgs};
@@ -168,11 +167,10 @@ fn clock<T: Transport>(
 ) -> Result<(), Failure> {
     // As in the app, nothing gets written to a keyboard whose config block can't be used.
     Config::read(device)?;
-    let now = chrono::Local::now();
-    set_clock(device, &device_time(&now)?)?;
+    let time = set_clock_to_next_second(device)?;
     console.line(format_args!(
         "Clock: {}",
-        now.format("%Y-%m-%d %H:%M:%S, %A")
+        time.format("%Y-%m-%d %H:%M:%S, %A")
     ));
     if !options.dry_run {
         console.note("The keyboard doesn't acknowledge this: check its screen.");
@@ -707,6 +705,29 @@ mod tests {
         assert_eq!(&outcome.sent[1][..8], &[0x09, 0x0B, 0, 0, 1, 0, 14, 0]);
         assert!(outcome.out.contains("Clock: "), "{}", outcome.out);
         assert!(outcome.err.is_empty(), "{}", outcome.err);
+    }
+
+    #[test]
+    fn the_clock_goes_out_as_a_second_starts_and_prints_that_second() {
+        use unkludge_protocol::transport::fake::FakeEvent;
+
+        let fake = FakeTransport::new();
+        fake.queue_feature_reply(&config_reply(true));
+        let (result, outcome) = on_device(&mut fake_device(&fake), &command(&["clock"]));
+        result.unwrap();
+        let events = fake.events();
+        let clock = events
+            .iter()
+            .position(|event| matches!(event, FakeEvent::Sent(report) if report[1] == 0x0B))
+            .unwrap();
+        // Before it comes the pause every report has, and before that the wait for the second.
+        assert!(
+            matches!(events[clock - 2], FakeEvent::Sleep(wait) if wait <= std::time::Duration::from_secs(1)),
+            "{events:?}"
+        );
+        let sent = fake.sent();
+        let second = format!(":{:02}, ", sent[sent.len() - 1][17]);
+        assert!(outcome.out.contains(&second), "{second} {}", outcome.out);
     }
 
     #[test]

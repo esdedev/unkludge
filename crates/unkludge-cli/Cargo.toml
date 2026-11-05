@@ -13,7 +13,6 @@ path = "src/main.rs"
 [dependencies]
 unkludge-protocol = { path = "../unkludge-protocol" }
 unkludge-shared = { path = "../unkludge-shared" }
-chrono.workspace = true
 clap.workspace = true
 
 [target.'cfg(windows)'.dependencies]

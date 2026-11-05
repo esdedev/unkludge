@@ -41,14 +41,13 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use unkludge_protocol::clock::set_clock;
 use unkludge_protocol::config::Config;
 use unkludge_protocol::lighting::{self, CurrentLighting, LightingChange, Palettes};
 use unkludge_protocol::model::Model;
 use unkludge_protocol::screen::{Animation, Fit, UploadPlan};
 use unkludge_protocol::transport::Transport;
 use unkludge_protocol::{Device, Error};
-use unkludge_shared::local_time::device_now;
+use unkludge_shared::local_time::set_clock_to_next_second;
 
 mod loader;
 #[cfg(test)]
@@ -846,9 +845,8 @@ impl<T: Transport + 'static, F: FnMut() -> Result<Device<T>, Error>> Worker<T, F
         let Some(device) = &mut self.device else {
             return;
         };
-        let set = device_now().and_then(|time| set_clock(device, &time));
-        match set {
-            Ok(()) => self.emit(Event::ClockSynced),
+        match set_clock_to_next_second(device) {
+            Ok(_) => self.emit(Event::ClockSynced),
             Err(error) => {
                 self.command_failed(error, now);
                 if self.device.is_none() {
