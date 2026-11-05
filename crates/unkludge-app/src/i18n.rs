@@ -211,7 +211,7 @@ const EN: Tr = Tr {
                      keyboard's draw time is {draw} ms",
     time_left: "About {time} left",
 
-    tagline: "Royal Kludge keyboards, without the bloat",
+    tagline: "For Royal Kludge keyboards",
     unsupported_title: "This keyboard isn't supported yet",
     unsupported_short: "Not supported",
     no_collection_title: "This keyboard can't be used yet",
@@ -358,7 +358,7 @@ const ES: Tr = Tr {
                      el tiempo de dibujo de este teclado es de {draw} ms",
     time_left: "Quedan unos {time}",
 
-    tagline: "Teclados Royal Kludge, sin lo que sobra",
+    tagline: "Para teclados Royal Kludge",
     unsupported_title: "Este teclado aún no es compatible",
     unsupported_short: "No compatible",
     no_collection_title: "Este teclado aún no se puede usar",

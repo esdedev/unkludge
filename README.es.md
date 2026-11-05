@@ -61,7 +61,7 @@ Solo por cable USB: un teclado que el sistema dice que está conectado de otra f
 
 ## Instalación
 
-Aún no hay versiones publicadas, paquetes ni enlaces de descarga, y tampoco repositorio público. Instalar significa compilar el código.
+Aún no hay versiones publicadas, paquetes ni enlaces de descarga. Instalar significa compilar el código.
 
 ### Compilar
 
@@ -213,7 +213,7 @@ En un `--dry-run` no hay teclado del que leer, así que lee como si las luces es
 
 El orden para probar, de menos a más riesgo, está en [CONTRIBUTING.md](CONTRIBUTING.md#testing-a-model): `info`, `light`, `report`, `clock`, `light` con opciones, `screen`. Para en lo primero que tenga mala pinta.
 
-Aún no hay repositorio público, así que **de momento no hay dónde enviar un informe**. `unkludge report` imprime los datos: la versión de Unkludge, el sistema, si el programa de RK está en marcha, los ID USB y las colecciones HID de cualquier dispositivo de este fabricante que liste el sistema, el modelo y el bloque de configuración en hexadecimal. Sin nombres, cuentas ni archivos.
+Para contar qué ha pasado, [abre un issue](../../issues) con la salida de `unkludge report`. Imprime los datos: la versión de Unkludge, el sistema, si el programa de RK está en marcha, los ID USB y las colecciones HID de cualquier dispositivo de este fabricante que liste el sistema, el modelo y el bloque de configuración en hexadecimal. Sin nombres, cuentas ni archivos.
 
 La app tiene un enlace **Enviar informe** en los modelos experimentales y en los no compatibles, y en un teclado compatible que encuentra pero no puede usar, sea por lo que sea. Todavía no hay ningún formulario, así que por ahora el enlace solo guarda `unkludge-report.txt` en la carpeta de datos, abre esa carpeta y te dice que envíes el archivo.
 
@@ -233,10 +233,10 @@ La app tiene un enlace **Enviar informe** en los modelos experimentales y en los
 
 Aquí se cuenta qué es el proyecto y de dónde salen sus partes. No es asesoramiento legal, y no dice si algo de esto está permitido donde vives.
 
-- **Proyecto independiente.** Unkludge no está afiliado, autorizado, respaldado ni patrocinado por Royal Kludge. No es software oficial de RK y su soporte técnico no puede ayudarte con él.
+- **Proyecto independiente.** Unkludge no está afiliado, autorizado, respaldado ni patrocinado por Royal Kludge. No es software oficial de RK y su soporte técnico no puede ayudarte con él: mejor [abre un issue](../../issues) aquí.
 - **Nombres.** "Royal Kludge", "RK" y los nombres de los modelos son de sus dueños. Se usan para indicar para qué teclados está pensado Unkludge.
 - **De dónde salen los comandos.** Se sacaron con un análisis estático del programa de RK para Windows, es decir, leyendo el código del programa y sus archivos de configuración, con el fin de que los teclados que la gente ya tiene funcionen sin él. No se usó ninguna captura USB. [docs/PROTOCOL.md](docs/PROTOCOL.md) describe el comportamiento con palabras propias. Las notas de ese análisis se quedan fuera de este repositorio, y aquí no hay código descompilado.
 - **Lo que sale de los archivos de RK.** Los 218 archivos de `data/models/` se generan a partir de los `KB.ini` que instala el programa de RK, con `tools/kbini2toml`, y están escritos en el formato propio de Unkludge. Guardan los ID USB, los nombres de los modelos, los tamaños de pantalla, los límites de fotogramas, qué controles tiene cada efecto y las posiciones de las teclas. Los programas llevan compilado todo menos las posiciones de las teclas. Estos datos se tomaron de los archivos de RK, no se dedujeron por otra vía.
 - **Lo que no.** No se incluye ninguna imagen, animación, programa ni firmware del programa de RK. Los nombres de los efectos son de Unkludge. Las etiquetas de los cuatro tiempos de suspensión coinciden con las del programa de RK.
 - **Bajo tu responsabilidad.** Esto solo ha funcionado en un teclado real ([Estado](#estado)). Lo usas bajo tu responsabilidad.
-- **Titulares de derechos.** Aún no hay repositorio público ni dirección de contacto. Se pondrá aquí cuando la haya.
+- **Titulares de derechos.** Si este proyecto te plantea alguna duda, contacta con quien lo mantiene a través de [GitHub](https://github.com/esdedev) y se atenderá cuanto antes.

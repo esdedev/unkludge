@@ -42,7 +42,7 @@ The `kind = 2` models (`01B8`, `025E`, `025F`) and the models with `crc = true` 
 
 ### Reporting what you found
 
-There's no public repository yet, so there's nowhere to open an issue for now. Once there is, open one with the output of `unkludge report`, the commands you ran and what the keyboard did, good or bad.
+Open an issue with the output of `unkludge report`, the commands you ran and what the keyboard did, good or bad.
 
 The report contains the Unkludge version, the system, whether the RK app is running, the USB IDs and HID collections of any Royal Kludge device the system lists, the model, and the config block in hex: lighting settings and other keyboard settings. No names, accounts or files. Listing the collections sends nothing to the keyboard.
 

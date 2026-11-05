@@ -61,7 +61,7 @@ Wired USB only: a keyboard the system says is connected some other way is refuse
 
 ## Install
 
-There are no releases, packages or download links yet, and no public repository. Installing means building from source.
+There are no releases, packages or download links yet. Installing means building from source.
 
 ### Build
 
@@ -213,7 +213,7 @@ A dry run has no keyboard to read from, so it reads as if the lights were off: c
 
 The order to test in, from least to most risky, is in [CONTRIBUTING.md](CONTRIBUTING.md#testing-a-model): `info`, `light`, `report`, `clock`, `light` with options, `screen`. Stop at the first thing that looks wrong.
 
-There's no public repository yet, so **there's nowhere to send a report for now**. `unkludge report` prints the details: Unkludge's version, the system, whether RK's app is running, the USB IDs and HID collections of any device of this vendor the system lists, the model, and the config block in hex. No names, accounts or files.
+To report what happened, [open an issue](../../issues) with the output of `unkludge report`. It prints the details: Unkludge's version, the system, whether RK's app is running, the USB IDs and HID collections of any device of this vendor the system lists, the model, and the config block in hex. No names, accounts or files.
 
 The app has a **Send report** link on experimental and unsupported models, and on a supported keyboard it finds but can't use, whatever the reason. There's no form to send it to yet, so for now the link only saves `unkludge-report.txt` in the data folder, opens that folder and tells you to send the file.
 
@@ -233,10 +233,10 @@ The app has a **Send report** link on experimental and unsupported models, and o
 
 This says what the project is and where its parts come from. It isn't legal advice, and it doesn't say whether any of this is allowed where you are.
 
-- **Independent project.** Unkludge is not affiliated with, authorized, endorsed or sponsored by Royal Kludge. It isn't official RK software, and RK's support can't help with it.
+- **Independent project.** Unkludge is not affiliated with, authorized, endorsed or sponsored by Royal Kludge. It isn't official RK software, and RK's support can't help with it: please [open an issue](../../issues) here instead.
 - **Names.** "Royal Kludge", "RK" and the model names belong to their owners. They're used to say which keyboards Unkludge is meant for.
 - **Where the commands come from.** They were worked out by static analysis of RK's Windows app, which means reading the program's code and config files, with the aim of making keyboards people own work without it. No USB capture was involved. [docs/PROTOCOL.md](docs/PROTOCOL.md) describes the behaviour in our own words. The notes from that analysis stay outside this repository, and no decompiled code is in it.
 - **What comes from RK's files.** The 218 files in `data/models/` are generated from the `KB.ini` files that RK's app installs, by `tools/kbini2toml`, and written in Unkludge's own format. They hold USB IDs, model names, screen sizes, frame limits, which controls each effect has and key positions. The programs compile in everything but the key positions. This data was taken from RK's files, not worked out independently.
 - **What doesn't.** No images, animations, programs or firmware from RK's app are included. Effect names are Unkludge's own. The labels for the four sleep times match the ones in RK's app.
 - **Your risk.** This has only run on one real keyboard ([Status](#status)). You use it at your own risk.
-- **Rights holders.** There's no public repository or contact address yet. One will be listed here when there is.
+- **Rights holders.** If you have a concern about this project, please contact the maintainer through [GitHub](https://github.com/esdedev) and it will be addressed promptly.
