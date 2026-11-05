@@ -244,16 +244,13 @@ mod tests {
 
     #[test]
     fn signs_of_progress_keep_it_from_counting_as_stuck() {
-        let beat = Arc::<Beat>::default();
-        let events = watched(&beat);
-        let started = Instant::now();
-        while started.elapsed() < Duration::from_millis(200) {
-            beat.busy();
-            thread::sleep(Duration::from_millis(2));
-        }
-        beat.idle();
-        assert!(events.try_recv().is_err());
-        beat.close();
+        const LIMIT: Duration = Duration::from_secs(5);
+
+        let beat = Beat::default();
+        beat.set(Instant::now().checked_sub(LIMIT * 2));
+        assert!(beat.stuck(LIMIT));
+        beat.busy();
+        assert!(!beat.stuck(LIMIT));
     }
 
     #[test]

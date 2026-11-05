@@ -2693,11 +2693,12 @@ fn the_thread_runs_commands_and_tells_the_ui_through_notify() {
 fn shutting_down_stops_an_upload_saying_so_with_an_abort() {
     let fake = FakeTransport::with_auto_ack();
     queue_reads(&fake, 50);
-    let handed_out = fake.clone();
-    let open = move || Device::new(handed_out.clone(), None, s85());
+    // Each ack takes real time, so 60 frames take minutes, however late the next lines get to run.
+    let mut held = HeldUp::new(&fake);
+    held.read_delay = Duration::from_millis(20);
+    let open = move || Device::new(held.clone(), None, s85());
     let (handle, events) = spawn(open, plain_options(false), Arc::new(|| {}));
     wait_for(&events, |event| matches!(event, Event::Connected { .. }));
-    // Enough frames that it can't be over before the next line.
     let spec = s85().screen.unwrap();
     let long = Animation::from_bytes(&gif(60), &spec, LoadOptions::default()).unwrap();
     handle.send(Cmd::UploadScreen(Arc::new(long)));
