@@ -1,6 +1,6 @@
 # Unkludge
 
-**A free, native app and command-line tool for Royal Kludge (RK) keyboards with a screen, on Windows and Linux, without RK's software.** It sets the screen's image or GIF, the clock and the lights. It's at an early stage and almost entirely untested on real keyboards: read [Status](#status) first.
+**A free, native app and command-line tool for Royal Kludge (RK) keyboards with a screen, on Windows and Linux, without RK's software.** It sets the screen's image or GIF, the clock and the lights. It's at an early stage and has only been tried on one keyboard, on Windows: read [Status](#status) first.
 
 > Unkludge is an independent project, not made or endorsed by Royal Kludge. See [Legal note](#legal-note).
 
@@ -10,15 +10,14 @@
 
 This is how things really stand. Nothing has been released yet.
 
-- **RK S85 ES (`258A:0265`), the author's keyboard:** Unkludge has only read from it, with `unkludge --pid 0265 info` and `unkludge --pid 0265 light` with no options.
-- **No Unkludge write has been run on real hardware.** Not the lights, not the clock, not a screen upload. Those have only run against a simulated keyboard, in the tests.
+- **RK S85 ES (`258A:0265`), the author's keyboard:** run on Windows on 2026-11-05, from the command line and the window. Settings read and written, a custom colour, the clock, the automatic clock on opening, on plugging in and after sleep, image and GIF uploads, and cancelling. The model table still marks it `experimental`.
 - **Every other model is experimental and has never been run.**
-- **The window has only been seen in demo mode**, offscreen or in WSLg, with no real keyboard.
+- **On Linux the window has only been seen in demo mode**, offscreen or in WSLg, with no real keyboard. No desktop Linux and no real keyboard on Linux have been tried.
 - **No USB capture has been made**, so no command has been confirmed that way. The commands come from static analysis of RK's software.
 
 ## What it does
 
-This is what the code does. [Status](#status) says how little of it has met a keyboard.
+This is what the code does. [Status](#status) says how much of it has met a keyboard.
 
 <p align="center">
   <img src="docs/images/window-demo.png" alt="Unkludge's window showing an RK S85 ES with an EXPERIMENTAL badge and a DEMO badge, with Screen, Lights and Clock sections" width="640">
@@ -45,7 +44,7 @@ Wired USB only: a keyboard the system says is connected some other way is refuse
 
 | Keyboard | Product IDs (vendor `258A`) | Screen | Max frames | Status |
 |---|---|---|---|---|
-| RK S85 ES | `0265` | 320×172 | 60 | Read-only commands run, nothing written |
+| RK S85 ES | `0265` | 320×172 | 60 | Run on Windows: lights, clock, uploads and cancelling. Still marked experimental |
 | RK S85, ISO Return, RU, TH | `0193`, `01FA`, `0263`, `0264` | 320×172 | 60 | Experimental, never run |
 | RK S98 and S98RGB, all variants | `0174`, `01AF`, `01BF`, `0223`, `0224`, `022B`, `022F`, `0230`, `023F`, `0240`, `0241` | 320×172 | 60 | Experimental, never run |
 | RK M87, all variants | `01A2`, `01D6`, `01F5`, `0272`, `0273`, `0274`, `0275`, `0276` | 240×135 | 100 | Experimental, never run. Upload adds a checksum |
@@ -107,13 +106,13 @@ Some differences from Windows:
 
 ## Before you open the app
 
-- **It writes to the keyboard without being asked.** Automatic clock is on by default, so the app sends the time as soon as it connects: on start, on plugging the keyboard in and after sleep. Unkludge has never run this command on real hardware. You can turn it off in the window (*Clock*, *Set it automatically*), but the first connection comes before you can. To have it off from the start, create the data folder's `settings.txt` (see [Notes](#notes)) as a text file, in UTF-8 or UTF-16, with the line `auto_clock=0`, before the first launch. A file that's there has to say `auto_clock=1` for it to be on: any other value, no such line and an empty file all mean off. A file with content and no setting Unkludge knows counts as unreadable: the window says so, the automatic clock stays off and the file stays as it is. A file that's already there also keeps the first launch from turning on the next item.
+- **It writes to the keyboard without being asked.** Automatic clock is on by default, so the app sends the time as soon as it connects: on start, on plugging the keyboard in and after sleep. This has only been checked on one S85 ES, on Windows. You can turn it off in the window (*Clock*, *Set it automatically*), but the first connection comes before you can. To have it off from the start, create the data folder's `settings.txt` (see [Notes](#notes)) as a text file, in UTF-8 or UTF-16, with the line `auto_clock=0`, before the first launch. A file that's there has to say `auto_clock=1` for it to be on: any other value, no such line and an empty file all mean off. A file with content and no setting Unkludge knows counts as unreadable: the window says so, the automatic clock stays off and the file stays as it is. A file that's already there also keeps the first launch from turning on the next item.
 - **It turns on starting with the system at first launch**, which is any launch with no `settings.txt`. On Windows that's a `Unkludge` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. On Linux it's `~/.config/autostart/unkludge.desktop`. Both start the app with `--tray`. Debug builds don't do this, and neither does a program with a folder called `target` in its path, as in `target/release`. *Start with the system*, in the window and in the tray, turns it off.
 - **Your first custom colour replaces the other colours.** The keyboard can't report its palettes, and a custom colour is written together with the palettes of every effect. So the first one on a model puts the other effects, and the other slots, back to Unkludge's defaults: red, green, blue, yellow, magenta, cyan and white. Colours set in RK's app are replaced. The app warns you first, once per model, and remembers its colours from then on. On the command line every `--rgb` does this, even to colours set earlier with Unkludge, as it keeps no copy between runs. It prints a warning after sending.
 - **Close RK's app.** It polls the keyboard and sends its own settings back. Unkludge warns if a program named `DeviceDriver.exe` is running, and that warning is all it does about it. RK's app doesn't exist on Linux, so there's no such check there.
 - **While connected, the app reads the keyboard's settings every 5 seconds.** That's a read, and it also notices the keyboard going away.
 - **One Unkludge program at a time.** The app keeps a lock on the keyboard for as long as it's connected, so `unkludge` commands that open a keyboard, reads included, refuse and tell you to quit the app first. If a command already has the keyboard when the app looks for it, the window says so and connects when the command ends. `--dry-run`, `--demo` and `unkludge models` open no keyboard and take no lock. On Windows the lock is a named mutex, one per user session, so another user logged in at the same time isn't kept out. On Linux it's `flock` on the keyboard's own hidraw node, so it holds whatever the program's environment and for any user who can open the node, and two keyboards can each have a program of their own. The system lets go of both if a program crashes. It only knows about Unkludge: RK's app doesn't take part.
-- **A screen upload replaces what's on the screen, and it may be slow.** A frame on a 320×172 screen is 215 chunks. Unkludge's speed hasn't been measured.
+- **A screen upload replaces what's on the screen, and it may be slow.** A frame on a 320×172 screen is 215 chunks. On an S85 ES that took 38 s, at 5.7 chunks per second, so a longer GIF takes minutes. Cancelling, or closing the console during an upload, left the keyboard's own factory animation, not what was there before.
 
 To look at the interface with none of this, run `unkludge-app --demo`. It never opens a keyboard and leaves the real settings and autostart alone. `--demo-model 01A2` shows another model and `--lang es` or `--lang en` picks a language.
 
@@ -208,7 +207,7 @@ A dry run has no keyboard to read from, so it reads as if the lights were off: c
 
 **How it writes.** Settings are read first and written back with only what you asked to change. Bytes it doesn't know keep their value. If the read fails or the block doesn't end in `5A A5`, nothing is written: not settings, not the clock, not a screen upload, from the app or the command line.
 
-**What isn't known.** This is no promise that nothing can go wrong. The commands have not been confirmed by a USB capture, and Unkludge has never written to a real keyboard. Nobody knows yet what a keyboard does if an upload just stops, as when it's unplugged. [docs/PROTOCOL.md](docs/PROTOCOL.md#not-confirmed) lists what's unconfirmed. If a keyboard stops responding, unplug it and plug it back in.
+**What isn't known.** This is no promise that nothing can go wrong. The commands have not been confirmed by a USB capture, and Unkludge has only written to one real keyboard. On it, an upload that stopped with no abort left a loading display on the screen until the next upload. What happens when one is unplugged halfway isn't known. [docs/PROTOCOL.md](docs/PROTOCOL.md#not-confirmed) lists what's unconfirmed. If a keyboard stops responding, unplug it and plug it back in.
 
 ## Testing a model and reporting
 
@@ -221,6 +220,7 @@ The app has a **Send report** link on experimental and unsupported models, and o
 ## Notes
 
 - Settings and logs (`settings.txt`, `unkludge.log`, `crash.log`, `unkludge-report.txt`) live in `%APPDATA%\Unkludge` on Windows and `~/.config/unkludge` on Linux, or `$XDG_CONFIG_HOME/unkludge` if that's set. A log that reaches 256 KB becomes `unkludge.log.old` or `crash.log.old`, replacing the one before.
+- On an S85 ES, to go back from the image to the page with the date, battery, time and Caps Lock: press the knob, and under interface selection choose the time interface. That's the keyboard's own menu, and Unkludge has no command for it.
 - `unkludge-app --tray` starts hidden in the tray. Running the app when it's already running shows its window.
 - On Linux, the socket that asks for that window is in `$XDG_RUNTIME_DIR` if it's set and belongs to you, and otherwise in the data folder.
 - To remove Unkludge: turn off *Start with the system*, quit, then delete the programs and the data folder, and on Linux the [udev rule](#linux-access).
@@ -238,5 +238,5 @@ This says what the project is and where its parts come from. It isn't legal advi
 - **Where the commands come from.** They were worked out by static analysis of RK's Windows app, which means reading the program's code and config files, with the aim of making keyboards people own work without it. No USB capture was involved. [docs/PROTOCOL.md](docs/PROTOCOL.md) describes the behaviour in our own words. The notes from that analysis stay outside this repository, and no decompiled code is in it.
 - **What comes from RK's files.** The 218 files in `data/models/` are generated from the `KB.ini` files that RK's app installs, by `tools/kbini2toml`, and written in Unkludge's own format. They hold USB IDs, model names, screen sizes, frame limits, which controls each effect has and key positions. The programs compile in everything but the key positions. This data was taken from RK's files, not worked out independently.
 - **What doesn't.** No images, animations, programs or firmware from RK's app are included. Effect names are Unkludge's own. The labels for the four sleep times match the ones in RK's app.
-- **Your risk.** Most of this has never run on a real keyboard ([Status](#status)). You use it at your own risk.
+- **Your risk.** This has only run on one real keyboard ([Status](#status)). You use it at your own risk.
 - **Rights holders.** There's no public repository or contact address yet. One will be listed here when there is.

@@ -1,6 +1,6 @@
 # Unkludge
 
-**App y herramienta de línea de comandos libres y nativas para teclados Royal Kludge (RK) con pantalla, en Windows y Linux, sin el programa de RK.** Pone la imagen o el GIF de la pantalla, la hora y las luces. Está en una fase muy temprana y casi nada se ha probado con un teclado de verdad: lee antes el [Estado](#estado).
+**App y herramienta de línea de comandos libres y nativas para teclados Royal Kludge (RK) con pantalla, en Windows y Linux, sin el programa de RK.** Pone la imagen o el GIF de la pantalla, la hora y las luces. Está en una fase muy temprana y solo se ha probado en un teclado, en Windows: lee antes el [Estado](#estado).
 
 > Unkludge es un proyecto independiente, no lo hace ni lo respalda Royal Kludge. Ver [Aviso legal](#aviso-legal).
 
@@ -10,15 +10,14 @@
 
 Las cosas como están hoy. Todavía no se ha publicado nada.
 
-- **RK S85 ES (`258A:0265`), el teclado del autor:** Unkludge solo ha leído de él, con `unkludge --pid 0265 info` y `unkludge --pid 0265 light` sin opciones.
-- **Unkludge no ha escrito nunca en un teclado real.** Ni las luces, ni la hora, ni una subida a la pantalla. Todo eso solo ha funcionado contra un teclado simulado, en los tests.
+- **RK S85 ES (`258A:0265`), el teclado del autor:** probado en Windows el 2026-11-05, con la línea de comandos y con la ventana. Leer y escribir los ajustes, un color propio, la hora, la hora automática al abrir, al enchufar y al volver de la suspensión, subir imágenes y GIF, y cancelar. La tabla de modelos aún lo marca como `experimental`.
 - **Todos los demás modelos son experimentales y no se han probado nunca.**
-- **La ventana solo se ha visto en modo demo**, dibujada fuera de pantalla o en WSLg, sin ningún teclado real.
+- **En Linux la ventana solo se ha visto en modo demo**, dibujada fuera de pantalla o en WSLg, sin ningún teclado real. No se ha probado en ningún Linux de escritorio ni con un teclado real en Linux.
 - **No se ha hecho ninguna captura USB**, así que ningún comando está confirmado por esa vía. Los comandos salen del análisis estático del programa de RK.
 
 ## Qué hace
 
-Esto es lo que hace el código. El [Estado](#estado) cuenta lo poco que ha visto un teclado.
+Esto es lo que hace el código. El [Estado](#estado) cuenta cuánto ha visto un teclado.
 
 <p align="center">
   <img src="docs/images/window-demo.png" alt="La ventana de Unkludge con un RK S85 ES y las etiquetas EXPERIMENTAL y DEMO, con las secciones de pantalla, luces y reloj" width="640">
@@ -45,7 +44,7 @@ Solo por cable USB: un teclado que el sistema dice que está conectado de otra f
 
 | Teclado | ID de producto (fabricante `258A`) | Pantalla | Fotogramas máx. | Estado |
 |---|---|---|---|---|
-| RK S85 ES | `0265` | 320×172 | 60 | Se han ejecutado los comandos de lectura, nada de escritura |
+| RK S85 ES | `0265` | 320×172 | 60 | Probado en Windows: luces, hora, subidas y cancelar. Aún marcado como experimental |
 | RK S85, ISO Return, RU, TH | `0193`, `01FA`, `0263`, `0264` | 320×172 | 60 | Experimental, sin probar |
 | RK S98 y S98RGB, todas las variantes | `0174`, `01AF`, `01BF`, `0223`, `0224`, `022B`, `022F`, `0230`, `023F`, `0240`, `0241` | 320×172 | 60 | Experimental, sin probar |
 | RK M87, todas las variantes | `01A2`, `01D6`, `01F5`, `0272`, `0273`, `0274`, `0275`, `0276` | 240×135 | 100 | Experimental, sin probar. La subida añade una suma de comprobación |
@@ -107,13 +106,13 @@ Lo que cambia respecto a Windows:
 
 ## Antes de abrir la app
 
-- **Escribe en el teclado sin que se lo pidas.** La hora automática viene activada, así que la app envía la hora en cuanto conecta: al arrancar, al enchufar el teclado y al volver de la suspensión. Unkludge nunca ha ejecutado este comando en un teclado real. Se puede apagar en la ventana (*Reloj*, *Ajustarla automáticamente*), pero la primera conexión llega antes. Para tenerla apagada desde el principio, crea el `settings.txt` de la carpeta de datos (ver [Notas](#notas)) como archivo de texto, en UTF-8 o UTF-16, con la línea `auto_clock=0`, antes de abrir la app por primera vez. Un archivo que está ahí tiene que decir `auto_clock=1` para que esté encendida: cualquier otro valor, no tener esa línea y un archivo vacío significan apagada. Un archivo con contenido y sin ningún ajuste que Unkludge conozca cuenta como ilegible: la ventana lo dice, la hora automática se queda apagada y el archivo no se toca. Si el archivo ya existe, el primer arranque tampoco activa lo del siguiente punto.
+- **Escribe en el teclado sin que se lo pidas.** La hora automática viene activada, así que la app envía la hora en cuanto conecta: al arrancar, al enchufar el teclado y al volver de la suspensión. Esto solo se ha comprobado en un S85 ES, en Windows. Se puede apagar en la ventana (*Reloj*, *Ajustarla automáticamente*), pero la primera conexión llega antes. Para tenerla apagada desde el principio, crea el `settings.txt` de la carpeta de datos (ver [Notas](#notas)) como archivo de texto, en UTF-8 o UTF-16, con la línea `auto_clock=0`, antes de abrir la app por primera vez. Un archivo que está ahí tiene que decir `auto_clock=1` para que esté encendida: cualquier otro valor, no tener esa línea y un archivo vacío significan apagada. Un archivo con contenido y sin ningún ajuste que Unkludge conozca cuenta como ilegible: la ventana lo dice, la hora automática se queda apagada y el archivo no se toca. Si el archivo ya existe, el primer arranque tampoco activa lo del siguiente punto.
 - **En el primer arranque se activa para iniciarse con el sistema.** Primer arranque es cualquiera en el que no exista `settings.txt`. En Windows es un valor `Unkludge` en `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. En Linux es `~/.config/autostart/unkludge.desktop`. Los dos arrancan la app con `--tray`. Las compilaciones debug no lo hacen, ni un programa con una carpeta llamada `target` en su ruta, como `target/release`. *Arrancar con el sistema*, en la ventana y en la bandeja, lo apaga.
 - **Tu primer color propio sustituye a los demás colores.** El teclado no puede decir qué paletas tiene, y un color propio se escribe junto con las paletas de todos los efectos. Así que el primero en cada modelo devuelve los demás efectos y huecos a los colores de Unkludge: rojo, verde, azul, amarillo, magenta, cian y blanco. Los colores puestos con el programa de RK se sustituyen. La app te avisa antes, una vez por modelo, y a partir de ahí recuerda sus colores. En la línea de comandos pasa con cada `--rgb`, incluso con colores puestos antes con Unkludge, porque no guarda ninguna copia entre ejecuciones. Avisa después de enviar.
 - **Cierra el programa de RK.** Sondea el teclado y le vuelve a enviar sus ajustes. Unkludge avisa si hay un programa llamado `DeviceDriver.exe` en marcha, y no hace nada más al respecto. El programa de RK no existe en Linux, así que allí no se comprueba.
 - **Mientras está conectada, la app lee los ajustes del teclado cada 5 segundos.** Es una lectura, y además sirve para notar que el teclado se ha ido.
 - **Un solo programa de Unkludge a la vez.** La app mantiene un bloqueo sobre el teclado mientras está conectada, así que los comandos de `unkludge` que abren un teclado, también los de lectura, se niegan y te dicen que cierres antes la app. Si un comando ya tiene el teclado cuando la app lo busca, la ventana lo dice y se conecta cuando el comando termina. `--dry-run`, `--demo` y `unkludge models` no abren ningún teclado ni usan el bloqueo. En Windows el bloqueo es un mutex con nombre, uno por sesión de usuario, así que otro usuario con sesión abierta a la vez no queda fuera. En Linux es `flock` sobre el propio nodo hidraw del teclado, así que vale sea cual sea el entorno del programa y para cualquier usuario que pueda abrir el nodo, y dos teclados pueden tener cada uno su programa. El sistema suelta los dos si un programa se cuelga. Solo cuenta para Unkludge: el programa de RK no participa.
-- **Una subida sustituye lo que haya en la pantalla, y puede ser lenta.** Un fotograma en una pantalla de 320×172 son 215 paquetes. La velocidad de Unkludge no se ha medido.
+- **Una subida sustituye lo que haya en la pantalla, y puede ser lenta.** Un fotograma en una pantalla de 320×172 son 215 paquetes. En un S85 ES eso tardó 38 s, a 5,7 paquetes por segundo, así que un GIF más largo tarda minutos. Cancelar, o cerrar la consola durante una subida, dejó la animación de fábrica del teclado, no lo que había antes.
 
 Para ver la interfaz sin nada de esto, ejecuta `unkludge-app --demo`. Nunca abre un teclado y no toca los ajustes reales ni el autoarranque. `--demo-model 01A2` enseña otro modelo, y `--lang es` o `--lang en` elige el idioma.
 
@@ -208,7 +207,7 @@ En un `--dry-run` no hay teclado del que leer, así que lee como si las luces es
 
 **Cómo escribe.** Los ajustes se leen primero y se vuelven a escribir solo con lo que has pedido cambiar. Los bytes que no conoce conservan su valor. Si la lectura falla o el bloque no termina en `5A A5`, no se escribe nada: ni ajustes, ni el reloj, ni una subida a la pantalla, desde la app o desde la línea de comandos.
 
-**Lo que no se sabe.** Esto no es ninguna promesa de que nada pueda salir mal. Ninguna captura USB ha confirmado los comandos, y Unkludge nunca ha escrito en un teclado real. Aún no se sabe qué hace un teclado si una subida se corta sin más, como al desenchufarlo. [docs/PROTOCOL.md](docs/PROTOCOL.md#not-confirmed) lista lo que está sin confirmar. Si un teclado deja de responder, desenchúfalo y vuelve a enchufarlo.
+**Lo que no se sabe.** Esto no es ninguna promesa de que nada pueda salir mal. Ninguna captura USB ha confirmado los comandos, y Unkludge solo ha escrito en un teclado real. En él, una subida cortada sin abortar dejó en la pantalla un aviso de carga hasta la siguiente subida. No se sabe qué pasa al desenchufar uno a mitad. [docs/PROTOCOL.md](docs/PROTOCOL.md#not-confirmed) lista lo que está sin confirmar. Si un teclado deja de responder, desenchúfalo y vuelve a enchufarlo.
 
 ## Probar un modelo y contar qué pasa
 
@@ -221,6 +220,7 @@ La app tiene un enlace **Enviar informe** en los modelos experimentales y en los
 ## Notas
 
 - Los ajustes y registros (`settings.txt`, `unkludge.log`, `crash.log`, `unkludge-report.txt`) están en `%APPDATA%\Unkludge` en Windows y en `~/.config/unkludge` en Linux, o en `$XDG_CONFIG_HOME/unkludge` si está definido. Un registro que llega a 256 KB pasa a ser `unkludge.log.old` o `crash.log.old`, en lugar del anterior.
+- En un S85 ES, para volver de la imagen a la página con la fecha, la batería, la hora y Mayús: pulsa la rueda y, en selección de interfaz, elige la interfaz de tiempo. Es el menú del propio teclado, y Unkludge no tiene ningún comando para eso.
 - `unkludge-app --tray` arranca escondida en la bandeja. Si la app ya está en marcha, volver a abrirla enseña su ventana.
 - En Linux, el socket con el que se pide esa ventana está en `$XDG_RUNTIME_DIR` si está definido y es tuyo, y si no, en la carpeta de datos.
 - Para quitar Unkludge: apaga *Arrancar con el sistema*, sal de la app y borra los programas y la carpeta de datos y, en Linux, la [regla udev](#acceso-en-linux).
@@ -238,5 +238,5 @@ Aquí se cuenta qué es el proyecto y de dónde salen sus partes. No es asesoram
 - **De dónde salen los comandos.** Se sacaron con un análisis estático del programa de RK para Windows, es decir, leyendo el código del programa y sus archivos de configuración, con el fin de que los teclados que la gente ya tiene funcionen sin él. No se usó ninguna captura USB. [docs/PROTOCOL.md](docs/PROTOCOL.md) describe el comportamiento con palabras propias. Las notas de ese análisis se quedan fuera de este repositorio, y aquí no hay código descompilado.
 - **Lo que sale de los archivos de RK.** Los 218 archivos de `data/models/` se generan a partir de los `KB.ini` que instala el programa de RK, con `tools/kbini2toml`, y están escritos en el formato propio de Unkludge. Guardan los ID USB, los nombres de los modelos, los tamaños de pantalla, los límites de fotogramas, qué controles tiene cada efecto y las posiciones de las teclas. Los programas llevan compilado todo menos las posiciones de las teclas. Estos datos se tomaron de los archivos de RK, no se dedujeron por otra vía.
 - **Lo que no.** No se incluye ninguna imagen, animación, programa ni firmware del programa de RK. Los nombres de los efectos son de Unkludge. Las etiquetas de los cuatro tiempos de suspensión coinciden con las del programa de RK.
-- **Bajo tu responsabilidad.** Casi nada de esto ha funcionado nunca en un teclado real ([Estado](#estado)). Lo usas bajo tu responsabilidad.
+- **Bajo tu responsabilidad.** Esto solo ha funcionado en un teclado real ([Estado](#estado)). Lo usas bajo tu responsabilidad.
 - **Titulares de derechos.** Aún no hay repositorio público ni dirección de contacto. Se pondrá aquí cuando la haya.

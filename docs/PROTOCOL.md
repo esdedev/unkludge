@@ -12,18 +12,19 @@ These notes describe what the official RK app does, worked out by static analysi
 
 | Command | What it does | Data | Answer | Seen in our own capture | Observed on S85 ES (`0265`) |
 |---|---|---|---|---|---|
-| `0x84` | Read the config block | 128 bytes | Feature report | no (pending) | Yes: with Unkludge on 2026-11-03 (`info`, `light`) |
-| `0x04` | Write the config block | 128 bytes | None | no (pending) | No |
-| `0x0A` | Write the palettes | 420 bytes | None | no (pending) | No |
-| `0x0B` | Set the clock | 14 bytes | None | no (pending) | No |
-| `0x0C` | One chunk of screen data | Up to 512 bytes | Ack | no (pending) | No |
-| `0x0D` | Start or finish a screen upload | 5 bytes | Ack | no (pending) | No |
-| `0x0D` | Abort a screen upload | 5 bytes | Ack | no (pending) | No |
+| `0x84` | Read the config block | 128 bytes | Feature report | no (pending) | Yes: with Unkludge since 2026-11-03 |
+| `0x04` | Write the config block | 128 bytes | None | no (pending) | Yes: with Unkludge on 2026-11-05 |
+| `0x0A` | Write the palettes | 420 bytes | None | no (pending) | Yes: with Unkludge on 2026-11-05, looking at slot 0 of one effect |
+| `0x0B` | Set the clock | 14 bytes | None | no (pending) | Yes: with Unkludge on 2026-11-05 |
+| `0x0C` | One chunk of screen data | Up to 512 bytes | Ack | no (pending) | Yes: with Unkludge on 2026-11-05 |
+| `0x0D` | Start or finish a screen upload | 5 bytes | Ack | no (pending) | Yes: with Unkludge on 2026-11-05 |
+| `0x0D` | Abort a screen upload | 5 bytes | Ack | no (pending) | Yes: with Unkludge on 2026-11-05 |
 | `0x82` | Read the 6-byte identity, to pair a second collection | None | Feature report | no (pending): needs an N99 owner | No: only `kind = 2` models use it |
 
 What "observed" means here:
 
-- **Unkludge, 2026-11-03:** two read-only commands, `unkludge info` and `unkludge light`. The keyboard answered with a block ending in `5A A5`, and the values matched an earlier read. That is the only command Unkludge has ever sent to a keyboard. Everything else it can do has only run against a simulated keyboard.
+- **Unkludge, 2026-11-03:** two read-only commands, `unkludge info` and `unkludge light`. The keyboard answered with a block ending in `5A A5`, and the values matched an earlier read.
+- **Unkludge, 2026-11-05, on Windows, from the command line and the window:** mode, brightness, speed, colour and sleep written and read back, and all but sleep seen on the keyboard. A custom colour seen in slot 0 of Breathing. The clock seen on the screen. An image and a 4-frame GIF uploaded and seen on the screen. Uploads cancelled. This is what one keyboard did, not what the firmware promises.
 
 ## Transport
 
@@ -121,6 +122,10 @@ The official app sends the time on connecting, with bytes 0 to 2 at 0. It doesn'
 
 Unkludge reads the config block before sending the clock or starting a screen upload, and sends neither if the read fails or the block has no end marker.
 
+The clock takes whole seconds and counts on from when it's told. Sending the second already under way left an S85 ES up to a second behind, so Unkludge waits for the next whole second and sends that one. The wait comes after the config read, and is under a second.
+
+On the S85 ES, on 2026-11-05, a clock set three hours wrong on purpose stayed wrong until the app corrected it: on the app opening, on the keyboard being plugged back in, and on the computer resuming from sleep.
+
 Example, for 2026-10-29 01:24:07, a Thursday:
 
 ```
@@ -188,6 +193,13 @@ The slot is always 0.
 
 Each ack wait lasts up to 8 s. An ack that doesn't accept a chunk sends the chunk again: the official app has no limit on that, and Unkludge stops after 5. No ack for a chunk in that time fails the upload and sends the abort.
 
+**Seen on the S85 ES**, on 2026-11-05:
+
+- 5.7 chunks per second: 38.2 s for a frame of 215 chunks, and 150.6 s for 4 frames. Each chunk spent a median of 133.6 ms being sent and 40.4 ms waiting for its ack.
+- The keyboard's own menu chooses what the screen shows: press the knob, then interface selection, then the time interface (date, battery, time and Caps Lock) or the dynamic one (the image). No command here does that. After an upload, the image was on the screen.
+- An abort, from Ctrl+C and from closing the console, left the keyboard's own factory animation, not what was there before and not part of the new image.
+- An upload that ended with no abort left a loading display at 25%, and the next upload worked. That was once, on closing a tab of an embedded terminal, which probably ended the program outright.
+
 **`kind = 2` models**, the N99 family (`01B8`, `025E`, `025F`): `0x0D` goes to the main collection and waits for its ack, then goes to the second collection and waits for its ack. `0x0C` goes only to the second collection. The clock and the config stay on the main one. To find the second collection, each candidate must take 520-byte feature reports and answer `09 82 01 00 01 00 06 00` with the same 6 bytes as the main collection. Those 6 bytes are what ties the two together in the official app, which asks every collection of that usage on any device. Unkludge only asks collections on the same device: the same USB device on Linux, and the same vendor and product IDs on Windows, as far as the system can tell. Where it can't tell, it asks nothing.
 
 ## Never sent
@@ -208,11 +220,11 @@ These are guesses or open questions. A capture or a test on hardware can settle 
 - Whether acks can arrive without their leading report ID on some platform. Unkludge accepts both forms.
 - Whether the other 28 models have usage page `0xFF02`, usage 2, as the S85 ES does. The official app also accepts other usages, which Unkludge doesn't open until one is seen. A model that doesn't is found but not used: the window and `unkludge` say so, and `unkludge report` and the window's report list the collections it has.
 - What the firmware does with the sleep byte. It may count in 30-second units, which fits the first three labels. What `0x3C` does is unknown, and it might be 30 minutes rather than no sleep.
-- That a colour in slot 0 of a palette entry is what the keyboard shows for that effect.
-- Why uploads are slow. The official app adds no pause between chunks, so the time goes on waiting for acks. An Unkludge upload hasn't been timed yet: `--timing` is there to measure it.
+- That a colour in slot 0 of a palette entry is what the keyboard shows for that effect, beyond Breathing on the S85 ES, where it is.
+- Why uploads are slow. The official app adds no pause between chunks, and neither does Unkludge. On the S85 ES most of the time goes on sending each chunk, not on the ack, and why sending takes that long isn't known.
 - What `draw_frame_time` means to the firmware. It changes what's sent, as above, and that's all that's known.
 - Whether the firmware rotates the image on any model. Nothing on the computer's side does.
 - What the slot field in `0x0D` is for. It's always 0.
-- What a keyboard does if an upload just stops, with no abort, as when it's unplugged.
+- What a keyboard does if an upload just stops, with no abort, as when it's unplugged. The one case seen is under [Screen](#screen). Whether that display clears without another upload isn't known.
 - Whether a `kind = 2` model's second collection is on the same USB device as its main one. Unkludge assumes so. If it isn't, such a keyboard is found but not used, and says so.
 - Anything on the `kind = 2` models and the `crc = true` models: their paths come only from the analysis, and none has been run on such a keyboard. Capturing `0x82` needs someone who owns an N99, as the S85 has no reason to send it.
