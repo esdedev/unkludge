@@ -1,0 +1,204 @@
+# Builds Unkludge's programs for Windows and Linux, and checks they start. It never runs on its own, to save
+# Actions minutes: start it by hand (Actions -> Release -> Run workflow) to build and check them, or push a v* tag,
+# which also creates a draft GitHub release with them. Publish that by hand after checking it.
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  RUST_VERSION: "1.99.1"
+  # Linux programs: linked against glibc 2.31 (Ubuntu 20.04, Debian 11 and newer)
+  ZIG_VERSION: "0.14.1"
+  # From https://ziglang.org/download/index.json
+  ZIG_SHA256: "24aeeec8af16c381934a6cd7d95c807a8cb2cf7df9fa40d359aa884195c4716c"
+  CARGO_ZIGBUILD_VERSION: "0.24.0"
+  GLIBC_TARGET: "2.31"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Cheap check first: a tag that doesn't match Cargo.toml fails before any build minute is spent
+  version:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Tag matches Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match version $VERSION in Cargo.toml"
+            exit 1
+          fi
+
+  windows:
+    needs: version
+    runs-on: windows-2025
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: release-windows-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: release-windows-${{ env.RUST_VERSION }}-
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+      - name: Test
+        run: cargo test --workspace --locked
+      - name: Build
+        run: cargo build --release --locked -p unkludge-app -p unkludge-cli
+      - name: Package
+        shell: bash
+        run: |
+          VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          NAME="unkludge-$VERSION-windows-x86_64"
+          mkdir -p "dist/$NAME"
+          cp target/release/unkludge-app.exe target/release/unkludge.exe LICENSE "dist/$NAME/"
+          python packaging/third_party_notices.py x86_64-pc-windows-msvc "dist/$NAME/THIRD-PARTY-NOTICES.txt"
+          (cd dist && 7z a -tzip "$NAME.zip" "$NAME" > /dev/null && rm -r "$NAME")
+      - name: Check the package
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/check" && cd "$RUNNER_TEMP/check"
+          7z x "$GITHUB_WORKSPACE"/dist/*.zip > /dev/null
+          cd unkludge-*-windows-x86_64
+          ls -l
+          ./unkludge.exe --version
+          test "$(./unkludge.exe models | wc -l)" -eq 30
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows
+          path: dist/*.zip
+          if-no-files-found: error
+
+  linux:
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      TARGET: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin/cargo-zigbuild
+            target
+          key: release-linux-${{ env.RUST_VERSION }}-zigbuild${{ env.CARGO_ZIGBUILD_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: release-linux-${{ env.RUST_VERSION }}-zigbuild${{ env.CARGO_ZIGBUILD_VERSION }}-
+      - name: System libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libudev-dev libfontconfig1-dev libxkbcommon-dev
+      - name: Rust toolchain, Zig and cargo-zigbuild
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+          curl -sSfL "https://ziglang.org/download/$ZIG_VERSION/zig-x86_64-linux-$ZIG_VERSION.tar.xz" -o zig.tar.xz
+          echo "$ZIG_SHA256  zig.tar.xz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/zig" && tar -xJf zig.tar.xz -C "$RUNNER_TEMP/zig" --strip-components=1 && rm zig.tar.xz
+          echo "$RUNNER_TEMP/zig" >> "$GITHUB_PATH"
+          # Cached between runs: only compiled the first time.
+          # `cargo zigbuild --version` is an error: only the binary itself takes that flag.
+          cargo-zigbuild --version 2>/dev/null | grep -qF "$CARGO_ZIGBUILD_VERSION" \
+            || cargo install --locked cargo-zigbuild --version "$CARGO_ZIGBUILD_VERSION"
+      - name: Test
+        run: cargo test --workspace --locked
+      - name: Build (glibc ${{ env.GLIBC_TARGET }})
+        run: cargo zigbuild --release --locked -p unkludge-app -p unkludge-cli --target "$TARGET.$GLIBC_TARGET"
+      - name: Check the newest glibc symbol
+        run: |
+          set -o pipefail
+          for BIN in unkludge unkludge-app; do
+            MAX=$(objdump -T "target/$TARGET/release/$BIN" | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/GLIBC_//' | sort -Vu | tail -1)
+            echo "$BIN: newest glibc symbol $MAX"
+            if [ -z "$MAX" ]; then
+              echo "::error::No glibc symbols found in $BIN"
+              exit 1
+            fi
+            if [ "$(printf '%s\n%s\n' "$MAX" "$GLIBC_TARGET" | sort -V | tail -1)" != "$GLIBC_TARGET" ]; then
+              echo "::error::$BIN needs glibc $MAX, newer than $GLIBC_TARGET"
+              exit 1
+            fi
+          done
+      - name: Package
+        run: |
+          VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          NAME="unkludge-$VERSION-linux-x86_64"
+          mkdir -p "dist/$NAME"
+          cp "target/$TARGET/release/unkludge" "target/$TARGET/release/unkludge-app" "dist/$NAME/"
+          cp LICENSE packaging/linux/70-unkludge.rules "dist/$NAME/"
+          python3 packaging/third_party_notices.py "$TARGET" "dist/$NAME/THIRD-PARTY-NOTICES.txt"
+          tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
+          rm -r "dist/$NAME"
+      - name: Check the package on Ubuntu 20.04 (glibc 2.31)
+        run: |
+          docker run --rm -v "$PWD/dist:/dist:ro" ubuntu:20.04 sh -ec '
+            export DEBIAN_FRONTEND=noninteractive
+            for i in 1 2 3; do
+              apt-get update -qq > /dev/null && apt-get install -y -qq libfontconfig1 libudev1 > /dev/null && break
+              echo "apt failed (attempt $i), retrying"; sleep 10
+            done
+            dpkg -s libfontconfig1 libudev1 > /dev/null || { echo "::error::Could not install the libraries in the container"; exit 1; }
+            mkdir /check && tar -xzf /dist/*.tar.gz -C /check
+            cd /check/unkludge-*-linux-x86_64
+            ls -l
+            for BIN in unkludge unkludge-app; do
+              ldd "$BIN"
+              if ldd "$BIN" | grep -q "not found"; then echo "::error::$BIN is missing libraries"; exit 1; fi
+            done
+            ./unkludge --version
+            test "$(./unkludge models | wc -l)" -eq 30'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-x86_64
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    # Only for a pushed tag: a manual run builds and checks the programs without touching any release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, linux]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum -- * > "$RUNNER_TEMP/SHA256SUMS"
+          mv "$RUNNER_TEMP/SHA256SUMS" SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --draft --verify-tag \
+            --title "Unkludge ${GITHUB_REF_NAME#v}" --generate-notes

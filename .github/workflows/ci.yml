@@ -1,11 +1,9 @@
 # Checks, tests and builds Unkludge on Windows and Linux. It never runs on its own, to save Actions
-# minutes: start it by hand (Actions -> CI -> Run workflow) or push a v* tag.
+# minutes: start it by hand (Actions -> CI -> Run workflow). A v* tag runs release.yml instead.
 name: CI
 
 on:
   workflow_dispatch:
-  push:
-    tags: ["v*"]
 
 permissions:
   contents: read
