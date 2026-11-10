@@ -6,7 +6,7 @@ How Unkludge talks to the Royal Kludge keyboards it supports: the 29 models with
 
 These notes describe what the official RK app does, worked out by static analysis of that app and its config files, for interoperability. Unkludge follows it.
 
-**No command here has been confirmed by a USB capture yet.** Making that capture is a requirement for the v0.1 release, and the table below tracks it. Until then, read everything here as "what the official app's code says", not as "what the firmware needs". What's known only as a guess is listed under [Not confirmed](#not-confirmed), not in the sections before it.
+**No command here has been confirmed by a USB capture yet.** Making one is still to do, and the table below tracks it, next to what has run on a real keyboard. Until then, read everything here as "what the official app's code says", not as "what the firmware needs". What's known only as a guess is listed under [Not confirmed](#not-confirmed), not in the sections before it.
 
 ## Commands and their status
 

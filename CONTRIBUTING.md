@@ -55,7 +55,7 @@ Only what was really run counts. If a step wasn't tried or didn't work, the mode
 
 ## Capturing USB traffic
 
-Every command Unkludge sends must also appear in a capture of the RK app talking to a real keyboard before v0.1 is released. Captures of other models help too. In particular, `0x82` is only used by the N99 family, so capturing it needs someone who owns an N99. This is on Windows, where the RK app runs.
+No capture has been made yet. One of the RK app talking to a real keyboard would confirm that every command Unkludge sends is byte for byte what that app sends. Captures of other models help too. In particular, `0x82` is only used by the N99 family, so capturing it needs someone who owns an N99. This is on Windows, where the RK app runs.
 
 1. Install [Wireshark](https://www.wireshark.org/), and tick **USBPcap** when its installer offers it. Otherwise install it from [desowin.org/usbpcap](https://desowin.org/usbpcap/).
 2. **Reboot.** USBPcap's driver only starts working after that.
