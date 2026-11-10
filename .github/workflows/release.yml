@@ -13,11 +13,8 @@ permissions:
 
 env:
   RUST_VERSION: "1.99.1"
-  # Linux programs: linked against glibc 2.31 (Ubuntu 20.04, Debian 11 and newer)
-  ZIG_VERSION: "0.14.1"
-  # From https://ziglang.org/download/index.json
-  ZIG_SHA256: "24aeeec8af16c381934a6cd7d95c807a8cb2cf7df9fa40d359aa884195c4716c"
-  CARGO_ZIGBUILD_VERSION: "0.24.0"
+  # Linux programs: built on Ubuntu 20.04, so they need glibc 2.31 at most (Ubuntu 20.04, Debian 11 and newer)
+  LINUX_BUILD_IMAGE: "ubuntu:20.04"
   GLIBC_TARGET: "2.31"
   CARGO_TERM_COLOR: always
 
@@ -91,7 +88,7 @@ jobs:
   linux:
     needs: version
     runs-on: ubuntu-24.04
-    timeout-minutes: 50
+    timeout-minutes: 60
     env:
       TARGET: x86_64-unknown-linux-gnu
     steps:
@@ -103,30 +100,40 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            ~/.cargo/bin/cargo-zigbuild
             target
-          key: release-linux-${{ env.RUST_VERSION }}-zigbuild${{ env.CARGO_ZIGBUILD_VERSION }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: release-linux-${{ env.RUST_VERSION }}-zigbuild${{ env.CARGO_ZIGBUILD_VERSION }}-
+            .container-cache
+          key: release-linux-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: release-linux-${{ env.RUST_VERSION }}-
       - name: System libraries
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq libudev-dev libfontconfig1-dev libxkbcommon-dev
-      - name: Rust toolchain, Zig and cargo-zigbuild
+      - name: Rust toolchain
         run: |
           rustup toolchain install "$RUST_VERSION" --profile minimal
           rustup default "$RUST_VERSION"
-          curl -sSfL "https://ziglang.org/download/$ZIG_VERSION/zig-x86_64-linux-$ZIG_VERSION.tar.xz" -o zig.tar.xz
-          echo "$ZIG_SHA256  zig.tar.xz" | sha256sum -c -
-          mkdir -p "$RUNNER_TEMP/zig" && tar -xJf zig.tar.xz -C "$RUNNER_TEMP/zig" --strip-components=1 && rm zig.tar.xz
-          echo "$RUNNER_TEMP/zig" >> "$GITHUB_PATH"
-          # Cached between runs: only compiled the first time.
-          # `cargo zigbuild --version` is an error: only the binary itself takes that flag.
-          cargo-zigbuild --version 2>/dev/null | grep -qF "$CARGO_ZIGBUILD_VERSION" \
-            || cargo install --locked cargo-zigbuild --version "$CARGO_ZIGBUILD_VERSION"
       - name: Test
         run: cargo test --workspace --locked
-      - name: Build (glibc ${{ env.GLIBC_TARGET }})
-        run: cargo zigbuild --release --locked -p unkludge-app -p unkludge-cli --target "$TARGET.$GLIBC_TARGET"
+      # A build on the oldest system it's for links against that system's glibc and libudev, with no cross-compiler
+      - name: Build on ${{ env.LINUX_BUILD_IMAGE }}
+        run: |
+          mkdir -p .container-cache
+          docker run --rm -v "$PWD:/src" -w /src -e RUST_VERSION             -e RUSTUP_HOME=/src/.container-cache/rustup -e CARGO_HOME=/src/.container-cache/cargo             -e CARGO_TARGET_DIR=/src/.container-cache/target -e CARGO_TERM_COLOR             "$LINUX_BUILD_IMAGE" bash -ec '
+              export DEBIAN_FRONTEND=noninteractive
+              for i in 1 2 3; do
+                apt-get update -qq > /dev/null && apt-get install -y -qq build-essential pkg-config libudev-dev                   libfontconfig1-dev libxkbcommon-dev curl ca-certificates > /dev/null && break
+                echo "apt failed (attempt $i), retrying"; sleep 10
+              done
+              if [ ! -x "$CARGO_HOME/bin/rustup" ]; then
+                curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none --no-modify-path
+              fi
+              export PATH="$CARGO_HOME/bin:$PATH"
+              rustup toolchain install "$RUST_VERSION" --profile minimal
+              rustup default "$RUST_VERSION"
+              cargo build --release --locked -p unkludge-app -p unkludge-cli'
+          sudo chown -R "$(id -u):$(id -g)" .container-cache
+          mkdir -p "target/$TARGET/release"
+          cp .container-cache/target/release/unkludge .container-cache/target/release/unkludge-app "target/$TARGET/release/"
       - name: Check the newest glibc symbol
         run: |
           set -o pipefail
