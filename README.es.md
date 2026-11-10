@@ -52,7 +52,7 @@ Solo por cable USB: un teclado que el sistema dice que está conectado de otra f
 | RK N99, TH, RU | `01B8`, `025E`, `025F` | 240×240 | 35 | Experimental, sin probar. Los datos de la pantalla van a una segunda colección HID |
 | RK N80 | `0187` | 128×128 | 200 | Experimental, sin probar |
 
-**Experimental** quiere decir que nadie ha confirmado que el modelo funcione con Unkludge. La tabla de modelos marca los 29 como `experimental`, también el S85 ES: un modelo solo pasa a `tested` cuando alguien hace todos los pasos hasta subir algo a la pantalla ([cómo](CONTRIBUTING.md#how-a-model-becomes-tested)).
+**Experimental** quiere decir que nadie ha confirmado que el modelo funcione con Unkludge. La tabla de modelos marca los 29 como `experimental`, también el S85 ES: un modelo solo pasa a `tested` cuando alguien hace todos los pasos hasta subir algo a la pantalla ([cómo](CONTRIBUTING.md#how-a-model-becomes-tested)). **¿Tienes uno de los modelos experimentales?** Mira [Se buscan testers](../../issues/1): unos minutos probándolo ayudan mucho.
 
 | Sistema | Estado |
 |---|---|

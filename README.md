@@ -52,7 +52,7 @@ Wired USB only: a keyboard the system says is connected some other way is refuse
 | RK N99, TH, RU | `01B8`, `025E`, `025F` | 240×240 | 35 | Experimental, never run. Screen data goes to a second HID collection |
 | RK N80 | `0187` | 128×128 | 200 | Experimental, never run |
 
-**Experimental** means nobody has confirmed the model works with Unkludge. The model table marks all 29 as `experimental`, the S85 ES too: a model becomes `tested` only after someone runs every step up to a screen upload ([how](CONTRIBUTING.md#how-a-model-becomes-tested)).
+**Experimental** means nobody has confirmed the model works with Unkludge. The model table marks all 29 as `experimental`, the S85 ES too: a model becomes `tested` only after someone runs every step up to a screen upload ([how](CONTRIBUTING.md#how-a-model-becomes-tested)). **Own one of the experimental models?** See [Testers wanted](../../issues/1): a few minutes of trying it helps a lot.
 
 | System | Status |
 |---|---|
