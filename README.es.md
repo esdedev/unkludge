@@ -8,7 +8,7 @@
 
 ## Estado
 
-Las cosas como están hoy. Todavía no se ha publicado nada.
+Las cosas como están hoy.
 
 - **RK S85 ES (`258A:0265`), el teclado del autor:** probado en Windows el 2026-11-05, con la línea de comandos y con la ventana. Leer y escribir los ajustes, un color propio, la hora, la hora automática al abrir, al enchufar y al volver de la suspensión, subir imágenes y GIF, y cancelar. La tabla de modelos aún lo marca como `experimental`.
 - **Todos los demás modelos son experimentales y no se han probado nunca.**
@@ -61,7 +61,9 @@ Solo por cable USB: un teclado que el sistema dice que está conectado de otra f
 
 ## Instalación
 
-Aún no hay versiones publicadas, paquetes ni enlaces de descarga. Instalar significa compilar el código.
+Cada [versión](../../releases) trae los programas para Windows x64 (`.zip`) y Linux x86-64 (`.tar.gz`): la app, `unkludge-app`, y la herramienta de línea de comandos, `unkludge`, con `LICENSE` y `THIRD-PARTY-NOTICES.txt`. El de Linux trae también la [regla udev](#acceso-en-linux) y necesita glibc 2.31 o posterior, como en Ubuntu 20.04 y Debian 11. `SHA256SUMS` tiene sus sumas de comprobación. Los programas no están firmados, así que Windows SmartScreen puede avisar: *Más información* y luego *Ejecutar de todas formas*.
+
+O compílalos desde el código:
 
 ### Compilar
 

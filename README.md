@@ -8,7 +8,7 @@
 
 ## Status
 
-This is how things really stand. Nothing has been released yet.
+This is how things really stand.
 
 - **RK S85 ES (`258A:0265`), the author's keyboard:** run on Windows on 2026-11-05, from the command line and the window. Settings read and written, a custom colour, the clock, the automatic clock on opening, on plugging in and after sleep, image and GIF uploads, and cancelling. The model table still marks it `experimental`.
 - **Every other model is experimental and has never been run.**
@@ -61,7 +61,9 @@ Wired USB only: a keyboard the system says is connected some other way is refuse
 
 ## Install
 
-There are no releases, packages or download links yet. Installing means building from source.
+Each [release](../../releases) has the programs for Windows x64 (`.zip`) and Linux x86-64 (`.tar.gz`): the app, `unkludge-app`, and the command-line tool, `unkludge`, with `LICENSE` and `THIRD-PARTY-NOTICES.txt`. The Linux one also has the [udev rule](#linux-access), and needs glibc 2.31 or newer, as on Ubuntu 20.04 and Debian 11. `SHA256SUMS` has their checksums. The programs aren't signed, so Windows SmartScreen may warn about them: *More info*, then *Run anyway*.
+
+Or build them from source:
 
 ### Build
 
